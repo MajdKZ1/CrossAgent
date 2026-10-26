@@ -1,10 +1,13 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Everything the window shows: panes, focus, broadcast, layout persistence.
 @MainActor
 final class AppState: ObservableObject {
     let hosts: [Host]
+    /// Watches ca-* tmux sessions on every host. Feeds the station and free name picking.
+    var monitor: TmuxMonitor?
 
     @Published private(set) var panes: [PaneSession] = []
     @Published var focusedID: UUID?
@@ -14,6 +17,14 @@ final class AppState: ObservableObject {
     @Published var lastHostID: String
     /// Short lived message shown at the bottom of the window.
     @Published var toast: String?
+    /// New pane popover in the top bar.
+    @Published var showNewPane = false
+    /// Relay picker overlay, and the highlighted row in it.
+    @Published var showRelayPicker = false
+    @Published var relayPickIndex = 0
+    /// Bumped whenever any pane changes state, so host chips can recount live panes.
+    @Published private(set) var paneStateVersion = 0
+    private var stateWatchers: [UUID: AnyCancellable] = [:]
 
     private static let layoutKey = "layout.v1"
     private static let lastHostKey = "lastHostID"
@@ -28,6 +39,14 @@ final class AppState: ObservableObject {
     var focused: PaneSession? { panes.first { $0.id == focusedID } }
 
     func paneCount(host: Host) -> Int { panes.filter { $0.host.id == host.id }.count }
+
+    func liveCount(host: Host) -> Int { panes.filter { $0.host.id == host.id && $0.isLive }.count }
+
+    private func track(_ pane: PaneSession) {
+        stateWatchers[pane.id] = pane.$state.dropFirst().sink { [weak self] _ in
+            DispatchQueue.main.async { self?.paneStateVersion += 1 }
+        }
+    }
 
     // MARK: Panes
 
@@ -51,6 +70,7 @@ final class AppState: ObservableObject {
         }
         let pane = PaneSession(host: host, mode: mode, session: name)
         wire(pane)
+        track(pane)
         panes.append(pane)
         lastHostID = host.id
         UserDefaults.standard.set(host.id, forKey: Self.lastHostKey)
@@ -61,7 +81,9 @@ final class AppState: ObservableObject {
     }
 
     func nextSessionName(host: Host, taken: Set<String> = []) -> String {
-        let used = Set(panes.filter { $0.host.id == host.id }.map(\.session)).union(taken)
+        let used = Set(panes.filter { $0.host.id == host.id }.map(\.session))
+            .union(taken)
+            .union(monitor?.sessionNames(host: host) ?? [])
         var n = 1
         while used.contains("ca-\(host.id)-\(n)") { n += 1 }
         return "ca-\(host.id)-\(n)"
@@ -72,6 +94,7 @@ final class AppState: ObservableObject {
         guard let id = id ?? focusedID, let idx = panes.firstIndex(where: { $0.id == id }) else { return }
         let pane = panes.remove(at: idx)
         pane.close()
+        stateWatchers[id] = nil
         if maximizedID == id { maximizedID = nil }
         if focusedID == id {
             let next = panes.isEmpty ? nil : panes[min(idx, panes.count - 1)].id
@@ -94,6 +117,25 @@ final class AppState: ObservableObject {
         guard let pane = panes.first(where: { $0.id == (id ?? focusedID) }) else { return }
         pane.reconnect()
         focus(pane.id)
+    }
+
+    // MARK: Window
+
+    /// The main window, handed over by ContentView once it is on screen.
+    private(set) weak var window: NSWindow?
+    private var responderObservation: NSKeyValueObservation?
+
+    func attach(window: NSWindow) {
+        guard self.window !== window else { return }
+        self.window = window
+        window.backgroundColor = Theme.window
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.tabbingMode = .disallowed
+        // Clicks into a terminal make it first responder; follow that to move pane focus.
+        responderObservation = window.observe(\.firstResponder, options: [.new]) { [weak self] win, _ in
+            DispatchQueue.main.async { self?.noteFirstResponder(win.firstResponder) }
+        }
     }
 
     // MARK: Focus
@@ -173,6 +215,30 @@ final class AppState: ObservableObject {
         flash("Relayed \(text.count) chars to \(dst.host.name) \(dst.session)")
     }
 
+    func openRelayPicker() {
+        guard focused != nil else { return }
+        guard !relayTargets.isEmpty else {
+            flash("No other live panes to relay to")
+            return
+        }
+        relayPickIndex = 0
+        showRelayPicker = true
+    }
+
+    func closeRelayPicker() {
+        showRelayPicker = false
+        if let id = focusedID { focus(id) }
+    }
+
+    /// Relays to the picker's row `index` and closes the picker.
+    func pickRelay(_ index: Int) {
+        let targets = relayTargets
+        guard targets.indices.contains(index) else { return }
+        showRelayPicker = false
+        relay(to: targets[index].id)
+        if let id = focusedID { focus(id) }
+    }
+
     // MARK: Toast
 
     private var toastTask: Task<Void, Never>?
@@ -209,6 +275,7 @@ final class AppState: ObservableObject {
         for s in saved where host(s.hostId) != nil && SessionName.isValid(s.session) {
             let pane = PaneSession(host: host(s.hostId)!, mode: s.mode, session: s.session)
             wire(pane)
+            track(pane)
             panes.append(pane)
             pane.start()
         }
