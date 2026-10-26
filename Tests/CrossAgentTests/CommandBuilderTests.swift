@@ -18,12 +18,12 @@ final class CommandBuilderTests: XCTestCase {
         let c = CommandBuilder.command(host: mac, mode: .claude, session: "ca-mac-1", localShell: "/bin/zsh")
         XCTAssertEqual(c.executable, "/bin/zsh")
         XCTAssertEqual(c.args[0], "-lc")
-        XCTAssertTrue(c.args[1].hasSuffix("if command -v tmux >/dev/null 2>&1; then exec tmux new -A -s ca-mac-1 claude \\; set -q status off; else exec claude; fi"))
+        XCTAssertTrue(c.args[1].hasSuffix("if command -v tmux >/dev/null 2>&1; then exec tmux new -A -s ca-mac-1 claude \\; set -q status off \\; set -sq focus-events on; else exec claude; fi"))
     }
 
     func testLocalShell() {
         let c = CommandBuilder.command(host: mac, mode: .shell, session: "ca-mac-2", localShell: "/bin/zsh")
-        XCTAssertTrue(c.args[1].hasSuffix("if command -v tmux >/dev/null 2>&1; then exec tmux new -A -s ca-mac-2 \\; set -q status off; else exec \"$SHELL\" -l; fi"))
+        XCTAssertTrue(c.args[1].hasSuffix("if command -v tmux >/dev/null 2>&1; then exec tmux new -A -s ca-mac-2 \\; set -q status off \\; set -sq focus-events on; else exec \"$SHELL\" -l; fi"))
     }
 
     func testSSHClaude() {
@@ -35,7 +35,7 @@ final class CommandBuilderTests: XCTestCase {
         XCTAssertEqual(c.args[c.args.count - 2], "pc")
         let remote = c.args.last!
         XCTAssertTrue(remote.hasPrefix("exec $SHELL -lc '"))
-        XCTAssertTrue(remote.hasSuffix("then exec tmux new -A -s ca-pc-1 claude \\; set -q status off; else exec claude; fi'"))
+        XCTAssertTrue(remote.hasSuffix("then exec tmux new -A -s ca-pc-1 claude \\; set -q status off \\; set -sq focus-events on; else exec claude; fi'"))
     }
 
     func testQuoteRoundTripsThroughSh() throws {

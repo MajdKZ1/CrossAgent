@@ -25,13 +25,14 @@ enum CommandBuilder {
 
     /// Spec script plus `set -q status off` for this session only: the pane header
     /// already shows the session, and tmux's bright status bar clashes with the UI.
+    /// Also turns on focus-events, which Claude Code asks for.
     static func script(mode: PaneMode, session: String) -> String {
         precondition(SessionName.isValid(session))
         switch mode {
         case .claude:
-            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux new -A -s \(session) claude \\; set -q status off; else exec claude; fi"
+            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux new -A -s \(session) claude \\; set -q status off \\; set -sq focus-events on; else exec claude; fi"
         case .shell:
-            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux new -A -s \(session) \\; set -q status off; else exec \"$SHELL\" -l; fi"
+            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux new -A -s \(session) \\; set -q status off \\; set -sq focus-events on; else exec \"$SHELL\" -l; fi"
         }
     }
 
