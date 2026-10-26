@@ -86,6 +86,23 @@ final class PaneSession: ObservableObject, Identifiable {
 
     func send(text: String) { terminal.write(ArraySlice(Array(text.utf8))) }
 
+    /// Sends text like a paste: bracketed when the app inside asked for it, so a
+    /// multi line relay does not submit early. No Enter is appended.
+    func sendPaste(_ text: String) {
+        if terminal.terminalInputStateSnapshot()?.bracketedPasteMode == true {
+            send(text: "\u{1b}[200~" + text + "\u{1b}[201~")
+        } else {
+            send(text: text.replacingOccurrences(of: "\n", with: "\r"))
+        }
+    }
+
+    /// Plain text of the visible screen, for tests and the automation hook.
+    func screenText() -> String {
+        guard let snap = terminal.terminalContentSnapshot(region: .history(maximumScrollbackRows: -1)) else { return "" }
+        return snap.rows.map { $0.text.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression) }
+            .joined(separator: "\n")
+    }
+
     var selectedText: String? {
         guard let s = terminal.getSelection(), !s.isEmpty else { return nil }
         return s
