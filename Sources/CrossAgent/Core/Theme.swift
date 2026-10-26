@@ -14,11 +14,15 @@ enum Theme {
     }()
 
     static func apply(to view: TerminalView) {
+        // SwiftTerm paints the default background on its layer, so make sure
+        // the layer exists before the color is set or it is silently dropped.
+        view.wantsLayer = true
         view.font = font
         view.nativeBackgroundColor = pane
         view.nativeForegroundColor = foreground
         view.caretColor = NSColor(hex: "#9aa4b2")
         view.optionAsMetaKey = true
+        view.layer?.backgroundColor = pane.cgColor
     }
 }
 
