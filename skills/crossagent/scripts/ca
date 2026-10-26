@@ -1,0 +1,467 @@
+#!/usr/bin/env bash
+# ca: split work across this Mac and the Linux PC (`ssh pc`) in tmux sessions
+# named ca-<host>-<task>, so the CrossAgent viewing station shows them.
+# Run `ca help` for usage.
+set -eu
+
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+CA="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CONF="$HOME/.config/crossagent"
+MAP="$CONF/system-map.md"
+SSH_OPTS="-o ControlMaster=auto -o ControlPath=/tmp/crossagent-%C -o ControlPersist=10m -o ServerAliveInterval=15"
+RCA='~/.claude/skills/crossagent/scripts/ca'
+
+die() { echo "ca: $*" >&2; exit 1; }
+say() { echo "ca: $*" >&2; }
+q() { printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")"; }
+qall() { local a out=""; for a in "$@"; do out="$out $(q "$a")"; done; printf %s "$out"; }
+
+case "$(uname -s)" in Darwin) HERE=mac ;; *) HERE=pc ;; esac
+HERE="${CA_HERE:-$HERE}"
+
+# ---------- project ----------
+
+ROOT="${CA_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+NAME="$(basename "$ROOT" | tr -c 'A-Za-z0-9._\n-' '_')"
+PROJ_CONF="$ROOT/.crossagent/project"
+
+conf_get() { [ -f "$PROJ_CONF" ] && sed -n "s/^$1=//p" "$PROJ_CONF" | head -1 || true; }
+pc_dir() { local d; d="$(conf_get pc_dir)"; echo "${d:-crossagent/projects/$NAME}"; }
+
+# ---------- hosts ----------
+
+resolve() {
+  local w
+  w="$(echo "$*" | tr 'A-Z' 'a-z' | sed -E 's/^ *//; s/ *$//; s/^(on|in|at) +//; s/^(my|this|the) +//')"
+  case "$w" in
+    local|mac|macbook|laptop|here|localhost) echo mac ;;
+    pc|ssh|overseas|linux|remote|desktop|ubuntu|box) echo pc ;;
+    ""|both|split|all|everywhere) echo both ;;
+    *) return 1 ;;
+  esac
+}
+
+host_arg() {
+  local h
+  h="$(resolve "$1")" || die "unknown host '$1' (use mac, pc or a nickname, see ca help)"
+  [ "$h" = both ] && die "pick one host for this, mac or pc"
+  if [ "$HERE" = pc ] && [ "$h" = mac ]; then
+    die "running on the PC, which can't reach the Mac. Everything runs here, use 'pc'"
+  fi
+  echo "$h"
+}
+
+# Run "$@" on the PC inside the project's PC dir with the PC's own ca.
+on_pc() {
+  local dir; dir="$(pc_dir)"
+  # shellcheck disable=SC2086
+  ssh $SSH_OPTS pc "PATH=\$HOME/.local/bin:\$PATH; mkdir -p $(q "$dir") && cd $(q "$dir") && CA_ROOT=\$PWD exec $RCA$(qall "$@")"
+}
+
+remote_ok() {
+  # shellcheck disable=SC2086
+  ssh $SSH_OPTS -o ConnectTimeout=20 pc "test -x $RCA" 2>/dev/null
+}
+
+ensure_remote() {
+  # shellcheck disable=SC2086
+  ssh $SSH_OPTS -o ConnectTimeout=20 pc true 2>/dev/null || die "can't reach the PC with 'ssh pc'. Is it on?"
+  remote_ok || { say "skill missing on the PC, installing"; "$SKILL_DIR/install.sh" --pc >&2; }
+}
+
+# ---------- sync ----------
+
+EXCLUDES=(
+  --exclude=.DS_Store --exclude=node_modules --exclude=.build --exclude=DerivedData
+  --exclude=.swiftpm --exclude=.venv --exclude=venv --exclude=__pycache__
+  --exclude=.next --exclude=.gradle --exclude=.cache --exclude=.pytest_cache
+  --exclude=/build/ --exclude=/dist/ --exclude=/target/ --exclude=/out/
+  --exclude=/.crossagent/logs/ --exclude=/.crossagent/results/
+  --exclude=/.crossagent/run/ --exclude=/.crossagent/pc/
+)
+
+push() {
+  [ "$HERE" = mac ] || die "push only makes sense on the Mac"
+  local dir del=""; dir="$(pc_dir)"
+  [ "${1:-}" = --delete ] && del="--delete"
+  # shellcheck disable=SC2086
+  ssh $SSH_OPTS pc "mkdir -p $(q "$dir")"
+  # shellcheck disable=SC2086
+  rsync -az $del "${EXCLUDES[@]}" -e "ssh $SSH_OPTS" "$ROOT/" "pc:$dir/"
+  say "pushed $NAME to pc:~/$dir"
+}
+
+pull() {
+  [ "$HERE" = mac ] || die "pull only makes sense on the Mac"
+  local dir p; dir="$(pc_dir)"
+  if [ $# -eq 0 ]; then
+    mkdir -p "$ROOT/.crossagent/pc"
+    for p in logs results; do
+      rsync -az -e "ssh $SSH_OPTS" "pc:$dir/.crossagent/$p" "$ROOT/.crossagent/pc/" 2>/dev/null || true
+    done
+    say "pulled PC logs and results into .crossagent/pc/"
+    return
+  fi
+  for p in "$@"; do
+    p="${p%/}"
+    case "$p" in /*|*..*) die "pull takes paths relative to the project: $p" ;; esac
+    mkdir -p "$ROOT/$(dirname "$p")"
+    rsync -az -e "ssh $SSH_OPTS" "pc:$dir/$p" "$ROOT/$(dirname "$p")/"
+    say "pulled $p"
+  done
+}
+
+# ---------- system map ----------
+
+probe() {
+  local os cpu cores ram disk
+  if [ "$(uname -s)" = Darwin ]; then
+    os="$(sw_vers -productName) $(sw_vers -productVersion) ($(uname -m))"
+    cpu="$(sysctl -n machdep.cpu.brand_string), model $(sysctl -n hw.model)"
+    cores="$(sysctl -n hw.ncpu) cores ($(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || echo ?) performance)"
+    ram="$(( $(sysctl -n hw.memsize) / 1073741824 )) GB"
+  else
+    os="$(. /etc/os-release && echo "$PRETTY_NAME"), kernel $(uname -r) ($(uname -m))"
+    cpu="$(lscpu | sed -n 's/^Model name: *//p' | head -1)"
+    cores="$(nproc) threads, $(lscpu | awk -F: '/^Core\(s\) per socket/{gsub(/ /,"",$2); print $2}') cores"
+    ram="$(free -g | awk '/^Mem:/{print $2}') GB usable, $(free -g | awk '/^Swap:/{print $2}') GB swap"
+  fi
+  disk="$(df -h "$HOME" | awk 'NR==2{print $4" free of "$2}')"
+  echo "- OS: $os"
+  echo "- CPU: $cpu"
+  echo "- Cores: $cores"
+  echo "- RAM: $ram"
+  echo "- Disk (home): $disk"
+  echo "- Shell: $(basename "${SHELL:-sh}")"
+  echo "- Tools:"
+  local t v
+  for t in git tmux claude rsync make node npm python3 swift xcodebuild docker brew; do
+    command -v "$t" >/dev/null 2>&1 || continue
+    case "$t" in
+      tmux) v="$(tmux -V)" ;;
+      rsync) v="$(rsync --version 2>&1 | head -1)" ;;
+      xcodebuild) v="$(xcodebuild -version 2>/dev/null | head -1)" ;;
+      swift) v="$(swift --version 2>&1 | grep -m1 -o 'Swift version [0-9.]*')" ;;
+      docker) v="$(docker --version 2>/dev/null)" ;;
+      *) v="$("$t" --version 2>&1 | head -1)" ;;
+    esac
+    echo "  - $t: $v ($(command -v "$t" | sed "s|^$HOME|~|"))"
+  done
+  echo "- Skill: ~/.claude/skills/crossagent (ca at ~/.claude/skills/crossagent/scripts/ca)"
+}
+
+block() { [ -f "$MAP" ] && awk -v s="<!-- ca:$1 -->" -v e="<!-- /ca:$1 -->" '$0==s{f=1;next} $0==e{f=0} f' "$MAP" || true; }
+
+register_project() {
+  mkdir -p "$CONF"
+  local f="$CONF/projects" macd="-" pcd
+  [ "$HERE" = mac ] && macd="$(echo "$ROOT" | sed "s|^$HOME|~|")"
+  pcd="~/$(pc_dir)"
+  touch "$f"
+  grep -v "^$NAME	" "$f" > "$f.tmp" || true
+  printf '%s\t%s\t%s\n' "$NAME" "$macd" "$pcd" >> "$f.tmp"
+  sort "$f.tmp" > "$f" && rm -f "$f.tmp"
+}
+
+build_map() {
+  local mac pc notes
+  if [ "$HERE" = mac ]; then
+    mac="$(probe)"
+    if remote_ok; then pc="$(on_pc __probe)"; else pc="$(block pc)"; say "PC unreachable, kept its old map section"; fi
+  else
+    pc="$(probe)"; mac="$(block mac)"
+  fi
+  notes="$( [ -f "$MAP" ] && awk 'f; /^## Notes/{f=1}' "$MAP" || true)"
+  [ -n "$notes" ] || notes="Add your own notes here. ca keeps this section when it refreshes the map."
+  mkdir -p "$CONF"
+  {
+    echo "# CrossAgent system map"
+    echo
+    echo "Generated by ca on $(date '+%Y-%m-%d %H:%M') from the $HERE. Everything above Notes gets regenerated."
+    echo
+    echo "## How to reach each machine"
+    echo
+    echo "- mac (nicknames: local, mac, this mac, on my mac): the hub and source of truth for code. Runs things locally."
+    echo "- pc (nicknames: pc, ssh, overseas, my pc, on my pc): reached from the Mac with \`ssh pc\`. Use ssh options \`$SSH_OPTS\`. Login shell needed for PATH (\`ssh pc 'exec \$SHELL -lc \"...\"'\`)."
+    echo "- The PC can't reach the Mac. Run from the PC, ca works PC only."
+    echo "- tmux sessions are named ca-<host>-<task> and show up in the CrossAgent viewing station."
+    echo
+    echo "<!-- ca:mac -->"
+    echo "## mac"
+    echo
+    echo "$mac" | sed '/^## mac$/d; /^$/d'
+    echo "<!-- /ca:mac -->"
+    echo
+    echo "<!-- ca:pc -->"
+    echo "## pc"
+    echo
+    echo "$pc" | sed '/^## pc$/d; /^$/d'
+    echo "<!-- /ca:pc -->"
+    echo
+    echo "## Projects"
+    echo
+    echo "| project | mac | pc |"
+    echo "|---|---|---|"
+    awk -F'\t' '{print "| "$1" | "$2" | "$3" |"}' "$CONF/projects" 2>/dev/null || true
+    echo
+    echo "## Notes"
+    echo
+    echo "$notes" | sed '/./,$!d'
+  } > "$MAP.tmp"
+  mv "$MAP.tmp" "$MAP"
+  if [ "$HERE" = mac ] && remote_ok; then
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS pc 'mkdir -p ~/.config/crossagent && cat > ~/.config/crossagent/system-map.md' < "$MAP"
+  fi
+  say "map written to ~/.config/crossagent/system-map.md$([ "$HERE" = mac ] && echo ' (and copied to the PC)')"
+}
+
+project_map() {
+  [ -f "$MAP" ] || return 0
+  mkdir -p "$ROOT/.crossagent"
+  cp "$MAP" "$ROOT/.crossagent/system-map.md"
+}
+
+# ---------- init ----------
+
+init() {
+  mkdir -p "$ROOT/.crossagent"
+  [ -f "$PROJ_CONF" ] || printf 'name=%s\npc_dir=%s\n' "$NAME" "crossagent/projects/$NAME" > "$PROJ_CONF"
+
+  if [ ! -f "$ROOT/CROSSAGENT.md" ]; then
+    cp "$SKILL_DIR/templates/CROSSAGENT.md" "$ROOT/CROSSAGENT.md"; say "added CROSSAGENT.md"
+  elif ! cmp -s "$SKILL_DIR/templates/CROSSAGENT.md" "$ROOT/CROSSAGENT.md"; then
+    say "CROSSAGENT.md differs from the template, leaving it (delete it and re-run init to reset)"
+  fi
+
+  local line="Read CROSSAGENT.md for how to split work across the Mac and the PC (crossagent skill)."
+  if [ ! -f "$ROOT/CLAUDE.md" ] || ! grep -q 'CROSSAGENT.md' "$ROOT/CLAUDE.md"; then
+    if [ -s "$ROOT/CLAUDE.md" ]; then
+      [ -z "$(tail -c1 "$ROOT/CLAUDE.md")" ] || echo >> "$ROOT/CLAUDE.md"
+      printf '\n%s\n' "$line" >> "$ROOT/CLAUDE.md"
+    else
+      printf '%s\n' "$line" > "$ROOT/CLAUDE.md"
+    fi
+    say "added CROSSAGENT.md pointer to CLAUDE.md"
+  fi
+
+  if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    if ! grep -qxE '/?\.crossagent/?' "$ROOT/.gitignore" 2>/dev/null; then
+      [ ! -s "$ROOT/.gitignore" ] || [ -z "$(tail -c1 "$ROOT/.gitignore")" ] || echo >> "$ROOT/.gitignore"
+      echo ".crossagent/" >> "$ROOT/.gitignore"; say "added .crossagent/ to .gitignore"
+    fi
+  fi
+
+  register_project
+  [ "$HERE" = mac ] && ensure_remote
+  build_map
+  project_map
+  if [ "$HERE" = mac ]; then push; else say "on the PC: PC only mode, nothing to sync"; fi
+  echo "ready: $NAME  mac=$( [ "$HERE" = mac ] && echo "$ROOT" | sed "s|^$HOME|~|" || echo -)  pc=~/$(pc_dir)"
+}
+
+# ---------- tasks ----------
+
+check_task() {
+  echo "$1" | grep -qE '^[A-Za-z0-9_-]{1,34}$' || die "task name must be 1-34 chars of A-Z a-z 0-9 _ - (got '$1')"
+}
+
+run() {
+  [ $# -ge 2 ] || die "usage: ca run <host> <task> [--claude \"prompt\"] [-- command...]"
+  local host task mode prompt=""; host="$(host_arg "$1")"; task="$2"; shift 2
+  check_task "$task"
+  case "${1:-}" in
+    --claude) [ $# -ge 2 ] || die "--claude needs a prompt"; mode=claude; prompt="$2"; shift 2 ;;
+    --) shift; [ $# -ge 1 ] || die "nothing to run after --"; mode=cmd ;;
+    *) die "say what to run: --claude \"prompt\" or -- command" ;;
+  esac
+  if [ "$host" != "$HERE" ]; then
+    push
+    if [ "$mode" = claude ]; then on_pc run pc "$task" --claude "$prompt"; else on_pc run pc "$task" -- "$@"; fi
+    return
+  fi
+  local s="ca-$host-$task" d="$ROOT/.crossagent"
+  if tmux has-session -t "=$s" 2>/dev/null; then
+    [ -f "$d/run/$task.exit" ] || die "$s is still running. Use ca wait, or ca stop $host $task"
+    tmux kill-session -t "=$s"
+  fi
+  mkdir -p "$d/logs" "$d/results" "$d/run"
+  rm -f "$d/logs/$task.log" "$d/results/$task.md" "$d/run/$task.exit"
+  echo "$mode" > "$d/run/$task.mode"
+  if [ "$mode" = claude ]; then
+    tmux new-session -d -s "$s" -c "$ROOT" "$CA" __run "$task" claude "$prompt"
+  else
+    tmux new-session -d -s "$s" -c "$ROOT" "$CA" __run "$task" cmd "$@"
+  fi
+  echo "started $s in $(echo "$ROOT" | sed "s|^$HOME|~|")"
+}
+
+# Runs inside the tmux session.
+runner() {
+  local task="$1" mode="$2"; shift 2
+  local d="$ROOT/.crossagent" rc start; start="$(date +%s)"
+  local log="$d/logs/$task.log" res="$d/results/$task.md"
+  if [ "$mode" = claude ]; then
+    tmux pipe-pane -o -t "${TMUX_PANE:-}" "cat >> $(q "$log")" || true
+    local p="$1
+
+You are a crossagent worker on the $HERE, task '$task', in $ROOT. When you are done, write a short result (what you did, files touched, outcome, anything the user must do) to .crossagent/results/$task.md, then say you're done."
+    set +e; claude --permission-mode acceptEdits "$p"; rc=$?; set -e
+    [ -f "$res" ] || printf '# %s on %s\n\nClaude exited (code %s) without writing a result.\n' "$task" "$HERE" "$rc" > "$res"
+  else
+    echo "[ca] $HERE $task: $*"
+    set +e
+    { if [ $# -eq 1 ]; then bash -c "$1"; else "$@"; fi; echo $? > "$d/run/$task.rc"; } 2>&1 | tee "$log"
+    set -e
+    rc="$(cat "$d/run/$task.rc" 2>/dev/null || echo 1)"; rm -f "$d/run/$task.rc"
+    {
+      echo "# $task on $HERE"
+      echo
+      echo "- command: \`$*\`"
+      echo "- exit: $rc ($([ "$rc" = 0 ] && echo ok || echo failed))"
+      echo "- took: $(( $(date +%s) - start ))s"
+      echo "- log: .crossagent/logs/$task.log"
+      echo
+      echo "Last lines:"
+      echo
+      echo '```'
+      tail -n 15 "$log"
+      echo '```'
+    } > "$res"
+  fi
+  echo "$rc" > "$d/run/$task.exit"
+  echo
+  echo "[ca] $task finished with exit $rc. Session stays open, close it with: ca stop $HERE $task"
+  exec "${SHELL:-bash}" -l
+}
+
+state() {
+  local d="$ROOT/.crossagent/run" task="$1"
+  if [ -f "$d/$task.exit" ]; then echo "done (exit $(cat "$d/$task.exit"))"
+  elif [ -f "$ROOT/.crossagent/results/$task.md" ]; then echo "done (result written)"
+  elif tmux has-session -t "=ca-$HERE-$task" 2>/dev/null; then echo running
+  else echo "not running"; fi
+}
+
+local_status() {
+  local s t
+  for s in $(tmux ls -F '#{session_name}' 2>/dev/null | grep '^ca-' || true); do
+    t="${s#ca-"$HERE"-}"
+    if [ -f "$ROOT/.crossagent/run/$t.mode" ]; then printf '%-4s %-30s %s\n' "$HERE" "$s" "$(state "$t")"
+    else printf '%-4s %-30s %s\n' "$HERE" "$s" "-"; fi
+  done
+}
+
+status() {
+  local_status
+  if [ "$HERE" = mac ]; then on_pc __status 2>/dev/null || echo "pc   (unreachable)"; fi
+}
+
+logs() {
+  [ $# -ge 2 ] || die "usage: ca logs <host> <task> [lines]"
+  local host task n="${3:-60}"; host="$(host_arg "$1")"; task="$2"; check_task "$task"
+  [ "$host" = "$HERE" ] || { on_pc logs pc "$task" "$n"; return; }
+  local s="ca-$host-$task"
+  if [ "$(cat "$ROOT/.crossagent/run/$task.mode" 2>/dev/null)" = claude ] && tmux has-session -t "=$s" 2>/dev/null; then
+    tmux capture-pane -p -J -S -"$n" -t "=$s:" | sed '/^$/N;/^\n$/D' | tail -n "$n"
+  elif [ -f "$ROOT/.crossagent/logs/$task.log" ]; then
+    tail -n "$n" "$ROOT/.crossagent/logs/$task.log"
+  else
+    die "no log for $task on $host"
+  fi
+}
+
+wait_one() {
+  local host task t="$3"; host="$(host_arg "$1")"; task="$2"; check_task "$task"
+  [ "$host" = "$HERE" ] || { on_pc wait pc "$task" --timeout "$t"; return; }
+  local end=$(( $(date +%s) + t )) st
+  while :; do
+    st="$(state "$task")"
+    case "$st" in
+      done*) break ;;
+      "not running") echo "ca-$host-$task: not running and no result"; return 1 ;;
+    esac
+    [ "$(date +%s)" -lt "$end" ] || { echo "ca-$host-$task: still running after ${t}s, call ca wait again"; return 124; }
+    sleep 2
+  done
+  echo "ca-$host-$task: $st"
+  cat "$ROOT/.crossagent/results/$task.md" 2>/dev/null || true
+  local rc; rc="$(cat "$ROOT/.crossagent/run/$task.exit" 2>/dev/null || echo 0)"
+  return "$rc"
+}
+
+waitcmd() {
+  local t=110 args=() rc=0
+  while [ $# -gt 0 ]; do
+    case "$1" in --timeout) t="$2"; shift 2 ;; *) args+=("$1"); shift ;; esac
+  done
+  [ "${#args[@]}" -ge 2 ] && [ $(( ${#args[@]} % 2 )) -eq 0 ] || die "usage: ca wait <host> <task> [<host> <task>...] [--timeout secs]"
+  set -- "${args[@]}"
+  while [ $# -gt 0 ]; do
+    local r=0; wait_one "$1" "$2" "$t" || r=$?
+    [ "$r" -eq 0 ] || rc="$r"
+    [ $# -le 2 ] || echo
+    shift 2
+  done
+  return "$rc"
+}
+
+stop() {
+  [ $# -ge 2 ] || die "usage: ca stop <host> <task>"
+  local host task; host="$(host_arg "$1")"; task="$2"; check_task "$task"
+  [ "$host" = "$HERE" ] || { on_pc stop pc "$task"; return; }
+  tmux kill-session -t "=ca-$host-$task" 2>/dev/null && echo "stopped ca-$host-$task" || echo "ca-$host-$task wasn't running"
+  rm -f "$ROOT/.crossagent/run/$task.mode"
+}
+
+usage() {
+  cat <<'EOF'
+ca: split work across the Mac and the PC
+
+  ca init                       set up this project (CROSSAGENT.md, CLAUDE.md pointer, map, push)
+  ca map [--refresh]            print the system map, or re-probe both machines first
+  ca host <word>                nickname -> mac | pc | both  (local, this mac -> mac; pc, ssh, overseas -> pc)
+  ca sync push [--delete]       rsync project Mac -> PC (skips node_modules, .build, build/ and friends)
+  ca sync pull [paths...]       copy paths back from the PC (no paths: PC logs and results into .crossagent/pc/)
+  ca run <host> <task> -- cmd   run a command in tmux session ca-<host>-<task> (pushes first for pc)
+  ca run <host> <task> --claude "prompt"
+                                start an interactive Claude Code worker (acceptEdits) in that session
+  ca status                     list ca-* sessions on both machines
+  ca logs <host> <task> [n]     last n lines of output (default 60)
+  ca wait <host> <task> [<host> <task>...] [--timeout secs]
+                                wait until done (default 110s), print results, exit with the task's code
+  ca stop <host> <task>         kill the session
+
+Logs: .crossagent/logs/<task>.log, results: .crossagent/results/<task>.md, on the host that ran it.
+A single command string after -- runs through bash -c, so pipes and && work.
+EOF
+}
+
+cmd="${1:-help}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+  init) init ;;
+  map)
+    if [ "${1:-}" = --refresh ] || [ ! -f "$MAP" ]; then
+      [ "$HERE" = mac ] && ensure_remote; register_project; build_map; project_map
+    fi
+    cat "$MAP" ;;
+  host) h="$(resolve "$*")" || die "unknown nickname '$*'"; echo "$h" ;;
+  sync)
+    case "${1:-}" in
+      push) shift; push "$@" ;;
+      pull) shift; pull "$@" ;;
+      *) die "usage: ca sync push|pull [paths...]" ;;
+    esac ;;
+  run) run "$@" ;;
+  status) status ;;
+  logs) logs "$@" ;;
+  wait) waitcmd "$@" ;;
+  stop) stop "$@" ;;
+  __run) runner "$@" ;;
+  __probe) probe ;;
+  __status) local_status ;;
+  help|-h|--help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac
