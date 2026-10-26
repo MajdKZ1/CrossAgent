@@ -166,16 +166,35 @@ struct StatusPill: View {
     }
 }
 
-struct PulsingDot: View {
+/// Pulses on the render server (Core Animation), so the app itself stays idle.
+/// A SwiftUI repeatForever animation re-rendered the station every frame.
+struct PulsingDot: NSViewRepresentable {
     var color: SwiftUI.Color
-    @State private var on = false
 
-    var body: some View {
-        Circle().fill(color).frame(width: 6, height: 6)
-            .opacity(on ? 0.35 : 1)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { on = true }
-            }
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView(frame: NSRect(x: 0, y: 0, width: 6, height: 6))
+        v.wantsLayer = true
+        let dot = CALayer()
+        dot.frame = CGRect(x: 0, y: 0, width: 6, height: 6)
+        dot.cornerRadius = 3
+        v.layer?.addSublayer(dot)
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1
+        pulse.toValue = 0.35
+        pulse.duration = 0.9
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        dot.add(pulse, forKey: "pulse")
+        return v
+    }
+
+    func updateNSView(_ v: NSView, context: Context) {
+        v.layer?.sublayers?.first?.backgroundColor = NSColor(color).cgColor
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
+        CGSize(width: 6, height: 6)
     }
 }
 
