@@ -62,6 +62,16 @@ final class AppState: ObservableObject {
             }
             name = s
         } else {
+            // Before the monitor has heard from this host we don't know its sessions,
+            // and `tmux new -A` would silently attach to an existing ca-<host>-1. Ask first.
+            if let monitor, !monitor.hasPolled(host: host) {
+                Task { [weak self] in
+                    let r = await Runner.run(CommandBuilder.oneShot(host: host, script: "tmux ls -F '#{session_name}' 2>/dev/null || true"))
+                    let names = Set(r.stdout.split(separator: "\n").map(String.init))
+                    self?.newPane(hostID: host.id, mode: mode, session: self?.nextSessionName(host: host, taken: taken.union(names)), taken: taken)
+                }
+                return nil
+            }
             name = nextSessionName(host: host, taken: taken)
         }
         if let existing = panes.first(where: { $0.host.id == host.id && $0.session == name }) {
@@ -77,6 +87,7 @@ final class AppState: ObservableObject {
         pane.start()
         focus(pane.id)
         saveLayout()
+        monitor?.refreshNow()
         return pane
     }
 
