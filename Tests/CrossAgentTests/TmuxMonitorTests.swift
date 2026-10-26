@@ -76,7 +76,8 @@ final class TmuxMonitorTests: XCTestCase {
     }
 
     func testShellAndOtherPrograms() {
-        XCTAssertEqual(SessionDetector.status(previous: "a", current: "b", command: "zsh", paneDead: false), .idle)
+        XCTAssertEqual(SessionDetector.status(previous: "a", current: "b", command: "zsh", paneDead: false), .running)
+        XCTAssertEqual(SessionDetector.status(previous: "a", current: "a", command: "zsh", paneDead: false), .idle)
         XCTAssertEqual(SessionDetector.status(previous: "top 1", current: "top 2", command: "top", paneDead: false), .running)
         XCTAssertEqual(SessionDetector.status(previous: "top 1", current: "top 1", command: "top", paneDead: false), .idle)
         XCTAssertEqual(SessionDetector.status(previous: nil, current: "x", command: "top", paneDead: false), .idle)

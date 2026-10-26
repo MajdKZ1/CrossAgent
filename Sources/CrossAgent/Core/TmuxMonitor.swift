@@ -246,7 +246,8 @@ enum TmuxPoll {
 ///    "· Nucleating…" (spinner glyph, a word ending in "…"), or the older "esc to interrupt".
 ///    For non Claude, non shell programs: the screen changed since the last poll.
 ///    Claude is not judged by screen changes because its idle footer redraws on its own.
-/// 4. idle otherwise (a shell sitting at its prompt is always idle).
+///    Shells too: a shell running a loop still has zsh as its pane command.
+/// 4. idle otherwise (a shell sitting at its prompt does not change).
 enum SessionDetector {
     static let shells: Set<String> = ["zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "-zsh", "-bash", "login"]
 
@@ -267,7 +268,8 @@ enum SessionDetector {
             }
             if tail.contains(where: isBusyLine) { return .running }
         }
-        if !claude, !shells.contains(command), let previous, previous != current { return .running }
+        // A program, or a shell running a loop or a builtin: the screen moving means busy.
+        if !claude, let previous, previous != current { return .running }
         return .idle
     }
 
@@ -341,6 +343,8 @@ final class TmuxMonitor: ObservableObject {
     private(set) var isActive = false
     private var loops: [String: Task<Void, Never>] = [:]
     private var nextDue: [String: Date] = [:]
+    /// Bumped by refreshNow so a poll already in flight does not push the next one out.
+    private var refreshGeneration = 0
 
     static let fastInterval: TimeInterval = 1.5
     static let slowInterval: TimeInterval = 10
@@ -378,8 +382,12 @@ final class TmuxMonitor: ObservableObject {
 
     /// Polls every host as soon as its current poll (if any) finishes.
     func refreshNow() {
+        refreshGeneration += 1
         for h in hosts { nextDue[h.id] = .distantPast }
     }
+
+    /// True once this host answered (or failed) at least one poll.
+    func hasPolled(host: Host) -> Bool { reachable[host.id] != nil }
 
     func sessionNames(host: Host) -> Set<String> {
         Set((sessions[host.id] ?? []).map(\.name))
@@ -397,8 +405,11 @@ final class TmuxMonitor: ObservableObject {
     private func tick(_ host: Host) async {
         guard Date() >= nextDue[host.id] ?? .distantPast else { return }
         let fast = isActive
+        let generation = refreshGeneration
         await poll(host, fast: fast)
-        nextDue[host.id] = Date().addingTimeInterval(fast ? Self.fastInterval : Self.slowInterval)
+        // A refresh during the poll (station just opened) means poll again right away.
+        guard generation == refreshGeneration else { return }
+        nextDue[host.id] = Date().addingTimeInterval(isActive ? Self.fastInterval : Self.slowInterval)
     }
 
     private func poll(_ host: Host, fast: Bool) async {
