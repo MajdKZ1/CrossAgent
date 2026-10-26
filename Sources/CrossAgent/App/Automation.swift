@@ -64,8 +64,50 @@ final class Automation {
         case "state": write(stateJSON(), to: cmd["out"] as? String)
         case "snapshot":
             if let out = cmd["out"] as? String { snapshot(to: out) }
+        case "key":
+            // Synthetic keyDown into the key window, so shortcut handling can be tested.
+            // {"cmd":"key","code":17,"chars":"t","mods":["cmd","shift"]}
+            if let code = cmd["code"] as? Int { key(code: UInt16(code), chars: cmd["chars"] as? String ?? "",
+                                                   mods: cmd["mods"] as? [String] ?? []) }
+        case "click":
+            // Synthetic click at window coordinates (origin bottom left), count 2 for a double click.
+            if let x = cmd["x"] as? Double, let y = cmd["y"] as? Double { click(at: NSPoint(x: x, y: y), count: cmd["count"] as? Int ?? 1) }
         case "quit": NSApp.terminate(nil)
         default: break
+        }
+    }
+
+    private func key(code: UInt16, chars: String, mods: [String]) {
+        var flags: NSEvent.ModifierFlags = []
+        for m in mods {
+            switch m {
+            case "cmd": flags.insert(.command)
+            case "shift": flags.insert(.shift)
+            case "option": flags.insert(.option)
+            case "ctrl": flags.insert(.control)
+            default: break
+            }
+        }
+        guard let win = NSApp.keyWindow ?? app.window,
+              let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                                           timestamp: ProcessInfo.processInfo.systemUptime,
+                                           windowNumber: win.windowNumber, context: nil, characters: chars,
+                                           charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code)
+        else { return }
+        NSApp.postEvent(event, atStart: false)
+    }
+
+    private func click(at point: NSPoint, count: Int) {
+        guard let win = app.window else { return }
+        for n in 1...max(1, count) {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                if let e = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                                              timestamp: ProcessInfo.processInfo.systemUptime,
+                                              windowNumber: win.windowNumber, context: nil,
+                                              eventNumber: 0, clickCount: n, pressure: 1) {
+                    NSApp.postEvent(e, atStart: false)
+                }
+            }
         }
     }
 
@@ -81,11 +123,15 @@ final class Automation {
             return ["index": i, "host": p.host.id, "session": p.session, "mode": p.mode.rawValue,
                     "state": state, "focused": p.id == app.focusedID, "cols": dims.cols, "rows": dims.rows,
                     "frame": NSStringFromRect(p.terminal.convert(p.terminal.bounds, to: nil)),
-                    "inWindow": p.terminal.window != nil, "screen": p.screenText()]
+                    "inWindow": p.terminal.window != nil, "bg": "\(p.terminal.nativeBackgroundColor)", "layerBg": "\(String(describing: p.terminal.layer?.backgroundColor))", "screen": p.screenText()]
         }
         let obj: [String: Any] = ["panes": panes, "broadcast": app.broadcast,
                                   "maximized": app.panes.firstIndex { $0.id == app.maximizedID } ?? -1,
-                                  "station": app.showStation, "toast": app.toast ?? ""]
+                                  "station": app.showStation, "toast": app.toast ?? "",
+                                  "newPaneOpen": app.showNewPane, "active": NSApp.isActive,
+                                  "windows": NSApp.windows.filter(\.isVisible).map { "\(type(of: $0)) key=\($0.isKeyWindow) fr=\($0.firstResponder.map { "\(type(of: $0))" } ?? "-")" }, "relayPickerOpen": app.showRelayPicker,
+                                  "keyWindow": NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "",
+                                  "firstResponder": NSApp.keyWindow?.firstResponder.map { String(describing: type(of: $0)) } ?? ""]
         return (try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys])) ?? Data()
     }
 
@@ -94,10 +140,27 @@ final class Automation {
         try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 
+    /// cacheDisplay leaves terminal default background cells transparent (on
+    /// screen the terminal layer's background shows through), so composite it
+    /// over the window color with each terminal's rect filled in the pane color.
     private func snapshot(to path: String) {
         guard let view = NSApp.windows.first(where: { $0.isVisible })?.contentView,
-              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        write(rep.representation(using: .png, properties: [:]) ?? Data(), to: path)
+              let cached = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: cached)
+        let out = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: cached.pixelsWide, pixelsHigh: cached.pixelsHigh,
+                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                   colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        out.size = view.bounds.size
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: out)
+        Theme.window.setFill()
+        view.bounds.fill()
+        Theme.pane.setFill()
+        for pane in app.panes where pane.terminal.window === view.window && !pane.terminal.isHiddenOrHasHiddenAncestor {
+            pane.terminal.convert(pane.terminal.bounds, to: view).fill()
+        }
+        cached.draw(in: view.bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        NSGraphicsContext.restoreGraphicsState()
+        write(out.representation(using: .png, properties: [:]) ?? Data(), to: path)
     }
 }
