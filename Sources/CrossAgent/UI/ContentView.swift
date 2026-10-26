@@ -1,12 +1,15 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var pane = PaneSession(host: HostStore.load()[0], mode: .shell, session: "ca-mac-1")
+    @EnvironmentObject private var app: AppState
 
     var body: some View {
-        TerminalHost(terminal: pane.terminal)
-            .padding(6)
-            .background(Color(nsColor: Theme.window))
-            .onAppear { pane.start() }
+        HStack(spacing: 6) {
+            ForEach(app.panes) { pane in
+                TerminalHost(terminal: pane.terminal)
+            }
+        }
+        .padding(6)
+        .background(Color(nsColor: Theme.window))
     }
 }
