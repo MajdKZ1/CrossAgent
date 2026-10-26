@@ -88,6 +88,14 @@ final class Automation {
             default: break
             }
         }
+        // Arrow keys carry function key characters and flags, or SwiftUI ignores them.
+        let arrows: [UInt16: Int] = [123: NSLeftArrowFunctionKey, 124: NSRightArrowFunctionKey,
+                                     125: NSDownArrowFunctionKey, 126: NSUpArrowFunctionKey]
+        var chars = chars
+        if let fk = arrows[code], let scalar = UnicodeScalar(fk) {
+            chars = String(Character(scalar))
+            flags.formUnion([.function, .numericPad])
+        }
         guard let win = NSApp.keyWindow ?? app.window,
               let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
                                            timestamp: ProcessInfo.processInfo.systemUptime,
