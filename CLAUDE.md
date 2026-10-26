@@ -26,10 +26,14 @@ Rules:
 
 ## Commits
 
-- Local git only. No remote yet.
-- Small, clear commits per milestone or meaningful step. Conventional style: `feat:`, `fix:`, `chore:`, `docs:`.
-- Keep Claude Code's default Co-Authored-By trailer on every commit so the history credits both of us.
-- Never commit build output (`.build/`, `build/`, `*.app`, DerivedData).
+This history goes to a public GitHub repo later. Treat every commit like people will read it.
+
+- Commit a lot. Many small, meaningful commits as you go (every working step, fix, or feature piece), not one dump per milestone. The history should tell the story of how the app was built.
+- Each commit should build on its own and leave the repo working where possible.
+- Messages short, technical and accurate, conventional style (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`). Say exactly what changed. Example: `feat(term): spawn ssh panes via LocalProcessTerminalView with tmux attach`.
+- No Co-Authored-By lines and no Claude or AI attribution in any commit. Commits are authored by the user's git config.
+- Stay on `main`, clean and linear, ready to push as is. No remote yet, do not add one.
+- Never commit build output (`.build/`, `build/`, `*.app`, DerivedData), secrets, hostnames beyond the `pc` alias, IPs, usernames, or anything from `~/.ssh`. The system map and machine specific config stay out of the repo (gitignored). Only templates and examples go in.
 
 ## Style
 
