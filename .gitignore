@@ -6,3 +6,8 @@ DerivedData/
 xcuserdata/
 .swiftpm/
 .DS_Store
+
+# machine specific, never commit
+.crossagent/
+system-map.md
+hosts.json
