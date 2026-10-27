@@ -46,6 +46,18 @@ final class Shortcuts {
 
         if app.showRelayPicker { return handleRelayPicker(key: key, flags: flags) }
         if app.folderPrompt != nil, !flags.contains(.command) { return handleFolderPrompt(key: key) }
+        if app.mode == .orchestrator, let o = app.orch, o.detail != nil || o.relay != nil {
+            // Esc closes the top card, unless a terminal in it has focus (Claude uses Esc).
+            if key == Key.escape, flags.isEmpty {
+                if o.relay != nil { o.relay = nil; return nil }
+                if !(main.firstResponder is PaneTerminalView) { app.closeDetail(); return nil }
+                return event
+            }
+            if key == Key.w, flags == .command {
+                if o.relay != nil { o.relay = nil } else { app.closeDetail() }
+                return nil
+            }
+        }
 
         guard flags.contains(.command), !flags.contains(.control), !flags.contains(.option) else { return event }
         let shift = flags.contains(.shift)
