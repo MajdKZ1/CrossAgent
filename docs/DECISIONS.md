@@ -214,3 +214,28 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   - `Palette` keeps its names, computed from the current theme. The window root re-renders on a change. Terminals are registered weakly and re-coloured and redrawn in place, including running Claude Code. Canvas cables and the sleep zzz re-colour on the theme notification.
   - Optional per theme host colours override `hosts.json`.
   - Default reproduces the earlier colours exactly.
+- Mono theme, derived from background #101010 and foreground #c8c8c8:
+  - **Surfaces:** window #0b0b0b, surface #101010, raised #181818.
+  - **Lines and chips:** border #c8c8c814, hairline #c8c8c80d, chip #c8c8c80a, chip hover #c8c8c814 (all the foreground at low alpha).
+  - **Text:** text #c8c8c8, muted #8c8c8c, faint #626262.
+  - **Accents:** accent #8fa1b3, success and synced #8fae94, warning #bba67c, danger #bf8a8a, broadcast #c09a84.
+  - **Terminal:** cursor #a8a8a8, selection #333333 with #e0e0e0 text.
+  - **ANSI normal:** #2e2e2e #b07a7a #8aa585 #b0a073 #7f91ad #a089ad #7fa6a6 #b4b4b4.
+  - **ANSI bright:** #808080 #c79a9a #a8c2a3 #cbbd93 #a2b2cb #bba9c7 #a2c2c2 #dedede.
+  - **Hosts:** mac #8fa1b3, pc #8fae94.
+  - **Mascot:** body #b3dcff and eyes #0b1218, kept from the reference.
+- Mono contrast (WCAG, enforced by `testMonoContrast`):
+  - **Text on #101010:** text 11.37, muted 5.66, faint 3.12 (Default's faint is about 3 too).
+  - **On raised #181818:** text 10.61, muted 5.28.
+  - **Accents on #101010:** accent 7.17, success 7.84, warning 8.03, danger 6.54.
+  - **Selection:** #e0e0e0 on #333333, 9.57.
+  | ANSI | normal | ratio | bright | ratio |
+  |---|---|---|---|---|
+  | black | #2e2e2e | 1.40 (exempt) | #808080 | 4.82 |
+  | red | #b07a7a | 5.36 | #c79a9a | 7.72 |
+  | green | #8aa585 | 7.07 | #a8c2a3 | 9.89 |
+  | yellow | #b0a073 | 7.36 | #cbbd93 | 10.18 |
+  | blue | #7f91ad | 5.94 | #a2b2cb | 8.85 |
+  | magenta | #a089ad | 6.05 | #bba9c7 | 8.71 |
+  | cyan | #7fa6a6 | 7.17 | #a2c2c2 | 10.00 |
+  | white | #b4b4b4 | 9.18 | #dedede | 14.14 |
