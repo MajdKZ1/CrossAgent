@@ -74,6 +74,7 @@ struct TabContent: View {
                 if let monitor = app.monitor { StationView(monitor: monitor).transition(.opacity) }
             case .orchestrator?: OrchestratorModeView().transition(.opacity)
             case .activity?: ActivityTab().transition(.opacity)
+            case .sessions?: SessionsTab().transition(.opacity)
             case .dev(.orchestratorDemo)?: OrchestratorDemoTab()
             case .dev(.mascotGallery)?: MascotGalleryView()
             default: EmptyView()
@@ -107,13 +108,13 @@ struct FolderPromptCard: View {
                     .truncationMode(.middle)
                 switch prompt.phase {
                 case .missing:
-                    Text("Sync the project there, or open the pane in the home folder.")
+                    Text("Open a Crossover Portal to mirror it there, or open the pane in the home folder.")
                         .font(.system(size: 11))
                         .foregroundStyle(Palette.muted)
                 case .syncing:
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
-                        Text("Starting sync, the first one can take a minute")
+                        Text("Opening the Portal, the first one can take a minute")
                             .font(.system(size: 11))
                             .foregroundStyle(Palette.muted)
                     }
@@ -134,12 +135,12 @@ struct FolderPromptCard: View {
                     Button("Open in home folder") { app.promptOpenInHome() }
                         .buttonStyle(ChromeButtonStyle())
                         .disabled(prompt.phase == .syncing)
-                    Button(prompt.phase == .missing ? "Start sync" : "Retry sync") { app.promptStartSync() }
+                    Button(prompt.phase == .missing ? "Open Portal" : "Try again") { app.promptStartSync() }
                         .buttonStyle(ChromeButtonStyle(active: true, tint: tint))
                         .disabled(prompt.phase == .syncing)
                 }
                 .padding(.top, 4)
-                Text("↩ start sync   esc cancel")
+                Text("↩ open Portal   esc cancel")
                     .font(.system(size: 10))
                     .foregroundStyle(Palette.faint)
             }

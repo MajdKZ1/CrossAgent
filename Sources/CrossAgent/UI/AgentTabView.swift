@@ -2,14 +2,17 @@ import SwiftUI
 
 /// An agent's tab: the orchestrator's or a worker's live terminal (any tmux session,
 /// really), or for a built-in subagent what it was asked and did, with a box that
-/// talks to it through the orchestrator. Kept alive while hidden, like the pane grid.
+/// talks to it through the orchestrator, or a Claude session's Live view. Kept alive
+/// while hidden, like the pane grid.
 struct AgentTabView: View {
     @EnvironmentObject private var app: AppState
     var tab: Tab
     var selected: Bool
 
     var body: some View {
-        if let o = app.orch {
+        if case .agent(.claude(let h, let sid)) = tab.kind {
+            LiveSessionView(tab: tab, host: h, sessionId: sid, selected: selected)
+        } else if let o = app.orch {
             AgentTabGraph(orch: o, tab: tab, selected: selected)
         } else {
             AgentTabBody(tab: tab, node: nil, selected: selected)
