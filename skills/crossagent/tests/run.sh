@@ -86,7 +86,8 @@ mcp() {  # mcp <timeout> <answer or ""> : one tools/call, prints the reply
   local to="$1" a="$2"
   if [ -n "$a" ]; then
     ( for _ in $(seq 50); do f="$(ls "$AP"/*.json 2>/dev/null | head -1)"; [ -n "$f" ] && break; sleep 0.1; done
-      echo "$a" > "${f%.json}.answer" ) &
+      echo "$a" > "${f%.json}.answer.tmp"
+      [ "$a" = stray ] || mv -f "${f%.json}.answer.tmp" "${f%.json}.answer" ) &
   fi
   { echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
     echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
@@ -109,6 +110,11 @@ t "request files are cleaned up" test -z "$(ls -A "$AP")"
 mcp 10 deny > "$T/deny"
 t "deny answer denies" grep -qF 'Denied by the user in CrossAgent.' "$T/deny"
 t "PermissionAnswer deny" jcheck "$F" 'e[-1]["msg"] == "deny"'
+mcp 10 maybe > "$T/maybe"
+t "anything but allow denies" grep -qF 'Denied by the user in CrossAgent.' "$T/maybe"
+mcp 2 stray > "$T/stray"
+t "a lone .answer.tmp is ignored" grep -qF 'No answer within 2 s' "$T/stray"
+t "stray .answer.tmp is cleaned up" test -z "$(ls -A "$AP")"
 start=$(date +%s); mcp 2 "" > "$T/to"; took=$(( $(date +%s) - start ))
 t "timeout denies by default" grep -qF 'No answer within 2 s, so it was denied by default.' "$T/to"
 t "timeout took about 2 s" test "$took" -ge 2 -a "$took" -le 5

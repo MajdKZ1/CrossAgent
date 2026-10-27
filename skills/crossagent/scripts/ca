@@ -1161,7 +1161,7 @@ r_wait() {
 r_answer() {
   check_req "$1"
   [ -f "$APPROVALS/$1.json" ] || die "no pending request $1"
-  printf '%s\n' "$2" > "$APPROVALS/$1.answer.tmp" && mv "$APPROVALS/$1.answer.tmp" "$APPROVALS/$1.answer"
+  printf '%s\n' "$2" > "$APPROVALS/$1.answer.tmp" && mv -f "$APPROVALS/$1.answer.tmp" "$APPROVALS/$1.answer"
   echo "answered $1: $2"
 }
 
@@ -1188,7 +1188,7 @@ r_stop() {
   r_kill "$d" "$role"
   r_close_turn "$d" "$role" 130 "Stopped with ca remote stop"
   # Requests from a killed worker can't be answered any more.
-  pending "$s" all | cut -f1 | while read -r n; do [ -z "$n" ] || rm -f "$APPROVALS/$n.json" "$APPROVALS/$n.answer"; done
+  pending "$s" all | cut -f1 | while read -r n; do [ -z "$n" ] || rm -f "$APPROVALS/$n.json" "$APPROVALS/$n.answer" "$APPROVALS/$n.answer.tmp"; done
   echo "stopped $s (the session id is kept, --continue resumes it)"
 }
 

@@ -94,16 +94,16 @@ def ask(args):
     answer = "timeout"
     end = time.time() + limit
     while time.time() < end:
+        # Answers arrive whole (written to <id>.answer.tmp, then renamed), so the
+        # first read of <id>.answer is final. Anything but "allow" denies.
         try:
             with open(ans) as f:
-                a = f.read().strip().lower()
-            if a in ("allow", "deny"):
-                answer = a
-                break
+                answer = "allow" if f.read().strip().lower() == "allow" else "deny"
+            break
         except OSError:
             pass
         time.sleep(0.3)
-    for p in (req, ans):
+    for p in (req, ans, ans + ".tmp"):
         try:
             os.remove(p)
         except OSError:
