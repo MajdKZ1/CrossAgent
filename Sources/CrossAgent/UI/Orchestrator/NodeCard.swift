@@ -130,6 +130,11 @@ struct NodeCard: View, Equatable {
             Image(systemName: "checkmark")
                 .font(.system(size: 9.5, weight: .bold))
                 .foregroundStyle(Palette.synced)
+        } else if node.remote != nil {
+            Image(systemName: "network")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(model.accent.opacity(0.8))
+                .help("Remote worker on \(model.hostLabel)")
         } else if node.kind == .worker {
             Image(systemName: "terminal")
                 .font(.system(size: 9, weight: .medium))
@@ -143,6 +148,7 @@ struct NodeCard: View, Equatable {
 
     private var border: (Color, CGFloat) {
         if model.target { return (model.accent.opacity(0.95), 1.5) }
+        if node.remote?.permission != nil { return (Palette.connecting.opacity(0.8), 1.5) }
         switch node.state {
         case .needsInput: return (Palette.connecting.opacity(0.8), 1.5)
         case .error: return (Palette.danger.opacity(0.85), 1.5)
@@ -187,32 +193,40 @@ private struct ActivityLine: View {
 
     var body: some View {
         Group {
-            switch node.state {
-            case .needsInput(let q):
-                HStack(spacing: 6) {
-                    Text(q.isEmpty ? "Needs input" : q)
-                        .foregroundStyle(Palette.connecting)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: 0)
-                    Button("Answer", action: onAnswer)
-                        .buttonStyle(AnswerButtonStyle())
+            if let ask = node.remote?.permission {
+                prompt("Waiting on you").help(ask.text)
+            } else {
+                switch node.state {
+                case .needsInput(let q): prompt(q.isEmpty ? "Needs input" : q)
+                case .waiting(let names):
+                    Text(names.isEmpty ? "Waiting" : "Waiting on \(names.joined(separator: ", "))")
+                        .foregroundStyle(Palette.faint)
+                case .error(let e):
+                    Text(e.isEmpty ? "Failed" : e).foregroundStyle(Palette.danger.opacity(0.9))
+                case .working:
+                    Text(node.activity).foregroundStyle(Palette.text.opacity(0.85))
+                default:
+                    Text(node.activity).foregroundStyle(Palette.muted)
                 }
-            case .waiting(let names):
-                Text(names.isEmpty ? "Waiting" : "Waiting on \(names.joined(separator: ", "))")
-                    .foregroundStyle(Palette.faint)
-            case .error(let e):
-                Text(e.isEmpty ? "Failed" : e).foregroundStyle(Palette.danger.opacity(0.9))
-            case .working:
-                Text(node.activity).foregroundStyle(Palette.text.opacity(0.85))
-            default:
-                Text(node.activity).foregroundStyle(Palette.muted)
             }
         }
-        .font(.system(size: large ? 11.5 : 11, design: node.state == .working ? .monospaced : .default))
+        .font(.system(size: large ? 11.5 : 11,
+                      design: node.state == .working && node.remote?.permission == nil ? .monospaced : .default))
         .lineLimit(1)
         .truncationMode(.tail)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func prompt(_ text: String) -> some View {
+        HStack(spacing: 6) {
+            Text(text)
+                .foregroundStyle(Palette.connecting)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            Button("Answer", action: onAnswer)
+                .buttonStyle(AnswerButtonStyle())
+        }
     }
 }
 

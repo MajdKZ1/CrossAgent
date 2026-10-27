@@ -293,8 +293,10 @@ final class CanvasStage: NSView, CardEvents {
     private func model(_ node: AgentNode, style: NodeStyle) -> NodeCardModel {
         var from: String?
         if case .relay(let id) = drag { from = id }
-        let label = HostBadge.label(hosts[node.hostId], id: node.hostId)
-        return NodeCardModel(node: node, hostLabel: label, accent: accent(node.hostId), style: style,
+        // A remote worker wears the host it runs on, not the one its proxy runs on.
+        let hostID = node.remote?.host ?? node.hostId
+        let label = HostBadge.label(hosts[hostID], id: hostID)
+        return NodeCardModel(node: node, hostLabel: label, accent: accent(hostID), style: style,
                              target: dropTarget == node.id, relaying: from == node.id)
     }
 
@@ -326,7 +328,7 @@ final class CanvasStage: NSView, CardEvents {
                               height: OrchMetrics.card.height * cam.zoom * v.scale)
             let fade = v.leaving ? v.opacity : min(1, v.opacity * 1.6)
             cable.update(CableGeometry.cable(from: center, orchSize, to: p, size), width: lineWidth,
-                         opacity: Float(fade), accent: NSColor(accent(v.node.hostId)).cgColor)
+                         opacity: Float(fade), accent: NSColor(accent(v.node.remote?.host ?? v.node.hostId)).cgColor)
         }
 
         if let orch = graph.orchestrator {
