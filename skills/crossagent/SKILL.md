@@ -24,8 +24,8 @@ Below, `ca` is short for that path.
 2. In the project root run `~/.claude/skills/crossagent/scripts/ca init` for a split,
    `ca init mac` for Mac only or `ca init pc` for PC only. It installs `CROSSAGENT.md`,
    points `CLAUDE.md` at it and refreshes the system map on both machines. For a split it
-   starts live sync (Mutagen, same path on both machines). Mac only syncs nothing, PC only
-   pushes a one-off copy. Cheap enough to run every time.
+   opens the Crossover Portal (live sync with Mutagen, same path on both machines). Mac only
+   opens no Portal, PC only pushes a one-off copy. Cheap enough to run every time.
 3. Read `CROSSAGENT.md` and `.crossagent/system-map.md`. They say what goes where.
 4. Start the pieces, all before waiting, so they run in parallel:
    - `ca run pc tests -- make test` (pushes the project to the PC first)
@@ -34,10 +34,10 @@ Below, `ca` is short for that path.
 5. `ca wait pc tests mac build` until they finish. It waits up to 110 s per call, so if it
    says "still running", call it again. It prints each result and exits non zero if any task failed.
    `ca logs <host> <task> [lines]` shows more output.
-6. With live sync, the PC's files are already on the Mac (`ca wait` flushes). If `ca run`,
-   `ca wait` or `ca sync flush` reports a conflict, stop and show the user
-   `ca sync conflicts`. Don't pick a side yourself. Without sync, `ca sync pull <paths>`
-   brings files back.
+6. With the Portal open, the PC's files are already on the Mac (`ca wait` flushes). If
+   `ca run`, `ca wait` or `ca portal flush` reports a conflict, stop and show the user
+   `ca portal conflicts`. Don't pick a side yourself. Without a Portal,
+   `ca portal pull <paths>` brings files back. `ca portal status` shows every open Portal.
 7. Report back which machine did what and the results. Leave the tmux sessions running
    unless the user asks to stop them (`ca stop <host> <task>`).
 
@@ -53,5 +53,7 @@ Below, `ca` is short for that path.
 - Task names: up to 40 chars of letters, digits, `-` and `_`.
 - `ca help` lists everything. `ca status` shows all `ca-*` sessions on both machines,
   old `ca-<host>-<task>` ones marked legacy.
+- `ca sync ...` is the old name for `ca portal ...` and still works. Write `ca portal` in
+  anything new.
 - Each worker logs a start and a finish event to `~/.crossagent/events/<session>.jsonl`
   on the machine it ran on, which the CrossAgent app picks up.

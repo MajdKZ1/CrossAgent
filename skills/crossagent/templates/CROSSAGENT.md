@@ -34,32 +34,32 @@ the PC while you build or edit on the Mac. Don't split work that has to happen i
 and don't ship tiny jobs to the PC just to use it, each round trip costs a second or two.
 Use your judgment.
 
-## Live sync
+## Crossover Portal
 
-When work is split across both machines, the project is mirrored live with Mutagen
-(session `ca-<project>`, two-way-safe) at the same path under home on both machines, so a
-file written on one side shows up on the other in a second or two. `ca init` starts it.
-Single machine work (Mac only or PC only) doesn't sync.
+When work is split across both machines, the project is mirrored live through the
+Crossover Portal (Mutagen session `ca-<project>`, two-way-safe) at the same path under home
+on both machines, so a file written on one side shows up on the other in a second or two.
+`ca init` opens it. Single machine work (Mac only or PC only) opens no Portal.
 
 - Split work by file ownership. Two machines never edit the same file in the same task.
   Give each task its own files or folders and say so in the task prompt.
-- Run `ca sync flush` before handing a task to the other machine and before using its
+- Run `ca portal flush` before handing a task to the other machine and before using its
   results. `ca run` and `ca wait` already do this for you.
-- On a conflict, stop and report it to the user with `ca sync conflicts`. Never overwrite
+- On a conflict, stop and report it to the user with `ca portal conflicts`. Never overwrite
   or delete one side to make it go away unless the user picked which side wins.
 - Build output and dependencies are per machine (`node_modules`, `.build`, `build`, `target`,
-  `dist`, `.venv` and friends never sync). Each side installs and builds its own.
-- Secrets (`.env`, `.env.*`, `*.pem`, `*.key`, `id_*`) don't sync unless the project opts in
-  with `sync_allow=` in `.crossagent/project`.
-- Git only on the Mac. `.git` never syncs, the Mac is the source of truth for commits, and
-  nothing on the PC ever runs `git commit` or `git push` in a synced folder.
+  `dist`, `.venv` and friends never cross the Portal). Each side installs and builds its own.
+- Secrets (`.env`, `.env.*`, `*.pem`, `*.key`, `id_*`) don't cross the Portal unless the
+  project opts in with `sync_allow=` in `.crossagent/project`.
+- Git only on the Mac. `.git` never crosses the Portal, the Mac is the source of truth for
+  commits, and nothing on the PC ever runs `git commit` or `git push` in a Portal folder.
 
 ## Rules
 
-- The Mac is the source of truth for code. With live sync on, edits on either side cross
+- The Mac is the source of truth for code. With the Portal open, edits on either side cross
   over by themselves; review anything a PC worker changed on the Mac before committing.
-  Without sync (PC only mode), `ca run pc` pushes the project first and
-  `ca sync pull <paths>` brings files back.
+  Without a Portal (PC only mode), `ca run pc` pushes the project first and
+  `ca portal pull <paths>` brings files back.
 - Every task runs in a tmux session `ca-<project>-<host>-<task>` (project = folder name as a
   short slug), which the user can watch in the CrossAgent viewing station. Short task names,
   letters, digits, `-` and `_`, up to 40 chars.
@@ -82,9 +82,9 @@ Write the full path every time (no shell variables, it keeps the permission allo
 ~/.claude/skills/crossagent/scripts/ca logs pc tests 100
 ~/.claude/skills/crossagent/scripts/ca status
 ~/.claude/skills/crossagent/scripts/ca stop pc tests
-~/.claude/skills/crossagent/scripts/ca sync status                         # live sync state per project
-~/.claude/skills/crossagent/scripts/ca sync flush                          # sync now and wait, fails on conflicts
-~/.claude/skills/crossagent/scripts/ca sync conflicts                      # what clashed, both sides' info
-~/.claude/skills/crossagent/scripts/ca sync push                           # one-off copy when live sync is off
-~/.claude/skills/crossagent/scripts/ca sync pull path/to/file
+~/.claude/skills/crossagent/scripts/ca portal status                       # Portal state per project
+~/.claude/skills/crossagent/scripts/ca portal flush                        # sync now and wait, fails on conflicts
+~/.claude/skills/crossagent/scripts/ca portal conflicts                    # what clashed, both sides' info
+~/.claude/skills/crossagent/scripts/ca portal push                         # one-off copy when the Portal is closed
+~/.claude/skills/crossagent/scripts/ca portal pull path/to/file
 ```
