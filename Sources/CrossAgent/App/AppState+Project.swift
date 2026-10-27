@@ -79,7 +79,7 @@ extension AppState {
             panes: panes.map { SavedPane(hostId: $0.host.id, mode: $0.mode, session: $0.session) },
             mode: mode.rawValue,
             orchestrator: orch,
-            nodePositions: nodePositions,
+            nodePositions: savedNodePositions,
             finishedNodes: finishedNodes.isEmpty ? nil : finishedNodes,
             orchestratorOn: self.orch?.enabled,
             workerNodes: activeWorkerNodes.isEmpty ? nil : activeWorkerNodes)

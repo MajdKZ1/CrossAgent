@@ -31,6 +31,8 @@ final class ProjectOrchestrator: ObservableObject {
     @Published var demoGraph: AgentGraph?
     /// What the canvas and the cards show.
     var shown: AgentGraph { demoGraph ?? graph }
+    /// Where the demo's nodes were dragged. Thrown away with the demo.
+    var demoPositions: [String: CGPoint] = [:]
 
     var watchers: Set<AnyCancellable> = []
     var saveTask: Task<Void, Never>?
@@ -86,6 +88,7 @@ extension AppState {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.pruneRestoredWorkers()
+                self?.endGoneWorkers()
                 self?.checkNeedsInput()
             }
             .store(in: &o.watchers)
@@ -157,6 +160,46 @@ extension AppState {
             }
         }
         if dropped { scheduleOrchestratorSave() }
+    }
+
+    /// Workers whose tmux session went away (`ca stop`, a kill, a crash) are done.
+    /// Young nodes get a grace period, since a poll that started before their session
+    /// existed can land after their WorkerStart event.
+    private func endGoneWorkers() {
+        guard let o = orch, let monitor else { return }
+        let g = o.graph
+        let now = Date()
+        var ended: [String] = []
+        for n in g.nodes.values where n.kind == .worker && !o.unverifiedWorkers.contains(n.id) {
+            switch n.state {
+            case .done, .error: continue
+            default: break
+            }
+            guard let session = n.tmuxSession, monitor.reachable[n.hostId] == true,
+                  let live = monitor.sessions[n.hostId], now.timeIntervalSince(n.startedAt) > 20,
+                  !live.contains(where: { $0.name == session }) else { continue }
+            ended.append(n.id)
+        }
+        guard !ended.isEmpty else { return }
+        for id in ended {
+            g.nodes[id]?.state = .done
+            g.nodes[id]?.activity = "Session ended"
+            g.nodes[id]?.finishedAt = now
+            g.nodes[id]?.updatedAt = now
+            g.nodes[id]?.flow = .toOrchestrator
+            g.nodes[id]?.flowAt = now
+            g.finished.removeAll { $0 == id }
+            g.finished.append(id)
+        }
+        while g.finished.count > AgentGraph.keepFinished {
+            g.nodes[g.finished.removeFirst()] = nil
+        }
+    }
+
+    /// Positions worth saving: only nodes the real graph still has.
+    var savedNodePositions: [String: CGPoint] {
+        guard let g = orch?.graph else { return nodePositions }
+        return nodePositions.filter { g.nodes[$0.key] != nil }
     }
 
     // MARK: Needs input
@@ -334,10 +377,19 @@ extension AppState {
         }
     }
 
-    private func focusDetailTerminal() {
-        DispatchQueue.main.async { [weak self] in
-            guard let t = self?.detailTerminal?.terminal else { return }
-            t.window?.makeFirstResponder(t)
+    /// Gives the card's terminal the keyboard. The view may not be in the window yet,
+    /// and a relayout as the attach goes live can take focus away, so keep at it until
+    /// the terminal holds focus and is past connecting (about 4 s at most), while the
+    /// same card is open.
+    private func focusDetailTerminal(attempt: Int = 0) {
+        guard let o = orch, let id = o.detail, attempt < 80 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0 : 0.05)) { [weak self] in
+            guard let self, self.orch === o, o.detail == id, let pane = self.detailTerminal else { return }
+            let t = pane.terminal
+            if let win = t.window, win.firstResponder !== t { win.makeFirstResponder(t) }
+            if t.window?.firstResponder !== t || pane.state == .connecting {
+                self.focusDetailTerminal(attempt: attempt + 1)
+            }
         }
     }
 
@@ -458,6 +510,7 @@ extension AppState {
     func playDemo() {
         guard let o = orch, let project else { return }
         stopDemo()
+        o.demoPositions = [:]
         let real = o.graph.orchestrator
         let graph = AgentGraph(orchestratorHost: real?.hostId ?? "mac", session: real?.tmuxSession)
         o.demoGraph = graph

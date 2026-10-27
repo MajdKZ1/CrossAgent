@@ -106,8 +106,12 @@ final class Automation {
         case "nodePosition":
             // Same as dropping a dragged node: positions change, then a debounced save.
             if let id = cmd["id"] as? String, let x = cmd["x"] as? Double, let y = cmd["y"] as? Double {
-                app.nodePositions[id] = CGPoint(x: x, y: y)
-                app.scheduleOrchestratorSave()
+                if let o = app.orch, o.demoGraph != nil {
+                    o.demoPositions[id] = CGPoint(x: x, y: y)
+                } else {
+                    app.nodePositions[id] = CGPoint(x: x, y: y)
+                    app.scheduleOrchestratorSave()
+                }
             }
         case "clearFinished": app.clearFinishedAgents()
         case "state": write(stateJSON(), to: cmd["out"] as? String)

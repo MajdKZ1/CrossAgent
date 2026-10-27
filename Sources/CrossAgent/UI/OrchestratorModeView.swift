@@ -91,10 +91,13 @@ private struct OrchestratorCanvas: View {
     var pane: PaneSession
 
     var body: some View {
-        let positions = Binding(get: { app.nodePositions }, set: {
-            app.nodePositions = $0
-            app.scheduleOrchestratorSave()
-        })
+        // The demo drags into its own map, so none of it is saved.
+        let positions = orch.demoGraph != nil
+            ? Binding(get: { orch.demoPositions }, set: { orch.demoPositions = $0 })
+            : Binding(get: { app.nodePositions }, set: {
+                app.nodePositions = $0
+                app.scheduleOrchestratorSave()
+            })
         ZStack {
             OrchestratorView(graph: graph, hosts: app.hosts, positions: positions, actions: OrchestratorActions(
                 expand: { app.expandNode($0) },
