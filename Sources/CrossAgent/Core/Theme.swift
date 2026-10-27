@@ -8,7 +8,9 @@ enum Theme {
     static var foreground: NSColor { ThemeTokens.shared.resolved.foreground }
 
     static let font: NSFont = {
-        for name in ["JetBrainsMono-Regular", "JetBrains Mono", "SFMono-Regular", "Menlo-Regular"] {
+        // JetBrains Mono if installed, else SF Mono (the system monospaced font; "SFMono-Regular"
+        // isn't a name NSFont resolves), never Menlo unless both fail.
+        for name in ["JetBrainsMono-Regular", "JetBrains Mono"] {
             if let f = NSFont(name: name, size: 13) { return f }
         }
         return NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
@@ -38,6 +40,7 @@ enum Theme {
         // installColors already marks the whole buffer for a full repaint. Ask for the
         // frame too: drawn on the next tick while visible, or when the window shows
         // again if SwiftTerm paused rendering because it is covered.
+        TerminalAppearance.apply(to: view)
         view.requestRedraw()
         view.needsDisplay = true
         register(view)
