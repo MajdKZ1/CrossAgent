@@ -128,19 +128,28 @@ enum HookInstaller {
         await editRemote(host: host, relativePath: relativePath) { data in data.flatMap(remove(from:)) }
     }
 
+    /// Shell lines that read, write (from stdin) and delete a project's settings file on
+    /// a host. `relativePath` comes from the project (`pc_dir=` can say anything), so it
+    /// is always quoted and always under "$HOME": no word of it can start with a dash or
+    /// be read by the shell.
+    static func remoteScripts(relativePath: String) -> (read: String, write: String, delete: String) {
+        let rel = relativePath.drop { $0 == "/" }
+        let dir = CommandBuilder.shellPath(rel.isEmpty ? "$HOME" : "$HOME/" + rel) + "/.claude"
+        let file = dir + "/settings.local.json"
+        let tmp = file + ".ca-tmp"
+        return (read: "cat \(file) 2>/dev/null || true",
+                write: "mkdir -p \(dir) && rm -f \(tmp) && cat > \(tmp) && mv -f \(tmp) \(file)",
+                delete: "rm -f \(file)")
+    }
+
     private static func editRemote(host: Host, relativePath: String, _ edit: (Data?) -> Data?) async -> Bool {
-        let dir = CommandBuilder.shellQuote(relativePath.isEmpty ? "." : relativePath) + "/.claude"
-        let read = await EventShell.run(CommandBuilder.oneShot(host: host, script: "cd \"$HOME\" && cat \(dir)/settings.local.json 2>/dev/null || true"))
+        let scripts = remoteScripts(relativePath: relativePath)
+        let read = await EventShell.run(CommandBuilder.oneShot(host: host, script: scripts.read))
         guard read.status == 0 else { return false }
         let current = read.stdout.isEmpty ? nil : read.stdout
         let next = edit(current)
         if next == current { return true }
-        let script: String
-        if next == nil {
-            script = "cd \"$HOME\" && rm -f \(dir)/settings.local.json"
-        } else {
-            script = "cd \"$HOME\" && mkdir -p \(dir) && cat > \(dir)/settings.local.json.ca-tmp && mv \(dir)/settings.local.json.ca-tmp \(dir)/settings.local.json"
-        }
+        let script = next == nil ? scripts.delete : scripts.write
         return await EventShell.run(CommandBuilder.oneShot(host: host, script: script), input: next ?? Data()).status == 0
     }
 
@@ -157,25 +166,39 @@ enum HookInstaller {
     }
 
     /// Writes the hook script to ~/.crossagent/bin on the host. True on success.
+    /// The folder must be ours and not a symlink, and ends up 0700; the script is 0600
+    /// (Claude runs it through `python3 -I`) and never written through a symlink.
     @discardableResult
     static func installHookScript(on host: Host, script: Data? = nil) async -> Bool {
         guard let body = script ?? bundledScriptURL().flatMap({ try? Data(contentsOf: $0) }) else { return false }
         if host.isLocal {
-            let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(scriptRelativePath)
-            do {
-                let fm = FileManager.default
-                try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                if (try? Data(contentsOf: url)) == body { return true }
-                try body.write(to: url, options: .atomic)
-                try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-                return true
-            } catch {
-                return false
-            }
+            return installHookScript(body, home: FileManager.default.homeDirectoryForCurrentUser)
         }
-        let path = "~/" + scriptRelativePath
-        let script = "mkdir -p ~/.crossagent/bin && cat > \(path).tmp && chmod 755 \(path).tmp && mv \(path).tmp \(path)"
-        return await EventShell.run(CommandBuilder.oneShot(host: host, script: script), input: body).status == 0
+        return await EventShell.run(CommandBuilder.oneShot(host: host, script: remoteScriptInstall), input: body).status == 0
+    }
+
+    /// The ssh side of `installHookScript`: the script arrives on stdin.
+    static let remoteScriptInstall: String = {
+        let dir = #""$HOME"/.crossagent/bin"#
+        let file = dir + "/crossagent-hook.py"
+        return "umask 077 && mkdir -p \(dir) && [ -d \(dir) ] && [ ! -L \(dir) ] && [ -O \(dir) ] && chmod 700 \(dir)"
+            + " && rm -f \(file).tmp && cat > \(file).tmp && chmod 600 \(file).tmp"
+            + " && { [ ! -L \(file) ] || rm -f \(file); } && mv -f \(file).tmp \(file)"
+    }()
+
+    /// Local install under `home`, split out for tests.
+    static func installHookScript(_ body: Data, home: URL) -> Bool {
+        let url = home.appendingPathComponent(scriptRelativePath)
+        guard PrivateFiles.ensureDir(url.deletingLastPathComponent()) == nil else { return false }
+        if PrivateFiles.isTrusted(file: url.path), (try? Data(contentsOf: url)) == body {
+            return chmod(url.path, 0o600) == 0
+        }
+        do {
+            try PrivateFiles.write(body, to: url)
+            return true
+        } catch {
+            return false
+        }
     }
 }
 
