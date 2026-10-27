@@ -99,7 +99,7 @@ final class DemoStoryTests: XCTestCase {
         }
         XCTAssertFalse(text.contains(NSUserName()))
         XCTAssertFalse(text.contains(Host.current().localizedName ?? "\u{0}"))
-        XCTAssertFalse(text.contains("—"))
+        XCTAssertFalse(text.contains("\u{2014}"))
     }
 
     func testDemoSessionsList() {
