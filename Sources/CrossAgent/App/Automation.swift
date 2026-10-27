@@ -35,6 +35,7 @@ final class Automation {
             guard let i else { return app.focused }
             return app.panes.indices.contains(i) ? app.panes[i] : nil
         }
+        if handlePointer(name, cmd) { return }
         switch name {
         case "new" where cmd["check"] as? Bool == true:
             // Same path as the new pane popover, with the folder check on ssh hosts.
@@ -77,6 +78,38 @@ final class Automation {
             case "home": app.promptOpenInHome()
             default: app.cancelFolderPrompt()
             }
+        case "orchStart": app.launchOrchestrator(hostID: cmd["host"] as? String ?? app.lastHostID)
+        case "orchOff": app.turnOffOrchestrator()
+        case "expand": if let id = cmd["id"] as? String { app.expandNode(id) }
+        case "answer": if let id = cmd["id"] as? String { app.answerNode(id) }
+        case "closeDetail": app.closeNodeOverlays()
+        case "nodeSend":
+            // Same path as the detail card's input box.
+            if let id = cmd["id"] as? String, let text = cmd["text"] as? String { app.sendToNode(id, text: text) }
+        case "relayNodes":
+            // Opens the relay card like a cable drop, then sends it. Without text the
+            // source terminal's selection is used.
+            if let from = cmd["from"] as? String, let to = cmd["to"] as? String {
+                app.openNodeRelay(from: from, to: to)
+                if var r = app.orch?.relay {
+                    if let text = cmd["text"] as? String { r.text = text }
+                    if cmd["send"] as? Bool ?? true { app.sendNodeRelay(r) } else { app.orch?.relay = r }
+                }
+            }
+        case "inject":
+            if let list = cmd["events"] as? [Any],
+               let data = try? JSONSerialization.data(withJSONObject: list),
+               let events = try? JSONDecoder().decode([AgentEvent].self, from: data) {
+                app.injectEvents(events)
+            }
+        case "demo": app.playDemo()
+        case "nodePosition":
+            // Same as dropping a dragged node: positions change, then a debounced save.
+            if let id = cmd["id"] as? String, let x = cmd["x"] as? Double, let y = cmd["y"] as? Double {
+                app.nodePositions[id] = CGPoint(x: x, y: y)
+                app.scheduleOrchestratorSave()
+            }
+        case "clearFinished": app.clearFinishedAgents()
         case "state": write(stateJSON(), to: cmd["out"] as? String)
         case "snapshot":
             if let out = cmd["out"] as? String { snapshot(to: out) }
@@ -159,10 +192,39 @@ final class Automation {
             }
             folderPrompt = ["host": p.host.id, "phase": phase, "output": output]
         }
+        var orchestrator: Any = NSNull()
+        var graph: [[String: Any]] = []
+        if let o = app.orch {
+            let pane = app.orchestratorPane
+            orchestrator = ["running": pane?.isLive ?? false, "host": pane?.host.id ?? NSNull(),
+                            "session": pane?.session ?? NSNull(), "enabled": o.enabled, "busy": o.busy,
+                            "following": o.controller.isRunning,
+                            "workerPanes": o.workerPanes.mapValues { $0.isLive ? "live" : ($0.isExited ? "exited" : "connecting") },
+                            "relay": o.relay.map { ["from": $0.from, "to": $0.to, "text": $0.text] } ?? NSNull(),
+                            "answering": o.answering ?? NSNull(),
+                            "finished": o.graph.finished] as [String: Any]
+            graph = o.graph.nodes.values.sorted { $0.startedAt < $1.startedAt }.map { n in
+                var state: [String: Any] = [:]
+                switch n.state {
+                case .thinking: state = ["kind": "thinking"]
+                case .working: state = ["kind": "working"]
+                case .needsInput(let q): state = ["kind": "needsInput", "text": q]
+                case .waiting(let names): state = ["kind": "waiting", "names": names]
+                case .idle: state = ["kind": "idle"]
+                case .done: state = ["kind": "done"]
+                case .error(let e): state = ["kind": "error", "text": e]
+                }
+                return ["id": n.id, "name": n.name, "kind": n.kind.rawValue, "host": n.hostId, "state": state,
+                        "activity": n.activity, "flow": n.flow.rawValue, "session": n.tmuxSession ?? NSNull()]
+            }
+        }
         let project: Any = app.project.map { p in
             ["name": p.name, "path": p.path, "slug": p.slug, "pcRelativePath": p.pcRelativePath]
         } ?? NSNull()
         let obj: [String: Any] = ["project": project, "mode": app.mode.rawValue, "welcome": app.showsWelcome,
+                                  "orchestrator": orchestrator, "graph": graph, "detail": app.orch?.detail ?? NSNull(),
+                                  "detailScreen": app.detailTerminal?.screenText() ?? NSNull(),
+                                  "nodePositions": app.nodePositions.mapValues { [$0.x, $0.y] },
                                   "recents": app.recentProjects.map(\.path), "folderPrompt": folderPrompt,
                                   "projectSync": app.projectSyncActive,
                                   "panes": panes, "broadcast": app.broadcast,
@@ -205,6 +267,15 @@ final class Automation {
             pane.terminal.convert(pane.terminal.bounds, to: view).fill()
         }
         cached.draw(in: view.bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        // The detail card's terminal sits over the canvas, so draw it again on its own background.
+        if let t = app.detailTerminal?.terminal, t.window === view.window, let rep = t.bitmapImageRepForCachingDisplay(in: t.bounds) {
+            t.cacheDisplay(in: t.bounds, to: rep)
+            var rect = t.convert(t.bounds, to: view)
+            if view.isFlipped { rect.origin.y = view.bounds.height - rect.maxY }
+            Theme.pane.setFill()
+            rect.fill()
+            rep.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
         NSGraphicsContext.restoreGraphicsState()
         write(out.representation(using: .png, properties: [:]) ?? Data(), to: path)
     }
