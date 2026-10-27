@@ -38,15 +38,18 @@ final class OrchestratorController: ObservableObject {
 
     /// Installs the hook script on every host, our hooks in the project's settings on
     /// every host, then starts following. Returns the ids of hosts that failed.
+    /// `skipSettings` are ssh hosts that get the script but not the project hooks
+    /// (their project folder does not exist yet, and this must not create it).
     @discardableResult
-    func enable() async -> [String] {
+    func enable(skipSettings: Set<String> = []) async -> [String] {
         var failed: [String] = []
         await withTaskGroup(of: (String, Bool).self) { group in
             for h in hosts {
                 let rel = pcRelativePath
+                let skip = skipSettings.contains(h.id)
                 group.addTask {
                     var ok = await HookInstaller.installHookScript(on: h)
-                    if !h.isLocal, ok, !rel.isEmpty {
+                    if !h.isLocal, ok, !rel.isEmpty, !skip {
                         ok = await HookInstaller.installHooks(on: h, relativePath: rel)
                     }
                     return (h.id, ok)
