@@ -63,4 +63,13 @@ final class HostReloadTests: XCTestCase {
         XCTAssertEqual(c.projectPaths["box"], "x")
         XCTAssertEqual(graph.caRemoteTargets("ca remote box tester --brief b.md").map(\.host), ["box"])
     }
+
+    func testMascotOrbTakesAddedHostColour() {
+        let id = "orb-\(UUID().uuidString.prefix(8))"
+        let grey = MascotRig.accent(id)
+        MascotRig.setAccents([CrossAgent.Host(id: id, name: "Orb", type: .ssh, target: "orb", accent: "#c792ea")])
+        XCTAssertNotEqual(MascotRig.accent(id), grey)
+        XCTAssertEqual(MascotRig.accent(id), NSColor(hex: "#c792ea").cgColor)
+        XCTAssertNotNil(MascotRig.accent("mac"), "hosts already known keep their colour")
+    }
 }

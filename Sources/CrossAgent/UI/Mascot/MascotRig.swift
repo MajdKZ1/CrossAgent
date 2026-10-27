@@ -600,8 +600,9 @@ final class MascotRig {
 
     // MARK: Host colours
 
-    /// Orb colours from hosts.json, read once. Never writes the file.
-    static let accents: [String: String] = {
+    /// Orb colours from hosts.json, read at first use and replaced by `setAccents` when
+    /// the hosts change at runtime. Never writes the file.
+    private(set) static var accents: [String: String] = {
         var out = Dictionary(uniqueKeysWithValues: HostStore.defaults.map { ($0.id, $0.accent) })
         if let data = try? Data(contentsOf: HostStore.fileURL),
            let file = try? JSONDecoder().decode(HostsFile.self, from: data) {
@@ -609,6 +610,13 @@ final class MascotRig {
         }
         return out
     }()
+
+    /// Called by `ProjectWindows.reloadHosts`, so a machine added at runtime gets its orb colour.
+    static func setAccents(_ hosts: [Host]) {
+        var out = accents
+        for h in hosts { out[h.id] = h.accent }
+        accents = out
+    }
 
     static func accent(_ host: String) -> CGColor {
         // A theme can override host colours (Mono does); hosts.json otherwise.

@@ -49,6 +49,7 @@ final class ProjectWindows: NSObject, ObservableObject, NSWindowDelegate {
         monitor.setHosts(new)
         SessionDiscovery.shared.setHosts(new)
         ActivityMonitor.shared.setHosts(new)
+        MascotRig.setAccents(new)
         for s in states { s.setHosts(new) }
     }
 
