@@ -415,6 +415,14 @@ final class SessionFeed: ObservableObject {
         ticker = nil
     }
 
+    /// The graph node an item's subagent belongs to: its Agent call's id. Nil for the main thread.
+    func nodeId(forAgent agentId: String) -> String? { reducer.node(forAgent: agentId) }
+
+    /// Stops every open feed, for app termination.
+    static func shutdownAll() {
+        for case let f as SessionFeed in registry.objectEnumerator()?.allObjects ?? [] { f.shutdown() }
+    }
+
     /// Stops the source right away, for app termination and tests.
     func shutdown() {
         viewers = 0

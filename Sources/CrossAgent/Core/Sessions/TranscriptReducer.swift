@@ -65,6 +65,11 @@ final class TranscriptReducer {
     /// Busy subagents quiet for `AgentGraph.idleAfter` go idle. Same rule as hooks.
     func tick(now: Date) { graph.tick(now: now) }
 
+    /// The graph node an agent id's lines belong to, if any yet.
+    func node(forAgent agentId: String) -> String? {
+        nodeForAgent[agentId].flatMap { graph.nodes[$0] != nil ? $0 : nil }
+    }
+
     // MARK: Orchestrator
 
     private func applyMainItem(_ item: TranscriptItem) {

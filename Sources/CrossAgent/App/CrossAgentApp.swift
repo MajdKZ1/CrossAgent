@@ -53,6 +53,7 @@ struct PaneCommands: Commands {
             item("Orchestrator") { app in if app.project != nil { app.toggleMode(.orchestrator) } }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             item("Activity") { $0.open(.activity) }
+            item("Sessions") { $0.open(.sessions) }
             Divider()
             item("Next Tab") { $0.selectAdjacentTab(1) }
                 .keyboardShortcut("]", modifiers: [.command, .shift])
@@ -160,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Synchronous, so no ssh sampler is left running on the PC after quit.
         ActivityMonitor.shared.shutdown()
         EventFollower.shutdownAll()
+        SessionFeed.shutdownAll()
         ProjectWindows.shared.saveAndCloseAll()
     }
 
