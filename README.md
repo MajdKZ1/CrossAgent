@@ -4,7 +4,7 @@
 
 One window, every workstation. CrossAgent is a native macOS app that puts Claude Code (or a plain shell) on your Mac and on your Linux box side by side, in one grid of terminal panes. Remote panes go over plain `ssh`, and every pane lives in tmux on its own host, so closing the window never kills your work. Open it again and everything reattaches.
 
-Everything starts from a project folder. Everything lives in one window with tabs: **Panes** for your terminals, **Station** to see every session on both machines at once, **Orchestrator**, a live graph of Claude agents working on the project with a little blob named Puff keeping an eye on them, **Activity** for both machines' CPU, memory and temperatures, and a tab for any agent you open. A Claude Code skill splits work across the two machines for you, and live sync keeps the project the same on both.
+Everything starts from a project folder. Everything lives in one window with tabs: **Panes** for your terminals, **Station** to see every session on both machines at once, **Orchestrator**, a live graph of Claude agents working on the project with a little blob named Puff keeping an eye on them, **Activity** for both machines' CPU, memory and temperatures, and a tab for any agent you open. A Claude Code skill splits work across the two machines for you, and the Crossover Portal keeps the project the same on both.
 
 <p align="center"><img src="docs/images/orchestrator.png" width="760" alt="Orchestrator mode: the orchestrator in the middle, agents on the Mac and the PC around it"></p>
 
@@ -40,8 +40,8 @@ CrossAgent opens on a welcome screen: hit **Open a project folder**, pick from y
 
 Once a project is open:
 
-- The top bar shows the project and its folder (click to reveal it in Finder). With sync on, it also shows where the project lives on the PC.
-- New panes start in the project folder on both machines: the Mac path locally, the synced path on the PC. If the folder isn't on the PC yet, CrossAgent offers to start sync or to open in your PC home folder instead.
+- The top bar shows the project and its folder (click to reveal it in Finder). With the Portal open, it also shows where the project lives on the PC.
+- New panes start in the project folder on both machines: the Mac path locally, the mirrored path on the PC. If the folder isn't on the PC yet, CrossAgent offers to open the Portal or to open in your PC home folder instead.
 - Each project has its own tabs, panes, orchestrator and node positions, saved and restored on relaunch. Several projects can be open at once: the switcher (or `Cmd+O`) moves between them, switching back is instant with scrollback intact, and opening a project that's already open just switches to it.
 
 ## Tabs
@@ -127,7 +127,7 @@ Point at it and it watches the pointer. Poke it and it squishes, spins, wobbles 
 
 ## Activity
 
-The Activity tab shows both machines side by side, and a compact readout in the tab strip (`Mac 9% 43°  PC 3% 42°`) opens it:
+The Activity tab shows both machines side by side, and a compact Super-Max readout in the top bar (`16c/24t 23% · 30/64 GB`, both machines added up as one computer) opens it:
 
 - CPU in total and per core cluster (performance and efficiency on the Mac, every core on the PC), memory used with pressure, swap, and temperatures (the SoC, SSD and battery on the Mac, Tctl, the NVMe and the GPU on the PC), each with a sparkline of the last few minutes.
 - The `ca-*` sessions using the most CPU on each machine. Click one to open it.
@@ -204,7 +204,7 @@ Then inside any project, ask Claude Code to use it ("use crossagent to run the t
 
 - drop a `CROSSAGENT.md` in the project and point the project's `CLAUDE.md` at it. That file holds the split rules: heavy builds, test suites, long runs, Linux and docker work go to the PC, while UI, Xcode, macOS stuff and quick edits stay on the Mac. Independent pieces run on both at once.
 - map your machines into `~/.config/crossagent/system-map.md` (OS, CPU, RAM, disk, tools, paths, how to reach each, where the project lives on each), keep it in sync on both machines, and put a copy in `.crossagent/` (gitignored) in the project.
-- keep the project synced to the PC (live with Mutagen, see Sync below) and run each piece in a tmux session named `ca-<project>-<host>-<task>`. They show up in the station on their own, and as worker nodes in Orchestrator mode.
+- keep the project mirrored to the PC (live with Mutagen, see Crossover Portal below) and run each piece in a tmux session named `ca-<project>-<host>-<task>`. They show up in the station on their own, and as worker nodes in Orchestrator mode.
 
 By default it splits across both machines. Name a machine to keep it on one:
 
@@ -224,10 +224,10 @@ Under the hood it's one script you can use yourself:
 
 `ca help` lists the rest.
 
-## Sync
+## Crossover Portal
 
-When the skill splits work across both machines, it mirrors the project live with
-[Mutagen](https://mutagen.io) over your existing `ssh pc`. Same path on both sides
+When the skill splits work across both machines, it opens a Crossover Portal: the project
+mirrored live with [Mutagen](https://mutagen.io) over your existing `ssh pc`. Same path on both sides
 (`~/Projects/app` on the Mac is `~/Projects/app` on the PC), two-way, so a file one machine
 writes shows up on the other a second or two later (over a slow tunnel, more like 1 to 2 s).
 
@@ -240,8 +240,8 @@ mutagen daemon register     # start the daemon at login
 
 The safety rules:
 
-- Git stays on the Mac. `.git` never syncs and the PC never commits or pushes in a synced folder.
-- Secrets stay put: `.env`, `.env.*`, `*.pem`, `*.key` and `id_*` don't sync unless a project opts in
+- Git stays on the Mac. `.git` never crosses and the PC never commits or pushes in a mirrored folder.
+- Secrets stay put: `.env`, `.env.*`, `*.pem`, `*.key` and `id_*` don't cross unless a project opts in
   with `sync_allow=.env.shared` in its `.crossagent/project`.
 - Build output and dependencies (`node_modules`, `.build`, `build`, `target`, `dist`, `.venv` and
   friends) are per machine. Each side builds its own.
@@ -249,16 +249,21 @@ The safety rules:
   the same file, nothing gets overwritten. `ca` stops handing off work and tells you.
 
 ```sh
-ca sync start [path]    # start (or resume) live sync for a project, safe to run twice
-ca sync status          # one line per project: watching, syncing, conflicts or errors
-ca sync flush           # sync right now and wait (ca run and ca wait do this for you)
-ca sync conflicts       # what clashed, with size, time and a short diff from both sides
-ca sync stop [path]     # stop syncing, files stay on both machines
+ca portal start [path]      # open (or resume) the Portal for a project, safe to run twice
+ca portal status            # one line per open Portal: in sync, crossing, conflicts or errors
+ca portal flush             # cross right now and wait (ca run and ca wait do this for you)
+ca portal conflicts         # what clashed, with size, time and a short diff from both sides
+ca portal stop [path]       # close the Portal, files stay on both machines
+ca portal push [--delete]   # one-off copy Mac to PC, for when the Portal is closed
+ca portal pull [paths...]   # copy paths back from the PC
 ```
 
-`ca init` starts sync for you unless you named one machine ("on my mac", "on my pc"). The top
-bar shows a small Sync dot while any `ca-*` session is running: green is in sync, amber is
-syncing or paused, red is a conflict or error. Click it for the details.
+`ca sync` is the old name and still works, same commands.
+
+`ca init` opens the Portal for you unless you named one machine ("on my mac", "on my pc"). The
+top bar shows it as a ring linking the Mac and the PC: steady when in sync, pulsing softly while
+files cross, amber while it scans, connects or is paused, red on a conflict or error, and dim when
+the project has no Portal. Click it for the details and any other open Portals.
 
 ## How it works
 
