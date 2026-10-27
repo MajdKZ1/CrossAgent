@@ -1,40 +1,6 @@
 import AppKit
 import SwiftTerm
 
-/// A LocalProcessTerminalView that can hand user input to someone else (broadcast).
-final class PaneTerminalView: LocalProcessTerminalView {
-    /// When set, user keystrokes go here instead of straight to the process.
-    var inputInterceptor: ((ArraySlice<UInt8>) -> Void)?
-
-    /// Keys typed before the other side is ready, sent in order once it is. tmux attaching
-    /// over ssh can eat input that arrives while it sets up the terminal.
-    private var held: [UInt8]?
-
-    func holdInput() { held = held ?? [] }
-
-    func releaseInput() {
-        guard let bytes = held else { return }
-        held = nil
-        if !bytes.isEmpty, process?.running == true { process.send(data: ArraySlice(bytes)) }
-    }
-
-    override func send(source: TerminalView, data: ArraySlice<UInt8>) {
-        if let inputInterceptor {
-            inputInterceptor(data)
-        } else if held != nil {
-            held?.append(contentsOf: data)
-        } else {
-            super.send(source: source, data: data)
-        }
-    }
-
-    /// Writes bytes straight to the process, skipping the interceptor.
-    func write(_ data: ArraySlice<UInt8>) {
-        guard process?.running == true else { return }
-        process.send(data: data)
-    }
-}
-
 /// One pane: a host, a mode, a tmux session, and the live terminal view.
 @MainActor
 final class PaneSession: ObservableObject, Identifiable {
@@ -70,9 +36,12 @@ final class PaneSession: ObservableObject, Identifiable {
         self.attachOnly = attachOnly
         terminal = PaneTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
         Theme.apply(to: terminal)
+        TerminalAppearance.apply(to: terminal)
+        terminal.configure()
         let box = Delegate(owner: self)
         delegateBox = box
         terminal.processDelegate = box
+        terminal.onClear = { [weak self] in self?.clearScrollback() }
     }
 
     var isLive: Bool { !isExited }
@@ -112,6 +81,20 @@ final class PaneSession: ObservableObject, Identifiable {
     func killSession() async {
         _ = await Runner.run(CommandBuilder.killCommand(host: host, session: session))
         close()
+    }
+
+    /// Cmd+K, like Terminal.app: drops the scrollback and clears the screen. Ctrl+L makes
+    /// the app inside (shell or Claude Code) clear and redraw, so tmux's screen stays in
+    /// sync, then tmux's own history goes too once the app has cleared.
+    func clearScrollback() {
+        terminal.leaveTmuxScrollback()
+        terminal.clearScrollback()
+        terminal.write([0x0c])
+        let cmd = CommandBuilder.oneShot(host: host, script: "tmux clear-history -t '=\(session):' 2>/dev/null")
+        Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            _ = await Runner.run(cmd)
+        }
     }
 
     func send(text: String) { terminal.write(ArraySlice(Array(text.utf8))) }

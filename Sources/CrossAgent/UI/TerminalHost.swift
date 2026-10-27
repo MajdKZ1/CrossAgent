@@ -9,7 +9,7 @@ struct TerminalHost: NSViewRepresentable {
     var hidden = false
 
     func makeNSView(context: Context) -> NSView {
-        let container = NSView()
+        let container = Container()
         container.wantsLayer = true
         attach(to: container)
         container.isHidden = hidden
@@ -31,6 +31,17 @@ struct TerminalHost: NSViewRepresentable {
             terminal.topAnchor.constraint(equalTo: container.topAnchor),
             terminal.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
+    }
+
+    /// Gives the terminal its shortcuts (Cmd+C, V, A, K, F, G) before the menus see them.
+    /// SwiftTerm's own performKeyEquivalent is not open, so its parent does it.
+    final class Container: NSView {
+        override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            if let t = subviews.first as? PaneTerminalView, !isHiddenOrHasHiddenAncestor, t.handleKeyEquivalent(event) {
+                return true
+            }
+            return super.performKeyEquivalent(with: event)
+        }
     }
 }
 
