@@ -11,6 +11,8 @@ final class EventFollower: @unchecked Sendable {
 
     // Everything below is only touched on `queue`.
     private var process: Process?
+    /// Read end of the current process's stdout, so stop can detach it right away.
+    private var reader: FileHandle?
     private var buffer = Data()
     private var running = false
     private var attempt = 0
@@ -20,6 +22,7 @@ final class EventFollower: @unchecked Sendable {
     private var seen = EventDedupe()
     private var watchdog: DispatchSourceTimer?
     private var initialReplay: TimeInterval
+    private let makeCommand: (Double?) -> SpawnCommand
 
     static let backoff: [TimeInterval] = [2, 5, 15, 30]
     static let replayOnRestart: TimeInterval = 60
@@ -28,10 +31,23 @@ final class EventFollower: @unchecked Sendable {
 
     /// `replay` seconds of history are sent on the first start, so a freshly opened
     /// window shows what is already going on.
-    init(host: Host, replay: TimeInterval = 120, onEvents: @escaping @MainActor ([AgentEvent]) -> Void) {
+    /// `command` replaces the real follower command, for tests.
+    init(host: Host, replay: TimeInterval = 120, command: ((Double?) -> SpawnCommand)? = nil,
+         onEvents: @escaping @MainActor ([AgentEvent]) -> Void) {
         self.host = host
+        self.makeCommand = command ?? { EventFollower.command(host: host, since: $0) }
         self.initialReplay = replay
         self.onEvents = onEvents
+        Self.liveLock.withLock { Self.live.add(self) }
+    }
+
+    /// Every follower ever made, held weakly, so quitting can stop them all at once.
+    private static let liveLock = NSLock()
+    nonisolated(unsafe) private static let live = NSHashTable<EventFollower>.weakObjects()
+
+    /// Stops every follower synchronously, so no ssh follower outlives the app.
+    static func shutdownAll() {
+        for f in liveLock.withLock({ live.allObjects }) { f.shutdown() }
     }
 
     func start() {
@@ -45,13 +61,21 @@ final class EventFollower: @unchecked Sendable {
     }
 
     func stop() {
-        queue.async { [self] in
-            running = false
-            watchdog?.cancel()
-            watchdog = nil
-            if let p = process, p.isRunning { p.terminate() }
-            process = nil
+        queue.async { [self] in halt() }
+    }
+
+    /// For app termination: stops now and waits up to `timeout` for the process to exit,
+    /// then kills it, so no follower is left running with ppid 1.
+    func shutdown(timeout: TimeInterval = 0.5) {
+        let p = queue.sync { () -> Process? in
+            let p = process
+            halt()
+            return p
         }
+        guard let p, p.isRunning else { return }
+        let deadline = Date().addingTimeInterval(timeout)
+        while p.isRunning, Date() < deadline { usleep(10_000) }
+        if p.isRunning { kill(p.processIdentifier, SIGKILL) }
     }
 
     /// The command that runs the follower on the host.
@@ -63,10 +87,20 @@ final class EventFollower: @unchecked Sendable {
 
     // MARK: Internals (on queue)
 
+    private func halt() {
+        running = false
+        watchdog?.cancel()
+        watchdog = nil
+        reader?.readabilityHandler = nil
+        reader = nil
+        if let p = process, p.isRunning { p.terminate() }
+        process = nil
+    }
+
     private func launch() {
         let since = lastSeenTS.map { $0 - Self.replayOnRestart }
             ?? (initialReplay > 0 ? Date().timeIntervalSince1970 - initialReplay : nil)
-        let cmd = Self.command(host: host, since: since)
+        let cmd = makeCommand(since)
         let p = Process()
         p.executableURL = URL(fileURLWithPath: cmd.executable)
         p.arguments = cmd.args
@@ -75,21 +109,25 @@ final class EventFollower: @unchecked Sendable {
         let out = Pipe()
         p.standardOutput = out
         buffer.removeAll()
+        // The handler detaches itself at EOF before anything else: a handler left on a
+        // pipe at EOF fires nonstop and burns a core.
         out.fileHandleForReading.readabilityHandler = { [weak self] fh in
             let data = fh.availableData
+            if data.isEmpty { fh.readabilityHandler = nil; return }
             guard let self else { return }
             self.queue.async {
                 guard self.process === p else { return }
-                if data.isEmpty { fh.readabilityHandler = nil; return }
                 self.consume(data)
             }
         }
+        reader = out.fileHandleForReading
         p.terminationHandler = { [weak self] proc in
+            out.fileHandleForReading.readabilityHandler = nil
             guard let self else { return }
             self.queue.async {
                 guard self.process === proc else { return }
                 self.process = nil
-                out.fileHandleForReading.readabilityHandler = nil
+                self.reader = nil
                 self.scheduleRestart()
             }
         }
@@ -100,6 +138,8 @@ final class EventFollower: @unchecked Sendable {
             try p.run()
         } catch {
             process = nil
+            reader?.readabilityHandler = nil
+            reader = nil
             scheduleRestart()
         }
     }
