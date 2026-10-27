@@ -123,6 +123,8 @@ struct TranscriptItem: Identifiable, Equatable {
     /// toolUse: its id. toolResult: the id of the call it answers. Task notifications: the
     /// Agent call they report on.
     var toolUseId: String? = nil
+    /// Bash toolUse: the full command (`text` only shows its first line).
+    var command: String? = nil
     /// What the line says about a subagent, for the graph. Nil on most items.
     var signal: AgentSignal? = nil
 }

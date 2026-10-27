@@ -149,6 +149,7 @@ struct TranscriptParser {
                 var it = item(id, .toolUse, ToolSummary.make(name, input), at)
                 it.tool = name
                 it.toolUseId = tuid
+                if name == "Bash" { it.command = input["command"] as? String }
                 if name == "Agent" || name == "Task" {
                     let who = [input["name"], input["description"], input["subagent_type"]]
                         .compactMap { ($0 as? String).flatMap { $0.isEmpty ? nil : $0 } }.first ?? "agent"

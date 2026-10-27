@@ -17,6 +17,8 @@ final class TranscriptReducer {
     private var waitingFor: String?
     /// The orchestrator's state as the transcript alone says.
     private var transcriptState: AgentState = .idle
+    /// The project slug, when known, so a `ca remote` link can name its tmux session early.
+    var slug: String?
 
     init(graph: AgentGraph) {
         self.graph = graph
@@ -89,6 +91,7 @@ final class TranscriptReducer {
                 Self.push(item.text, into: &$0.recent)
             }
             if item.tool == "SendMessage" { flowToNamed(item, t) }
+            linkRemote(item, to: o)
         case .toolResult:
             transcriptState = .working
             update(o, at: t) { _ in }
@@ -199,6 +202,7 @@ final class TranscriptReducer {
                 Self.push(item.text, into: &$0.recent)
             }
             if item.tool == "SendMessage" || item.tool == "SubagentHandback" { flow(id, .toOrchestrator, t) }
+            linkRemote(item, to: id)
         case .toolResult:
             update(id, at: t) { $0.state = item.isError ? $0.state : .working }
         case .assistant:
@@ -213,6 +217,15 @@ final class TranscriptReducer {
             update(id, at: t) { n in if n.prompt == nil { n.prompt = String(item.text.prefix(600)) } }
         case .system:
             break
+        }
+    }
+
+    /// A Bash call running `ca remote` makes its node the worker's node.
+    private func linkRemote(_ item: TranscriptItem, to id: String) {
+        guard item.tool == "Bash" else { return }
+        let command = item.command ?? (item.text.hasPrefix("Running ") ? String(item.text.dropFirst(8)) : item.text)
+        for r in AgentGraph.caRemoteTargets(command) {
+            graph.linkRemote(nodeID: id, host: r.host, role: r.role, slug: slug, at: item.at)
         }
     }
 
@@ -243,6 +256,10 @@ final class TranscriptReducer {
                 n.finishedAt = early.finishedAt
             }
             if n.prompt == nil { n.prompt = early.prompt }
+            if n.remote == nil, let r = early.remote {
+                n.remote = r
+                n.hostId = early.hostId
+            }
             graph.nodes[toolUseId] = n
         } else {
             var n = early
@@ -251,6 +268,7 @@ final class TranscriptReducer {
         }
         graph.nodes[agentId] = nil
         if let i = graph.finished.firstIndex(of: agentId) { graph.finished[i] = toolUseId }
+        graph.remoteNodeRenamed(from: agentId, to: toolUseId)
     }
 
     private func node(named name: String) -> String? {
@@ -295,6 +313,7 @@ final class TranscriptReducer {
             let old = graph.finished.removeFirst()
             graph.nodes[old] = nil
         }
+        graph.remoteNodeFinished(id)
     }
 
     /// A finished teammate that acts again is live again.
@@ -319,6 +338,7 @@ final class TranscriptReducer {
     private func update(_ id: String, at t: Date?, _ change: (inout AgentNode) -> Void) {
         guard var n = graph.nodes[id] else { return }
         change(&n)
+        AgentGraph.holdRemotePermission(&n)
         n.activity = AgentGraph.oneLine(n.activity)
         switch n.state {
         case .needsInput(let s): n.state = .needsInput(AgentGraph.oneLine(s))

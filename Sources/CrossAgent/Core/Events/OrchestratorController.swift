@@ -84,9 +84,11 @@ final class OrchestratorController: ObservableObject {
         isRunning = true
         let slug = slug
         let paths = projectPaths
+        RemoteEventLog.register(project: slug, projectPaths: paths)
         followers = hosts.map { h in
             EventFollower(host: h) { [weak graph] events in
                 graph?.apply(events, project: slug, projectPaths: paths)
+                RemoteEventLog.add(events, project: slug)
             }
         }
         for f in followers { f.start() }

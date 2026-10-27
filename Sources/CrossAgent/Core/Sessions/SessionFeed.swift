@@ -363,6 +363,9 @@ final class SessionFeed: ObservableObject {
     private let makeSource: (SessionFeed) -> FeedSource
     private var viewers = 0
     private var ticker: Timer?
+    /// Where the session runs, to find its project's remote workers. Discovery's when nil.
+    private var cwd: String?
+    private var remoteSeq = 0
 
     static let maxItems = 3000
 
@@ -375,17 +378,20 @@ final class SessionFeed: ObservableObject {
         let discovery = SessionDiscovery.shared
         let h = discovery.host(host) ?? Host(id: host, name: host, type: host == "mac" ? .local : .ssh, target: host, accent: "")
         let known = discovery.session(host: host, sessionId: sessionId)
-        let f = SessionFeed(host: h, sessionId: sessionId, tmuxSession: known?.tmuxSession, status: known?.status ?? .idle)
+        let f = SessionFeed(host: h, sessionId: sessionId, tmuxSession: known?.tmuxSession, status: known?.status ?? .idle,
+                            cwd: known?.cwd)
         registry.setObject(f, forKey: key)
+        f.pullRemoteEvents()
         return f
     }
 
     /// `localRoot` is ~/.claude for a local host. `source` replaces the real one, for tests.
     init(host: Host, sessionId: String, tmuxSession: String? = nil, status: ClaudeSessionStatus = .idle,
-         localRoot: String? = nil, source: ((SessionFeed) -> FeedSource)? = nil) {
+         cwd: String? = nil, localRoot: String? = nil, source: ((SessionFeed) -> FeedSource)? = nil) {
         self.hostId = host.id
         self.sessionId = sessionId
         self.status = status
+        self.cwd = cwd.flatMap { $0.isEmpty ? nil : $0 }
         self.graph = AgentGraph(orchestratorHost: host.id, session: tmuxSession)
         self.reducer = TranscriptReducer(graph: graph)
         let root = localRoot ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").path
@@ -418,6 +424,22 @@ final class SessionFeed: ObservableObject {
     /// The graph node an item's subagent belongs to: its Agent call's id. Nil for the main thread.
     func nodeId(forAgent agentId: String) -> String? { reducer.node(forAgent: agentId) }
 
+    /// Applies the remote worker events of the session's project not applied yet.
+    func pullRemoteEvents() {
+        if cwd == nil { cwd = SessionDiscovery.shared.session(host: hostId, sessionId: sessionId).flatMap { $0.cwd.isEmpty ? nil : $0.cwd } }
+        guard let cwd, let project = RemoteEventLog.project(host: hostId, cwd: cwd) else { return }
+        reducer.slug = project
+        for entry in RemoteEventLog.entries(project: project, after: remoteSeq) {
+            graph.applyRemote(entry.event, at: Date(timeIntervalSince1970: entry.event.ts))
+            remoteSeq = entry.seq
+        }
+    }
+
+    /// Every open feed catches up on remote worker events.
+    static func pullRemoteEvents() {
+        for case let f as SessionFeed in registry.objectEnumerator()?.allObjects ?? [] { f.pullRemoteEvents() }
+    }
+
     /// Stops every open feed, for app termination.
     static func shutdownAll() {
         for case let f as SessionFeed in registry.objectEnumerator()?.allObjects ?? [] { f.shutdown() }
@@ -442,6 +464,7 @@ final class SessionFeed: ObservableObject {
             if all.count > Self.maxItems { all.removeFirst(all.count - Self.maxItems) }
             items = all
             reducer.apply(b.items)
+            pullRemoteEvents()
         }
         for (aid, meta, t) in b.metas { reducer.apply(meta: meta, agentId: aid, at: t) }
         if let s = b.session {
