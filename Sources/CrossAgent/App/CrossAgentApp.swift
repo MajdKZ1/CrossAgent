@@ -10,21 +10,15 @@ struct CrossAgentApp: App {
         Window("CrossAgent", id: "main") {
             ContentView()
                 .environmentObject(appDelegate.app)
+                .themed()
                 .frame(minWidth: 640, minHeight: 400)
         }
         .windowStyle(.hiddenTitleBar)
-        .commands { PaneCommands(app: appDelegate.app) }
-        Settings { SettingsSlot() }
-    }
-}
-
-/// Placeholder for the Settings window's content.
-struct SettingsSlot: View {
-    var body: some View {
-        Text("Nothing to set yet")
-            .font(.system(size: 12))
-            .foregroundStyle(Palette.muted)
-            .frame(width: 360, height: 160)
+        .commands {
+            PaneCommands(app: appDelegate.app)
+            CommandGroup(after: .toolbar) { Menu("Theme") { ThemeMenuItems() } }
+        }
+        Settings { ThemeSettingsView() }
     }
 }
 
