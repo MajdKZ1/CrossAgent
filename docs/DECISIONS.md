@@ -160,3 +160,7 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   - Teammate style subagents can be marked done at SubagentStop while Claude still lists them as idle teammates. That's left as Claude reports it.
   - The hover handle for relay drags can't be triggered with synthetic events, since hover follows the real cursor. It shares its code with Option-drag, which is tested.
   - Pulses, zzz and Patch run on Core Animation, so offscreen snapshots don't show them. Their models and keyframes are unit tested instead.
+
+## Tabs, native panes, activity, themes and the new mascot (M12 to M18)
+- Contracts went in first again. `App/Tabs.swift` holds `TabKind`, plus `AgentRef` (a graph node or any tmux session) and `openAgent`. `Core/ThemeModel.swift` holds the theme tokens (ui, terminal, mascot) and a theme changed notification. That let the tab strip, native panes, the activity monitor, the theme system and the mascot be built at the same time, each in its own files.
+- Everything keeps reading colours through `Palette` and `Theme`, and the theme work turns those into computed values backed by the current theme, so most call sites don't change. Layer based views (canvas, mascot) recolour on the notification.
