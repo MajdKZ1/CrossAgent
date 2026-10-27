@@ -357,7 +357,7 @@ CrossAgent runs no server, opens no ports and sends nothing anywhere. Everything
 ## How it works
 
 - SwiftUI and AppKit app, one window per project. Terminals are [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) `LocalProcessTerminalView`s, each running a real PTY.
-- Local panes run `$SHELL -lc '<script>'`. Remote panes run `/usr/bin/ssh -tt <target> 'exec $SHELL -lc <script>'`, so your ssh config, keys and agent just work.
+- Local panes run `$SHELL -lc '<script>'`. Remote panes run `/usr/bin/ssh -tt -- <target> 'exec $SHELL -lc <script>'`, so your ssh config, keys and agent just work.
 - The script is `tmux new -A -s <session> claude` (or a shell), falling back to plain `claude` if tmux is missing.
 - ssh connections share one master per host (`ControlMaster`), so new panes skip the handshake.
 - The station polls each host with one `tmux list-panes` plus `capture-pane` round trip, about every 1.5 s while it's open and every 10 s otherwise.
