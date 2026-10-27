@@ -239,14 +239,15 @@ They all work while a terminal has focus.
 `skills/crossagent` is a Claude Code skill that spreads work across both machines. Install it on both:
 
 ```sh
-skills/crossagent/install.sh          # copies to ~/.claude/skills/crossagent on the Mac and on the PC
-skills/crossagent/install.sh --mac    # or just one side (--pc)
+skills/crossagent/install.sh               # this Mac and every ssh host in hosts.json
+skills/crossagent/install.sh --local       # just this Mac
+skills/crossagent/install.sh --host pc     # just one host (repeat for more)
 ```
 
 Then inside any project, ask Claude Code to use it ("use crossagent to run the tests on my pc and build locally", or just "/crossagent"). `ca init` sets the project up without starting anything:
 
 - drops a `CROSSAGENT.md` in the project and points the project's `CLAUDE.md` at it. That's the playbook for the orchestrator (below).
-- puts the `pc-worker` and `mac-worker` subagent definitions in `~/.claude/agents/` and keeps agent teams in-process for the project.
+- generates a `<host>-worker` subagent per ssh host in `~/.claude/agents/` (`pc-worker` here) and keeps agent teams in-process for the project.
 - maps your machines into `~/.config/crossagent/system-map.md` (OS, CPU, RAM, disk, tools, paths, how to reach each) on both machines, with a copy in `.crossagent/` (gitignored).
 - opens the Crossover Portal so the project is mirrored to the PC (see below).
 
@@ -278,11 +279,11 @@ Under the hood it's one script you can use yourself:
 ~/.claude/skills/crossagent/scripts/ca status
 ```
 
-`ca help` lists the rest. The PC can't reach the Mac, so an orchestrator running on the PC works PC only (`mac-worker` exists for the day it can).
+`ca hosts` lists your machines, and `ca hosts add <id> <ssh-target> [name]` adds one (it checks ssh works first). `ca help` lists the rest. Remote hosts usually can't reach back to the Mac, so an orchestrator running on a remote host works there only (each remote gets a `<mac id>-worker` for the day it can).
 
 ## The claude wrapper
 
-Optional, and the easiest way to use one Claude Code session from several places at once. Install it with `skills/crossagent/install.sh --wrapper` (both machines; `--mac` or `--pc` for one) and remove it with `--remove-wrapper`. It adds one marked block to `~/.zshrc` and `~/.bashrc` that loads a small `claude` shell function.
+Optional, and the easiest way to use one Claude Code session from several places at once. Install it with `skills/crossagent/install.sh --wrapper` (every machine; `--local` or `--host <id>` for one) and remove it with `--remove-wrapper`. It adds one marked block to `~/.zshrc` and `~/.bashrc` that loads a small `claude` shell function.
 
 From then on, `claude` typed in Ghostty, Terminal or a plain ssh login starts Claude inside a tmux session named `ca-<project>-<host>-<n>` and attaches to it. You don't see tmux: no status bar, mouse wheel scrolls back through history, true colour, copy goes to your clipboard (OSC 52), and no prefix key gets in the way of your typing. Close the window and the session keeps running. CrossAgent sees it as a normal session and opens it fully interactive, so you can type from your terminal and from CrossAgent at the same time (it's one Claude process with two screens). The tab says "Also open in Ghostty" so you know.
 
