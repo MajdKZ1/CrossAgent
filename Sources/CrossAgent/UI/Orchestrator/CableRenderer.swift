@@ -50,7 +50,8 @@ enum CableGeometry {
 /// animations on the render server, so a lit cable costs the app nothing per frame.
 @MainActor
 final class CableLayers {
-    static let base = NSColor.white.withAlphaComponent(0.13).cgColor
+    /// Resting cable colour: the theme's border tone, a bit stronger.
+    static var base: CGColor { ThemeTokens.shared.resolved.border.withAlphaComponent(0.13).cgColor }
     static let particleCount = 3
     /// Seconds per lap of a particle.
     static let lap: CFTimeInterval = 1.33
@@ -79,6 +80,11 @@ final class CableLayers {
         for d in dots { glow.addSublayer(d) }
         parent.addSublayer(line)
         parent.addSublayer(glow)
+    }
+
+    /// After a theme switch. Accents come back through `update`.
+    func recolor() {
+        line.strokeColor = Self.base
     }
 
     func remove() {

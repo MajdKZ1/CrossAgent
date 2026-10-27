@@ -59,6 +59,7 @@ final class CanvasStage: NSView, CardEvents {
     private var renderPending = false
     private var catchUpPending = false
     private var observer: NSObjectProtocol?
+    private var themeObserver: NSObjectProtocol?
 
     private var lastNodes: [String: AgentNode] = [:]
     private var lastFinished: [String] = []
@@ -92,6 +93,15 @@ final class CanvasStage: NSView, CardEvents {
         relayLine.lineDashPattern = [5, 4]
         overlayView.root.addSublayer(relayLine)
         scene.onWake = { [weak self] in self?.startFrames() }
+        // Cards redraw through Palette on their own; the cable layers need a nudge.
+        themeObserver = NotificationCenter.default.addObserver(forName: .crossAgentThemeChanged, object: nil,
+                                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                for cable in self.cables.values { cable.recolor() }
+                self.render(step: false)
+            }
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }

@@ -304,8 +304,11 @@ final class PulseOutlineView: NSView {
 
 /// Three z's drifting up over an idle node.
 struct SleepZ: NSViewRepresentable {
+    /// Read where SleepZ is built, so the parent body redraws it on a theme switch.
+    var color: Color = Palette.muted
+
     func makeNSView(context: Context) -> SleepZView { SleepZView() }
-    func updateNSView(_ v: SleepZView, context: Context) {}
+    func updateNSView(_ v: SleepZView, context: Context) { v.color = NSColor(color).cgColor }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: SleepZView, context: Context) -> CGSize? {
         proposal.replacingUnspecifiedDimensions()
@@ -314,11 +317,14 @@ struct SleepZ: NSViewRepresentable {
 
 final class SleepZView: NSView {
     private var letters: [CATextLayer] = []
+    var color: CGColor? {
+        didSet { if color != oldValue { for z in letters { z.foregroundColor = color } } }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        let color = NSColor(hex: "#8a909c").cgColor
+        let color = ThemeTokens.shared.resolved.muted.cgColor
         for i in 0..<3 {
             let z = CATextLayer()
             z.string = "z"
