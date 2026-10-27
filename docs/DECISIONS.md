@@ -239,3 +239,12 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   | magenta | #a089ad | 6.05 | #bba9c7 | 8.71 |
   | cyan | #7fa6a6 | 7.17 | #a2c2c2 | 10.00 |
   | white | #b4b4b4 | 9.18 | #dedede | 14.14 |
+- Mascot redesign: **Puff** replaces Patch. All the pixel art is gone.
+  - **Look:** a soft, chunky, light blue (#b3dcff) blob with no outline and two dark (#0b1218) leaning pill eyes, matched to the user's two reference images over about ten render rounds. The references stay out of the repo.
+  - **Shapes:** four body outlines (squircle, round, cloud, puffy), each with exactly 48 cubic points, so Core Animation morphs between them cleanly.
+  - **Moods:** at rest Puff is the reference squircle, and it's round only while asleep. Thinking is a full cloud with a thought bubble. Working and having agents use a lighter "puffy" cloud, so the busy look stays close to the reference.
+  - **Right eye:** the brief said smaller and higher, but in both references it sits slightly lower, so it follows the images.
+  - **Idle gestures:** one timer at a time, every 2.4 to 5.8 s, so nothing redraws between gestures. Hover follows the pointer through a tracking area on the view only, with no global monitors.
+  - **Clicks:** a trick never repeats twice in a row. Quick clicks (within 1.3 s) make each trick bigger, and from the third quick click two tricks chain.
+  - **Orbs:** clicking one opens that agent's tab. Orb colours follow the theme's host overrides.
+  - **Cost:** about 0.01% of one core per mood in a release build. All motion is Core Animation, so the app only wakes for the gesture timer.
