@@ -2,9 +2,11 @@
 
 # CrossAgent
 
-One window, every workstation. CrossAgent is a native macOS app that puts Claude Code (or a plain shell) on your Mac and on your Linux box side by side, in one grid of terminal panes. Remote panes go over plain `ssh`, and every pane lives in tmux on its own host, so closing the window never kills your work. Open it again and everything reattaches.
+One window, every workstation. CrossAgent is a native macOS app that puts Claude Code (or a plain shell) on your Mac and on your other machines (Linux boxes or other Macs) side by side, in one grid of terminal panes. Remote panes go over plain `ssh`, and every pane lives in tmux on its own host, so closing the window never kills your work. Open it again and everything reattaches.
 
 Everything starts from a project folder, and each project gets its own window with tabs: **Panes** for your terminals, **Station** to see every session on both machines at once, **Orchestrator**, a live graph of Claude agents working on the project with a little blob named Puff keeping an eye on them, **Sessions** for every Claude Code session on both machines (even ones you started in Ghostty or over plain ssh), **Activity** with both machines added up as one Super-Max Computer, and a tab for any agent you open. A Claude Code skill splits work across the two machines for you, and the Crossover Portal keeps the project the same on both.
+
+The examples below use one remote Linux box with the host id `pc`, so you'll read "the PC" a lot. Yours can be called anything, and you can have more than one.
 
 <p align="center"><img src="docs/images/orchestrator.png" width="760" alt="Orchestrator mode: the orchestrator in the middle, agents on the Mac and the PC around it"></p>
 
