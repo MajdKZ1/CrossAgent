@@ -16,6 +16,7 @@
 
 import json
 import os
+import stat
 import sys
 import time
 
@@ -75,17 +76,50 @@ def tool_summary(tool, inp):
     return "Using " + tool
 
 
+NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+
+# trusted, secure_dir and append follow crossagent-hook.py in the app, so ca, the workers
+# and the hook treat event files the same way.
+def trusted(st):
+    """Ours and nobody else can write it."""
+    return st.st_uid == os.getuid() and not st.st_mode & 0o022
+
+
+def secure_dir(root):
+    """Makes root (0700) if missing. True when it's a real directory of ours; a looser
+    mode gets tightened to 0700. A symlink or someone else's directory is refused."""
+    try:
+        os.makedirs(root, mode=0o700, exist_ok=True)
+        st = os.lstat(root)
+    except OSError:
+        return False
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        return False
+    if st.st_mode & 0o077:
+        try:
+            os.chmod(root, 0o700)
+        except OSError:
+            return False
+    return True
+
+
 def append(path, line):
+    """Appends line to path unless it's a link or a file that isn't privately ours."""
     import fcntl
     for _ in range(5):
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | NOFOLLOW, 0o600)
         fcntl.flock(fd, fcntl.LOCK_EX)
         try:
-            if os.fstat(fd).st_ino == os.stat(path).st_ino:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or not trusted(st):
+                os.close(fd)
+                return
+            if st.st_ino == os.lstat(path).st_ino:
                 break
         except OSError:
             pass
-        os.close(fd)
+        os.close(fd)  # someone trimmed and replaced the file meanwhile
     try:
         os.write(fd, line)
         size = os.fstat(fd).st_size
@@ -96,7 +130,11 @@ def append(path, line):
             nl = data.find(b"\n")
             data = data[nl + 1:] if nl >= 0 else b""
             tmp = path + ".tmp"
-            tfd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            tfd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW, 0o600)
             try:
                 os.write(tfd, data)
             finally:
@@ -128,7 +166,8 @@ class Events:
             for k, v in kw.items():
                 if v is not None and v != "":
                     e[k] = v
-            os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
+            if not secure_dir(os.path.dirname(self.path)):
+                return
             append(self.path, (json.dumps(e, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8"))
         except Exception:
             pass
