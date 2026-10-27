@@ -377,10 +377,10 @@ Checked on both machines (`claude --version` says `2.1.311 (Claude Code)` on the
 
 - **`claude -p --output-format stream-json --verbose`:** one JSON object per line. Types seen: `system` (subtypes `hook_started`, `hook_response`, `init`, `commands_changed`, `thinking_tokens`), `assistant`, `user` (tool results), `rate_limit_event`, then one `result`. Every line carries `session_id`. `init` has `cwd`, `tools`, `mcp_servers`, `model`, `permissionMode`. `result` has `subtype` (`success`), `is_error`, `num_turns`, `total_cost_usd`, `permission_denials` and `result` (the final message text).
   ```
-  system init 84dd3df9-f62e-4b2d-adc1-8bc2ed821923
-  result success 84dd3df9-... {'is_error': 'False', 'num_turns': '2', 'result': 'The file says "hello" ...'}
+  system init 11111111-2222-3333-4444-555555555555
+  result success 11111111-... {'is_error': 'False', 'num_turns': '2', 'result': 'The file says "hello" ...'}
   ```
-- **Resume keeps the conversation and the id:** `claude -p --resume 84dd3df9-... "What word was in the file you read earlier?"` answered `Hello`, and both `init` and `result` reported the same `session_id`. `--fork-session` exists for the opposite. So follow-ups to a remote worker are `-p --resume <id>`, one conversation per worker.
+- **Resume keeps the conversation and the id:** `claude -p --resume 11111111-... "What word was in the file you read earlier?"` answered `Hello`, and both `init` and `result` reported the same `session_id`. `--fork-session` exists for the opposite. So follow-ups to a remote worker are `-p --resume <id>`, one conversation per worker.
 - **`--permission-prompt-tool` works, but it's hidden:** not in `claude --help`, present in the binary (`--permission-prompt-tool <tool>`, "must be an MCP tool"). The visible `--permission-prompts host|none` flag refers to it. A 40 line stdlib Python stdio MCP server with one `approve` tool did the job:
   - Claude calls it with `{"tool_name":"Bash","input":{"command":"python3 -c 'print(6*7)'",...},"tool_use_id":"toolu_..."}`.
   - Answering `{"behavior":"deny","message":"Denied by test"}` blocked the call. Claude reported `DENIED` and listed it in `permission_denials`.
@@ -447,7 +447,7 @@ Checked on both machines (`claude --version` says `2.1.311 (Claude Code)` on the
 - **Each `tools/call` waits on its own thread** in ca-approve.py, so parallel tool calls show up as several approval cards at once instead of one after another.
 - **Request files are written atomically** (tmp then rename) with the full detail up to 2000 chars; the PermissionAsk event's `prompt` is capped at 600. Both files go away once answered or timed out.
 - **`ca remote wait` announces each unanswered request once** on stderr and skips ones that already have an `.answer` file waiting to be picked up.
-- **Smoke test on the PC (haiku):** turn 1 asked for `python3 hello.py` (acceptEdits doesn't cover running scripts), `ca remote answer pc <id> allow` let it through. Turn 2 (`--continue`) asked for `curl -sI https://example.com | head -n 1`, allowed the same way, got `HTTP/2 200`. Both turns reported session `143f439c-cbb1-49b5-a17f-e8234efba21c`.
+- **Smoke test on the PC (haiku):** turn 1 asked for `python3 hello.py` (acceptEdits doesn't cover running scripts), `ca remote answer pc <id> allow` let it through. Turn 2 (`--continue`) asked for `curl -sI https://example.com | head -n 1`, allowed the same way, got `HTTP/2 200`. Both turns reported session `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`.
 
 ### M27 and M29 worker definitions, CROSSAGENT.md and SKILL.md
 
@@ -461,8 +461,8 @@ Checked on both machines (`claude --version` says `2.1.311 (Claude Code)` on the
 
 - **Setup:** a tiny stdlib Python lib with tests and a benchmark, `ca init` (CROSSAGENT.md, teammateMode pinned, Portal open, no sessions started), then the orchestrator started from the app (`ca-ca-e2e-mac-orch`, Sonnet 5.5) and given one task: one local subagent writes `sentence_count`, a second reviews it, a pc-worker runs tests and the benchmark on the PC, then a follow-up asks the same worker for medians over 3 runs.
 - **Claude Code's own UI** showed `main` with `general-purpose  Implement sentence_count`, then `pc-worker  Run tests and bench on PC`, with live time and tokens. The pc-worker ran in the background.
-- **No local sessions for local subagents:** before and after `ps` and `tmux ls` on the Mac differ by exactly one claude process, pid 83003, the orchestrator's own pane. No tmux session was added except the orchestrator.
-- **PC:** exactly one remote worker session, `ca-ca-e2e-pc-bench`, in `/home/me/ca-e2e`. The brief it got (header with real specs plus the orchestrator's filled template plus `## Follow-up 1`) was saved and checked. Every turn's `init` and `result` carried the same session id, `4add2f7a-db34-4874-a369-069e7ac4db98`, so the follow-up resumed the conversation.
+- **No local sessions for local subagents:** before and after `ps` and `tmux ls` on the Mac differ by exactly one claude process, the orchestrator's pid, the orchestrator's own pane. No tmux session was added except the orchestrator.
+- **PC:** exactly one remote worker session, `ca-ca-e2e-pc-bench`, in `/home/me/ca-e2e`. The brief it got (header with real specs plus the orchestrator's filled template plus `## Follow-up 1`) was saved and checked. Every turn's `init` and `result` carried the same session id, `12345678-90ab-cdef-1234-567890abcdef`, so the follow-up resumed the conversation.
 - **Permissions:** the first turn needed no approval, because the test project's own `.claude/settings.local.json` allowed `python3 -m unittest*` and `python3 bench.py*` and the Portal synced it to the PC. That's correct (project allow rules apply to workers too) but worth knowing. With those rules removed, the follow-up's `for i in 1 2 3; do ... python3 bench.py ...` raised an approval. It showed on the merged pc-worker node, was allowed from the app, and the PC logged `PermissionAnswer allow`. A third turn's `python3 -c "print(6*7)"` was denied from the app. The worker reported the denial and didn't work around it.
 - **Canvas:** orchestrator, two Mac subagents, one PC worker node (proxy and remote worker merged, PC badge, Brief, Result and Terminal tabs working), plus `verify`, a `ca run` command worker.
 - **The orchestrator checked the claims itself:** it read the diff and ran the tests locally after the writer, applied the reviewer's finding, and after the PC report reran the suite and benchmark on the PC with `ca run pc verify` (3108, 226 and 2546 ops/s against the worker's 3282, 235 and 2530 medians).
