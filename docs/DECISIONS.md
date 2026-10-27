@@ -113,3 +113,11 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   - The layout freezes 8 s after its last change, so it can never keep the canvas awake.
   - Plain scroll pans, Cmd+scroll and pinch zoom (0.35x to 2.5x). Option-drag or the edge handle starts a relay cable.
   - Pulses and zzz are Core Animation. Cables and particles are one Canvas whose TimelineView pauses when nothing moves.
+- Project UI:
+  - The welcome screen shows when no project is open, unless the station (or a pane opened from it) is up. The station still works without a project.
+  - Opening a project never lands on Station, since the station isn't tied to one.
+  - The "PC folder missing" choice is a card over the window rather than inside the New pane popover. That way it works however a pane is opened and can be driven by automation.
+  - A failed ssh check counts as missing, so you get the choice instead of an error. Typing an existing session name skips the check.
+  - Cmd+Shift+V toggles the station back to the previous mode, and Cmd+Shift+O toggles Orchestrator back to Panes.
+  - Host chips hide under 1000 pt and the mode switch goes icon only under 760 pt, to keep the top bar uncluttered.
+  - Dev only: `CROSSAGENT_NO_ACTIVATE=1` launches without stealing focus, and `CROSSAGENT_AUTOMATION_ID` gives each test instance its own automation channel. Before that, parallel test runs received each other's commands.
