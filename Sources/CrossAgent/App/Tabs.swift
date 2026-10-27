@@ -319,6 +319,27 @@ extension AppState {
         }
     }
 
+    /// A session tab opened before its tmux session existed (say a worker that hasn't
+    /// started yet) attaches again as soon as the monitor sees the session.
+    func watchMonitorForAgentTabs() {
+        monitorWatch = monitor?.$sessions
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.retryEndedAgentTabs() }
+    }
+
+    func retryEndedAgentTabs() {
+        guard let monitor else { return }
+        let now = Date()
+        for tab in tabs {
+            guard case .agent(.session(let h, let name)) = tab.kind, let pane = agentPanes[tab.id], pane.isExited,
+                  monitor.sessions[h]?.contains(where: { $0.name == name }) == true,
+                  now.timeIntervalSince(agentRetryAt[tab.id] ?? .distantPast) > 5 else { continue }
+            agentRetryAt[tab.id] = now
+            pane.reconnect()
+            if tab.id == selectedTabID { focusSelectedTab() }
+        }
+    }
+
     /// True when the selected tab shows this terminal: a pane in the grid (the
     /// maximized one if any), or the agent tab's own.
     func showsTerminal(_ t: PaneTerminalView) -> Bool {

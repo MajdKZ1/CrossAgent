@@ -10,7 +10,12 @@ enum AppMode: String, Codable { case panes, station, orchestrator, activity, age
 final class AppState: ObservableObject {
     let hosts: [Host]
     /// Watches ca-* tmux sessions on every host. Feeds the station and free name picking.
-    var monitor: TmuxMonitor?
+    var monitor: TmuxMonitor? {
+        didSet { watchMonitorForAgentTabs() }
+    }
+    var monitorWatch: AnyCancellable?
+    /// When each agent tab last retried its attach, so a failing one doesn't spin.
+    var agentRetryAt: [String: Date] = [:]
     /// Mutagen ca-* sync sessions for the top bar. Started by AppDelegate.
     let sync = SyncMonitor()
 

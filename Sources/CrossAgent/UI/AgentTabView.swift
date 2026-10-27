@@ -171,10 +171,9 @@ private struct LiveTerminal: View {
                     Text(ended)
                         .font(.system(size: 12))
                         .foregroundStyle(Palette.muted)
-                    if !pane.attachOnly {
-                        Button("Reconnect") { pane.reconnect() }
-                            .buttonStyle(ChromeButtonStyle())
-                    }
+                    // Attach-only tabs also try again by themselves once the session shows up.
+                    Button(pane.attachOnly ? "Try again" : "Reconnect") { pane.reconnect() }
+                        .buttonStyle(ChromeButtonStyle())
                 }
             } else {
                 TerminalHost(terminal: pane.terminal, hidden: hidden)
