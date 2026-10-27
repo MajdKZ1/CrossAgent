@@ -107,8 +107,11 @@ struct ActivitySample: Equatable {
 struct Series: Equatable {
     static let capacity = 120
     private(set) var values: [Double] = []
+    /// Bumps on every append, so views can skip redrawing an unchanged series cheaply.
+    private(set) var version = 0
 
     mutating func append(_ v: Double) {
+        version &+= 1
         values.append(v)
         if values.count > Self.capacity { values.removeFirst(values.count - Self.capacity) }
     }

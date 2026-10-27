@@ -9,7 +9,7 @@ struct ActivityTab: View {
         ScrollView {
             HStack(alignment: .top, spacing: 14) {
                 ForEach(monitor.hosts) { h in
-                    HostColumn(host: h) { name in app.openAgent(.session(host: h.hostId, name: name)) }
+                    HostColumn(host: h) { name in app.openAgent(.session(host: h.hostId, name: name)) }.equatable()
                         .frame(minWidth: 300, maxWidth: .infinity)
                 }
             }
@@ -21,9 +21,12 @@ struct ActivityTab: View {
     }
 }
 
-private struct HostColumn: View {
+/// Equatable so a sample from one host doesn't rebuild the other column.
+private struct HostColumn: View, Equatable {
     var host: HostActivity
     var openSession: (String) -> Void
+
+    static func == (a: Self, b: Self) -> Bool { a.host == b.host }
 
     private var s: ActivitySample? { host.latest }
 
@@ -71,7 +74,7 @@ private struct HostColumn: View {
                     .foregroundStyle(Palette.muted)
                 }
             }
-            Sparkline(values: host.cpu.values, color: color, range: 0...1).frame(height: 34)
+            Sparkline(series: host.cpu, color: color, range: 0...1).equatable().frame(height: 34)
             if let s, !s.cores.isEmpty { CoreBars(sample: s) }
         }
     }
@@ -100,13 +103,13 @@ private struct HostColumn: View {
                     .help(s?.pressureDetail ?? "")
                 }
             }
-            Sparkline(values: host.mem.values, color: color, range: 0...1).frame(height: 34)
+            Sparkline(series: host.mem, color: color, range: 0...1).equatable().frame(height: 34)
             HStack(spacing: 8) {
                 Text("Swap").foregroundStyle(Palette.muted)
                 Text(s.map { $0.swapTotal > 0 ? "\(ActivityFormat.bytes($0.swapUsed)) / \(ActivityFormat.bytes($0.swapTotal))" : "none in use" } ?? "--")
                     .foregroundStyle(Palette.text)
                 Spacer()
-                Sparkline(values: host.swap.values, color: Palette.muted, range: 0...Double(max(s?.swapTotal ?? 1, 1)))
+                Sparkline(series: host.swap, color: Palette.muted, range: 0...Double(max(s?.swapTotal ?? 1, 1))).equatable()
                     .frame(width: 90, height: 14)
             }
             .font(.system(size: 11).monospacedDigit())
@@ -119,7 +122,7 @@ private struct HostColumn: View {
         Card(title: "Temperatures") {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], alignment: .leading, spacing: 12) {
                 ForEach(s.temps, id: \.kind) { t in
-                    TempTile(temp: t, history: host.temps[t.kind]?.values ?? [],
+                    TempTile(temp: t, history: host.temps[t.kind] ?? Series(),
                              detail: t.kind == .gpu ? s.gpu.map { "load \(ActivityFormat.percent($0))" } ?? t.detail : t.detail)
                 }
             }
@@ -174,8 +177,6 @@ private struct BigNumber: View {
         Text(text)
             .font(.system(size: 30, weight: .semibold, design: .rounded).monospacedDigit())
             .foregroundStyle(color)
-            .contentTransition(.numericText())
-            .animation(.easeOut(duration: 0.25), value: text)
     }
 }
 
@@ -214,7 +215,7 @@ private struct CoreBars: View {
 
 private struct TempTile: View {
     var temp: TempGroup
-    var history: [Double]
+    var history: Series
     var detail: String?
 
     var body: some View {
@@ -227,7 +228,7 @@ private struct TempTile: View {
                     .font(.system(size: 20, weight: .semibold, design: .rounded).monospacedDigit())
                     .foregroundStyle(color)
             }
-            Sparkline(values: history, color: color, range: nil).frame(height: 20)
+            Sparkline(series: history, color: color, range: nil).equatable().frame(height: 20)
             Text(detail ?? " ")
                 .font(.system(size: 10).monospacedDigit())
                 .foregroundStyle(Palette.faint)

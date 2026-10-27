@@ -1,12 +1,20 @@
 import SwiftUI
 
-/// Tiny line chart with a soft fill. One Canvas, no per point views.
-struct Sparkline: View {
-    var values: [Double]
+/// Tiny line chart with a soft fill. One Canvas, no per point views. Equatable on the
+/// series version, so a sample for another host or metric doesn't redraw it.
+struct Sparkline: View, Equatable {
+    var series: Series
     var color: Color
     /// Fixed range, e.g. 0...1 for usage. Nil scales to the data with some headroom.
     var range: ClosedRange<Double>?
     var capacity = Series.capacity
+
+    private var values: [Double] { series.values }
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.series.version == b.series.version && a.series.values.count == b.series.values.count
+            && a.color == b.color && a.range == b.range
+    }
 
     var body: some View {
         Canvas { ctx, size in
