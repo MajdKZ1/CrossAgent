@@ -37,6 +37,8 @@ final class SyncMonitorTests: XCTestCase {
         let clean = #""name":"ca-a","alpha":{"path":"/a"},"beta":{"path":"/b"}"#
         XCTAssertEqual(session(#"{\#(clean),"status":"watching","paused":false}"#)?.health, .ok)
         XCTAssertEqual(session(#"{\#(clean),"status":"watching","paused":true}"#)?.health, .busy)
+        // A paused session reports "disconnected"; that's still amber.
+        XCTAssertEqual(session(#"{\#(clean),"status":"disconnected","paused":true}"#)?.health, .busy)
         XCTAssertEqual(session(#"{\#(clean),"status":"staging-alpha"}"#)?.health, .busy)
         XCTAssertEqual(session(#"{\#(clean),"status":"connecting-beta"}"#)?.health, .busy)
         // Connecting at launch often still carries the last error: amber, not red.

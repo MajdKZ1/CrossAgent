@@ -121,8 +121,9 @@ struct SyncSession: Decodable, Equatable, Identifiable {
     var health: SyncHealth {
         let s = status ?? ""
         if !(conflicts ?? []).isEmpty || (excludedConflicts ?? 0) > 0 { return .problem }
-        // Still connecting (at launch, or after a drop): amber, even with the last error around.
-        if s.hasPrefix("connecting") { return .busy }
+        // Paused on purpose (Mutagen then reports "disconnected"), or still connecting (at
+        // launch, or after a drop, maybe with the last error around): amber, not red.
+        if paused == true || s.hasPrefix("connecting") { return .busy }
         if error != nil
             || s == "disconnected" || s.hasPrefix("halted")
             || alpha?.hasProblems == true || beta?.hasProblems == true {
