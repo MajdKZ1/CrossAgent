@@ -264,7 +264,7 @@ The Claude Code session you talk to is the orchestrator. It splits the work and 
 - **Permissions:** the PC worker runs with `acceptEdits`. Anything else goes through a small MCP tool (`--permission-prompt-tool`) to an approval card in CrossAgent, or `ca remote answer pc <id> allow|deny`. Never bypass mode.
 - **Git** only runs on the Mac.
 
-Machine nicknames: "local", "mac", "this mac", "on my mac" keep it on the Mac; "pc", "ssh", "overseas", "my pc", "on my pc" keep it on the PC. Say nothing and it uses both: heavy builds, tests and long runs on the PC, UI and macOS work on the Mac.
+Machine nicknames: "local", "here", "this mac", "on my mac" keep it on this machine; a host's id or name ("pc", "on my pc", "the build box") picks that host; "remote", "ssh" or "overseas" means your only remote host. Say nothing and it uses all of them, sending heavy builds, tests and long runs to the machine with more cores, RAM or a GPU (from the system map) and UI and macOS work to the Mac.
 
 Under the hood it's one script you can use yourself:
 
