@@ -58,7 +58,7 @@ struct TranscriptParser {
     private mutating func user(_ d: [String: Any], _ uuid: String, _ at: Date) -> [TranscriptItem] {
         if d["isMeta"] as? Bool == true { return [] }
         guard let m = d["message"] as? [String: Any] else { return [] }
-        if let s = m["content"] as? String { return userText(s, uuid, at).map { [$0] } ?? [] }
+        if let s = m["content"] as? String { return userText(s, uuid, at) }
         guard let blocks = m["content"] as? [[String: Any]] else { return [] }
         let tur = d["toolUseResult"] as? [String: Any]
         var out: [TranscriptItem] = []
@@ -66,7 +66,7 @@ struct TranscriptParser {
             let id = blocks.count == 1 ? uuid : "\(uuid):\(i)"
             switch b["type"] as? String {
             case "text":
-                if let s = b["text"] as? String, let it = userText(s, id, at) { out.append(it) }
+                if let s = b["text"] as? String { out += userText(s, id, at) }
             case "tool_result":
                 let tuid = b["tool_use_id"] as? String
                 let isError = b["is_error"] as? Bool ?? false
@@ -84,9 +84,16 @@ struct TranscriptParser {
         return out
     }
 
-    /// A user string: a prompt, or one of the tagged things Claude Code injects.
-    private func userText(_ raw: String, _ id: String, _ at: Date) -> TranscriptItem? {
+    /// A user string: a prompt, or one of the tagged things Claude Code injects. Several
+    /// teammate messages can come in one string (idle notices often do), one item each.
+    private func userText(_ raw: String, _ id: String, _ at: Date) -> [TranscriptItem] {
         let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard s.contains("<teammate-message ") else { return userText1(s, id, at).map { [$0] } ?? [] }
+        let parts = s.components(separatedBy: "<teammate-message ").dropFirst().map { "<teammate-message " + $0 }
+        return parts.enumerated().compactMap { i, p in userText1(p, parts.count == 1 ? id : "\(id):t\(i)", at) }
+    }
+
+    private func userText1(_ s: String, _ id: String, _ at: Date) -> TranscriptItem? {
         if s.isEmpty || s.hasPrefix("<system-reminder>") || s.hasPrefix("<local-command") || s.hasPrefix("Caveat:") { return nil }
         if s.hasPrefix("<task-notification>") {
             let status = Self.tag(s, "status") ?? "completed"
