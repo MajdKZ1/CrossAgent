@@ -14,6 +14,8 @@ enum Palette {
     static let exited = Color(nsColor: NSColor(hex: "#5b616c"))
     /// Broadcast toggle and the bar across the top while it is on.
     static let broadcast = Color(nsColor: NSColor(hex: "#ff9f6e"))
+    /// Sync indicator when every session is synced and watching.
+    static let synced = Color(nsColor: NSColor(hex: "#8fd694"))
     static let danger = Color(nsColor: NSColor(hex: "#f07178"))
     static let chip = Color.white.opacity(0.04)
     static let chipHover = Color.white.opacity(0.08)

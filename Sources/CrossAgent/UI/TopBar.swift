@@ -12,6 +12,8 @@ struct TopBar: View {
             ForEach(app.hosts) { host in HostChip(host: host) }
             Spacer(minLength: 8)
 
+            SyncIndicator(sync: app.sync)
+
             Button { app.showNewPane.toggle() } label: {
                 Label("New pane", systemImage: "plus").labelStyle(.titleAndIcon)
             }
