@@ -353,6 +353,11 @@ extension AppState {
             o.relay = nil
             if o.story == nil { stopDemo() }
         }
+        // CROSSAGENT_DEMO_STORY=<name> plays a story the first time the tab shows.
+        if mode == .orchestrator, DemoMode.isOn, o.demoGraph == nil,
+           let story = ProcessInfo.processInfo.environment["CROSSAGENT_DEMO_STORY"] {
+            playStory(story, loop: ProcessInfo.processInfo.environment["CROSSAGENT_DEMO_LOOP"] == "1")
+        }
         // Once the new tab has landed.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.checkNeedsInput() }
     }
@@ -575,6 +580,8 @@ extension AppState {
             return
         }
         guard DemoStory.names.contains(name) else { return }
+        // The canvas needs an orchestrator. In demo it runs the mock claude on the demo tmux server.
+        if orchestratorPane == nil { startOrchestrator(hostID: localHostID) }
         stopDemo()
         o.demoPositions = [:]
         o.permissionSends = [:]
@@ -635,7 +642,7 @@ extension AppState {
         case .event(let e):
             graph.apply(e)
         case .allow(let id):
-            if autoAllow { answerPermission(nodeID: id, allow: true) }
+            if autoAllow { demoAnswerPermission(nodeID: id, allow: true) }
         case .doze(let id, let activity):
             graph.update(id, at: Date()) {
                 $0.state = .idle

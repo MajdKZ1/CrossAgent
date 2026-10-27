@@ -97,7 +97,8 @@ final class DemoFeedSource: FeedSource, @unchecked Sendable {
 
     func start() {
         guard timer == nil, sent == 0 || live else { return }
-        let all = DemoSessions.items(sessionId: sessionId, start: Date().addingTimeInterval(live ? 0 : -600))
+        // In the past, so lines trickling in later (stamped now) stay in order.
+        let all = DemoSessions.items(sessionId: sessionId, start: Date().addingTimeInterval(-600))
         // Running ones: the first few lines at once, the rest trickling in.
         let first = live ? min(4, all.count) : all.count
         deliver(Array(all[sent..<max(sent, first)]))
