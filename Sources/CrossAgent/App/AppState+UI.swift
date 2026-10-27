@@ -81,6 +81,7 @@ extension AppState {
         case .station: kind = .station
         case .orchestrator: kind = .orchestrator
         case .activity: kind = .activity
+        case .sessions: kind = .sessions
         case .panes: kind = .panes
         default: return
         }

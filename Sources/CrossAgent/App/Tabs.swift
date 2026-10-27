@@ -11,11 +11,14 @@ enum AgentRef: Hashable, Codable {
     case node(String)
     /// Any tmux session on a host, opened as its live terminal.
     case session(host: String, name: String)
+    /// A Claude Code session CrossAgent doesn't own a terminal for: the read only
+    /// Live view of its transcript (or the transcript of an ended one).
+    case claude(host: String, sessionId: String)
 }
 
 /// One tab in the main window.
 enum TabKind: Hashable, Codable {
-    case welcome, panes, station, orchestrator, activity
+    case welcome, panes, station, orchestrator, activity, sessions
     case agent(AgentRef)
     /// Dev only views (CROSSAGENT_ORCH_DEMO, CROSSAGENT_MASCOT_GALLERY). Never saved.
     case dev(DevTab)
@@ -49,8 +52,10 @@ struct Tab: Identifiable, Hashable, Codable {
         case .station: "Station"
         case .orchestrator: "Orchestrator"
         case .activity: "Activity"
+        case .sessions: "Sessions"
         case .agent(.node(let id)): id
         case .agent(.session(_, let name)): name
+        case .agent(.claude(_, let sid)): String(sid.prefix(8))
         case .dev(.orchestratorDemo): "Canvas demo"
         case .dev(.mascotGallery): "Patch"
         }
@@ -63,6 +68,8 @@ struct Tab: Identifiable, Hashable, Codable {
         case .station: "square.grid.3x3"
         case .orchestrator: "point.3.connected.trianglepath.dotted"
         case .activity: "waveform.path.ecg"
+        case .sessions: "list.bullet.rectangle"
+        case .agent(.claude): "eye"
         case .agent: "terminal"
         case .dev: "hammer"
         }
@@ -76,6 +83,7 @@ struct Tab: Identifiable, Hashable, Codable {
         case .station: .station
         case .orchestrator: .orchestrator
         case .activity: .activity
+        case .sessions: .sessions
         case .agent: .agent
         case .dev: .dev
         }
@@ -195,6 +203,8 @@ extension AppState {
             }
         case .session(let h, let name):
             guard host(h) != nil, SessionName.isValid(name) else { return }
+        case .claude(let h, _):
+            guard host(h) != nil else { return }
         }
         var tab = Tab(kind: .agent(ref))
         tab.title = title(of: tab)
@@ -215,6 +225,8 @@ extension AppState {
         case .session(let h, let name):
             if let o = orchestratorPane, o.host.id == h, o.session == name { return .node(AgentGraph.orchestratorID) }
             if let n = orch?.graph.orchestrator, n.hostId == h, n.tmuxSession == name { return .node(AgentGraph.orchestratorID) }
+            return ref
+        case .claude:
             return ref
         }
     }
@@ -264,6 +276,8 @@ extension AppState {
         case .session(let h, let name):
             if let n = orch?.shown.nodes.values.first(where: { $0.hostId == h && $0.tmuxSession == name }) { return n.name }
             return CASessionName.parse(name, hostIDs: hosts.map(\.id))?.task ?? name
+        case .claude:
+            return tab.title
         }
     }
 
@@ -273,7 +287,7 @@ extension AppState {
         case .node(let id):
             if id == AgentGraph.orchestratorID, let o = orchestratorPane { return o.host.id }
             return orch?.shown.nodes[id]?.hostId
-        case .session(let h, _): return h
+        case .session(let h, _), .claude(let h, _): return h
         }
     }
 

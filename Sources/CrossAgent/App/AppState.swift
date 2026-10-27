@@ -3,7 +3,7 @@ import Combine
 import SwiftUI
 
 /// What the selected tab shows. Follows the tab selection, set it through `select` / `open`.
-enum AppMode: String, Codable { case panes, station, orchestrator, activity, agent, welcome, dev }
+enum AppMode: String, Codable { case panes, station, orchestrator, activity, sessions, agent, welcome, dev }
 
 /// Everything the window shows: panes, focus, broadcast, layout persistence.
 @MainActor

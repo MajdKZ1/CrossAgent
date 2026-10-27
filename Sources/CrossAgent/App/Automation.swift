@@ -271,6 +271,7 @@ final class Automation {
             switch ref {
             case .node(let id): detail = id
             case .session(let h, let n): detail = "\(h)/\(n)"
+            case .claude(let h, let sid): detail = "claude:\(h)/\(sid)"
             }
         }
         let obj: [String: Any] = ["project": project, "mode": app.mode.rawValue, "welcome": app.showsWelcome,
