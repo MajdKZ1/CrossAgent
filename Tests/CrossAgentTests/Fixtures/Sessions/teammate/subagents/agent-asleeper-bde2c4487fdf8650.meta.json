@@ -1,0 +1,1 @@
+{"agentType":"sleeper","isBuiltIn":false,"description":"Run sleep command","name":"sleeper","spawnDepth":0,"requestShape":"background","requestNonInteractive":true,"model":"opus","taskKind":"in_process_teammate","teamName":"session-a5772ce1","color":"blue","planModeRequired":false,"permissionMode":"default"}

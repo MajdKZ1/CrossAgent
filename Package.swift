@@ -17,7 +17,8 @@ let package = Package(
         .testTarget(
             name: "CrossAgentTests",
             dependencies: ["CrossAgent"],
-            path: "Tests/CrossAgentTests"
+            path: "Tests/CrossAgentTests",
+            resources: [.copy("Fixtures")]
         ),
     ]
 )
