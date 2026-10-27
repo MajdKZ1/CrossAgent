@@ -62,6 +62,7 @@ final class Automation {
         if handlePointer(name, cmd) { return }
         if handleTerminal(name, cmd) { return }
         if handleTheme(name, cmd) { return }
+        if handleSessions(name, cmd) { return }
         switch name {
         case "new" where cmd["check"] as? Bool == true:
             // Same path as the new pane popover, with the folder check on ssh hosts.
@@ -114,12 +115,13 @@ final class Automation {
                 app.openAgent(.session(host: host, name: session))
             }
         case "openTab":
-            // {"cmd":"openTab","kind":"station"} for panes, station, orchestrator, activity.
+            // {"cmd":"openTab","kind":"station"} for panes, station, orchestrator, activity, sessions.
             switch cmd["kind"] as? String {
             case "panes": app.open(.panes)
             case "station": app.open(.station)
             case "orchestrator": app.open(.orchestrator)
             case "activity": app.open(.activity)
+            case "sessions": app.open(.sessions)
             default: break
             }
         case "folderPrompt":
@@ -281,6 +283,7 @@ final class Automation {
             switch t.kind {
             case .agent(.node(let id)): kind = ["agent": ["node": id]]
             case .agent(.session(let h, let n)): kind = ["agent": ["host": h, "session": n]]
+            case .agent(.claude(let h, let sid)): kind = ["agent": ["host": h, "claude": sid]]
             case .dev(let d): kind = ["dev": d.rawValue]
             default: break
             }
@@ -299,6 +302,7 @@ final class Automation {
             }
         }
         let obj: [String: Any] = ["project": project, "mode": app.mode.rawValue, "welcome": app.showsWelcome,
+                                  "liveViews": liveViewsJSON(), "orchestratorPick": app.orchestratorSessionPick ?? NSNull(),
                                   "tabs": tabs, "selectedTab": app.selectedTabID,
                                   "openProjects": windows.openPaths,
                                   "orchestrator": orchestrator, "graph": graph, "detail": detail,
