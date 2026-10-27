@@ -12,6 +12,9 @@ struct CrossAgentApp: App {
             .commands {
                 PaneCommands(windows: .shared)
                 CommandGroup(after: .toolbar) { Menu("Theme") { ThemeMenuItems() } }
+                CommandGroup(after: .appSettings) {
+                    Button("Add Remote Machine…") { MainActor.assumeIsolated { HostSetupWindow.shared.show() } }
+                }
             }
     }
 }
@@ -154,6 +157,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The demo opens last so it's the one showing: its pointer checks need the canvas up.
         if MascotGallery.isRequested { windows.current?.open(.dev(.mascotGallery)) }
         if OrchestratorDemo.isRequested { windows.current?.open(.dev(.orchestratorDemo)) }
+        // First run with only this Mac: offer to add a remote machine. Test launches skip it.
+        if ProcessInfo.processInfo.environment["CROSSAGENT_NO_SETUP"] != "1" {
+            HostSetupWindow.shared.showIfNeeded(hosts: windows.hosts)
+        }
     }
 
     /// Runs before any window closes for the quit, so the open list is still whole.

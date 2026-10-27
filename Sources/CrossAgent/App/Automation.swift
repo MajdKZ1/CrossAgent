@@ -12,6 +12,7 @@ import AppKit
 ///     {"cmd":"windows","out":"/tmp/w.json"}      every window: project, title, frame, tabs
 ///     {"cmd":"closeWindow","project":"/tmp/x"}   like the close button
 ///     {"cmd":"mergeWindows"}                     Window > Merge All Windows
+///     {"cmd":"hostSetup","out":"/tmp/s.png"}     Add Remote Machine..., with a snapshot
 @MainActor
 final class Automation {
     /// CROSSAGENT_AUTOMATION_ID gives an instance its own channel, so parallel test runs don't collide.
@@ -50,6 +51,26 @@ final class Automation {
             return
         case "quit":
             NSApp.terminate(nil)
+            return
+        case "hostSetup":
+            // {"cmd":"hostSetup","firstRun":true,"target":"pc","test":true,"out":"/tmp/setup.png"}
+            // opens Add Remote Machine, prefilled and tested. "close": true closes it instead.
+            // "wait" is seconds before the snapshot (default 0.5).
+            if cmd["close"] as? Bool == true {
+                HostSetupWindow.shared.window?.close()
+                return
+            }
+            HostSetupWindow.shared.show(firstRun: cmd["firstRun"] as? Bool ?? false,
+                                        target: cmd["target"] as? String ?? "", test: cmd["test"] as? Bool ?? false)
+            if let out = cmd["out"] as? String {
+                let wait = (cmd["wait"] as? NSNumber)?.doubleValue ?? 0.5
+                DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+                    guard let view = HostSetupWindow.shared.window?.contentView,
+                          let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+                    view.cacheDisplay(in: view.bounds, to: rep)
+                    self?.write(rep.representation(using: .png, properties: [:]) ?? Data(), to: out)
+                }
+            }
             return
         default: break
         }
