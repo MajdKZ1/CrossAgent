@@ -67,6 +67,9 @@ final class AppState: ObservableObject {
     @Published var folderPrompt: FolderPrompt?
     /// "<project path>|<host id>" pairs whose folder was found this session.
     var foldersFound: Set<String> = []
+    /// The Claude session ("host:sessionId") whose agents the Orchestrator tab shows
+    /// instead of the project's own graph. Nil for the default.
+    @Published var orchestratorSessionPick: String?
     var stateWatchers: [UUID: AnyCancellable] = [:]
 
     private static let lastHostKey = "lastHostID"

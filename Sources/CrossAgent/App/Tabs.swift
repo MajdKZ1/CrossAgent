@@ -180,7 +180,7 @@ extension AppState {
                 return
             }
         case .session(let h, let name):
-            guard host(h) != nil, SessionName.isValid(name) else { return }
+            guard host(h) != nil, SessionName.isAttachable(name) else { return }
         case .claude(let h, _):
             guard host(h) != nil else { return }
         }
@@ -253,9 +253,12 @@ extension AppState {
             return orch?.shown.nodes[id]?.name ?? tab.title
         case .session(let h, let name):
             if let n = orch?.shown.nodes.values.first(where: { $0.hostId == h && $0.tmuxSession == name }) { return n.name }
-            return CASessionName.parse(name, hostIDs: hosts.map(\.id))?.task ?? name
-        case .claude:
-            return tab.title
+            guard let task = CASessionName.parse(name, hostIDs: hosts.map(\.id))?.task else { return name }
+            // A continued session keeps the title its Live view had.
+            return task.hasPrefix("resume-") && tab.title != name ? tab.title : task
+        case .claude(let h, let sid):
+            // Claude renames a session once it knows what it's about.
+            return SessionDiscovery.shared.session(host: h, sessionId: sid).map { AppState.shortTitle($0.title) } ?? tab.title
         }
     }
 
@@ -380,7 +383,8 @@ extension AppState {
         var list = (state.tabs ?? []).filter { tab in
             switch tab.kind {
             case .welcome, .dev: return false
-            case .agent(.session(let h, let name)): return host(h) != nil && SessionName.isValid(name)
+            case .agent(.session(let h, let name)): return host(h) != nil && SessionName.isAttachable(name)
+            case .agent(.claude(let h, _)): return host(h) != nil
             default: return true
             }
         }
