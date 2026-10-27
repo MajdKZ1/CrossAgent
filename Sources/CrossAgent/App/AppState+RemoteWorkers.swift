@@ -139,6 +139,9 @@ extension AppState {
     /// ~/.crossagent/approvals/<id>.answer on the worker's host, where its permission
     /// tool is waiting. The card clears when the PermissionAnswer event comes back.
     func answerPermission(nodeID: String, allow: Bool) {
+        #if DEBUG
+        if DemoMode.isOn { return demoAnswerPermission(nodeID: nodeID, allow: allow) }
+        #endif
         guard let o = orch, let ask = o.shown.nodes[nodeID]?.remote?.permission else { return }
         guard Self.validPermissionID(ask.id) else {
             flash("That approval has a bad id")
