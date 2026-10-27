@@ -368,3 +368,25 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   - **What you see:** "Also open in Ghostty" is info, not a warning.
   - **Small leak:** if CrossAgent starts the tmux server, the variable lands in the server's environment. That only matters for a nested tmux client inside a pane.
 - **Not hooked in yet:** auto mode refused to let an agent edit the user's real rc files ("Unauthorized Persistence"). The rc logic was tested against fake home folders, and the wrapper by sourcing it directly. The real hookup is one command for the user to run.
+
+## Native subagents and remote workers (M25 to M31)
+
+### M25 what Claude Code 2.1.311 really supports
+
+Checked on both machines (`claude --version` says `2.1.311 (Claude Code)` on the Mac and the PC) with real runs in a scratch folder, `--model haiku` to keep it cheap.
+
+- **`claude -p --output-format stream-json --verbose`:** one JSON object per line. Types seen: `system` (subtypes `hook_started`, `hook_response`, `init`, `commands_changed`, `thinking_tokens`), `assistant`, `user` (tool results), `rate_limit_event`, then one `result`. Every line carries `session_id`. `init` has `cwd`, `tools`, `mcp_servers`, `model`, `permissionMode`. `result` has `subtype` (`success`), `is_error`, `num_turns`, `total_cost_usd`, `permission_denials` and `result` (the final message text).
+  ```
+  system init 84dd3df9-f62e-4b2d-adc1-8bc2ed821923
+  result success 84dd3df9-... {'is_error': 'False', 'num_turns': '2', 'result': 'The file says "hello" ...'}
+  ```
+- **Resume keeps the conversation and the id:** `claude -p --resume 84dd3df9-... "What word was in the file you read earlier?"` answered `Hello`, and both `init` and `result` reported the same `session_id`. `--fork-session` exists for the opposite. So follow-ups to a remote worker are `-p --resume <id>`, one conversation per worker.
+- **`--permission-prompt-tool` works, but it's hidden:** not in `claude --help`, present in the binary (`--permission-prompt-tool <tool>`, "must be an MCP tool"). The visible `--permission-prompts host|none` flag refers to it. A 40 line stdlib Python stdio MCP server with one `approve` tool did the job:
+  - Claude calls it with `{"tool_name":"Bash","input":{"command":"python3 -c 'print(6*7)'",...},"tool_use_id":"toolu_..."}`.
+  - Answering `{"behavior":"deny","message":"Denied by test"}` blocked the call. Claude reported `DENIED` and listed it in `permission_denials`.
+  - Answering `{"behavior":"allow","updatedInput":<input>}` after a deliberate 150 s delay still worked (`The output is **42**`, total run 2:39). There's no short MCP timeout in the way, so a human can take their time on an approval card. `MCP_TOOL_TIMEOUT` exists as a hard wall clock limit, so `ca remote` sets it above its own approval timeout anyway.
+  - Avoid MCP server names that start like a claude.ai connector (the binary refuses those for prompt tools). Ours is `crossagent`.
+  - Under `--permission-mode acceptEdits`, file commands like `touch` never reach the tool. They're auto approved, as expected.
+- **Subagents:** the Agent tool takes `run_in_background`, custom agents load from `.claude/agents/` and `~/.claude/agents/`, and SendMessage continues an agent by name or id. Hooks for subagents were already checked in M6 to M11 (SubagentStart/Stop with `agent_id`, `agent_type`).
+- **Agent teams are on here** (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in the user's settings). With the default `teammateMode` a team started from a Claude running inside tmux can split teammates into new tmux panes, each a new claude process. That's exactly what local subagent work must not do, so `ca init` pins `"teammateMode": "in-process"` in the project's `.claude/settings.local.json` and CROSSAGENT.md says to use plain Agent subagents.
+- **The PC can't reach the Mac:** `ssh pc 'ssh mac true'` gives `Could not resolve hostname mac`. Fixing that means changing ssh or network config, which is off limits.
