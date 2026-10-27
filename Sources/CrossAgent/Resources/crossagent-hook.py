@@ -30,6 +30,17 @@ def clip(s, n):
     return s or None
 
 
+def clip_lines(s, n):
+    """Like clip, but keeps line breaks (blank lines dropped)."""
+    if s is None:
+        return None
+    lines = [" ".join(l.split()) for l in str(s).splitlines()]
+    s = "\n".join(l for l in lines if l)
+    if len(s) > n:
+        s = s[: n - 3].rstrip() + "..."
+    return s or None
+
+
 def base(p):
     p = str(p or "").rstrip("/")
     return p.rsplit("/", 1)[-1] or p
@@ -122,6 +133,9 @@ def make_event(d):
             if isinstance(resp, dict):
                 # The spawned agent's id. `to` is the target of Agent and SendMessage.
                 put("to", resp.get("agentId") or resp.get("agent_id"))
+        elif tool == "Bash":
+            # The full command (the summary only has its first line), for `ca wait` and such.
+            put("prompt", clip_lines(inp.get("command"), 300))
         elif tool == "SendMessage":
             put("to", clip(inp.get("to") or inp.get("recipient"), 60))
 
@@ -138,14 +152,14 @@ def make_event(d):
         put("sum", clip(d.get("message") or d.get("title"), 160))
         put("msg", clip(d.get("message"), 300))
     elif ev in ("Stop", "SubagentStop"):
-        put("msg", clip(d.get("last_assistant_message"), 300))
+        put("msg", clip_lines(d.get("last_assistant_message"), 300))
         if ev == "Stop":
             tasks = d.get("background_tasks") or []
             put("bg", [str(t.get("id")) for t in tasks
                        if isinstance(t, dict) and t.get("id") and t.get("status", "running") == "running"])
     elif ev == "StopFailure":
         put("err", clip(d.get("error"), 300))
-        put("msg", clip(d.get("last_assistant_message"), 300))
+        put("msg", clip_lines(d.get("last_assistant_message"), 300))
     elif ev == "PostToolUseFailure":
         if d.get("is_interrupt"):
             e["ev"] = "PostToolUse"  # an interrupt is not a failure worth a red node
