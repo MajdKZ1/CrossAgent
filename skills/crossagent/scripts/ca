@@ -91,7 +91,9 @@ host_arg() {
 on_pc() {
   local dir mk; dir="$(pc_dir)"
   case "$1" in
-    __probe|__status) mk="{ cd $(q "$dir") 2>/dev/null || cd; }" ;;
+    __probe|__status|__remote_answer) mk="{ cd $(q "$dir") 2>/dev/null || cd; }" ;;
+    __remote_status|__remote_wait|__remote_stop)
+      mk="{ cd $(q "$dir") 2>/dev/null || { echo 'ca: no ~/'$(q "$dir")' on the PC, so no remote workers there' >&2; exit 1; }; }" ;;
     *) mk="mkdir -p $(q "$dir") && cd $(q "$dir")" ;;
   esac
   # shellcheck disable=SC2086
@@ -103,10 +105,18 @@ remote_ok() {
   ssh $SSH_OPTS -o ConnectTimeout=20 pc "test -x $RCA" 2>/dev/null
 }
 
+# Checksum of the scripts the PC runs, to spot an outdated copy there.
+SKILL_FILES="ca ca-stream.py ca-approve.py"
+skill_sum() { (cd "$SKILL_DIR/scripts" && cat $SKILL_FILES 2>/dev/null | cksum); }
+
 ensure_remote() {
   # shellcheck disable=SC2086
   ssh $SSH_OPTS -o ConnectTimeout=20 pc true 2>/dev/null || die "can't reach the PC with 'ssh pc'. Is it on?"
-  remote_ok || { say "skill missing on the PC, installing"; "$SKILL_DIR/install.sh" --pc >&2; }
+  if ! remote_ok; then say "skill missing on the PC, installing"; "$SKILL_DIR/install.sh" --pc >&2
+  # shellcheck disable=SC2086
+  elif [ "$(ssh $SSH_OPTS pc "cd ~/.claude/skills/crossagent/scripts && cat $SKILL_FILES 2>/dev/null | cksum")" != "$(skill_sum)" ]; then
+    say "skill on the PC is out of date, updating"; "$SKILL_DIR/install.sh" --pc >&2
+  fi
 }
 
 # ---------- one-off copies (push, pull) ----------
@@ -664,6 +674,7 @@ local_status() {
   for s in $(tmux ls -F '#{session_name}' 2>/dev/null | grep '^ca-' || true); do
     t="${s#"$p"}"
     if [ "$t" != "$s" ] && [ -f "$ROOT/.crossagent/run/$t.mode" ]; then printf '%-4s %-44s %s\n' "$HERE" "$s" "$(state "$t")"
+    elif [ "$t" != "$s" ] && [ -f "$ROOT/.crossagent/remote/$t/turn" ]; then printf '%-4s %-44s %s\n' "$HERE" "$s" "remote worker (ca remote status)"
     elif legacy "$s"; then printf '%-4s %-44s %s\n' "$HERE" "$s" legacy
     else printf '%-4s %-44s %s\n' "$HERE" "$s" "-"; fi
   done
@@ -744,6 +755,412 @@ stop() {
   rm -f "$ROOT/.crossagent/run/$task.mode"
 }
 
+# ---------- remote workers (ca remote) ----------
+
+# A headless Claude Code worker (claude -p, stream-json) in tmux session
+# ca-<slug>-<host>-<role> on the other machine. State lives there in
+# .crossagent/remote/<role>/ (never crosses the Portal): brief.md, turn-N.md, turn,
+# turn-N.exit, session, stream.jsonl, result-N.md, result.md, allow, model, loop.pid.
+
+BRIEF_SECTIONS="Goal Context Files Task Verification"
+APPROVALS="$HOME/.crossagent/approvals"
+
+# Runs "$@" with ca on <host>, in the project's folder there. Only the PC so far, it
+# can't reach the Mac. CA_REMOTE_LOCAL=<dir> runs it right here in <dir> (tests).
+on_host() {
+  local h="$1"; shift
+  if [ -n "${CA_REMOTE_LOCAL:-}" ]; then
+    (cd "$CA_REMOTE_LOCAL" && CA_HERE="$h" CA_ROOT="$CA_REMOTE_LOCAL" CA_SLUG="$SLUG" "$CA" "$@"); return
+  fi
+  case "$h" in pc) on_pc "$@" ;; *) die "no way to reach $h from the $HERE" ;; esac
+}
+
+remote_host() {
+  local h; h="$(resolve "$1")" || die "unknown host '$1' (use mac, pc or a nickname, see ca help)"
+  [ "$h" != both ] || die "pick one host, mac or pc"
+  [ "$h" != "$HERE" ] || die "local work goes to a native subagent (Agent tool), not ca remote"
+  [ "$HERE" = mac ] || die "the PC can't reach the Mac, so ca remote only works from the Mac. Do the work here on the PC"
+  echo "$h"
+}
+
+check_brief() {
+  local s miss=""
+  grep -q '[^[:space:]]' "$1" || die "the brief is empty"
+  for s in $BRIEF_SECTIONS; do grep -qiE "^## +$s" "$1" || miss="$miss $s"; done
+  [ -z "$miss" ] || die "the brief is missing these sections:$miss. Each is a '## <name>' heading, see: ca remote template"
+}
+
+num() { echo "$2" | grep -qE '^[0-9]+$' || die "$1 takes a number of seconds (got '$2')"; }
+
+remote_start() {
+  [ $# -ge 2 ] || die "usage: ca remote <host> <role> --brief FILE|- [--continue] [--allow RULE]... [--model M] [--timeout S] [--approve-timeout S] [--detach]"
+  local host role brief="" cont="" detach="" t=100 pass=() n
+  host="$(remote_host "$1")"; role="$2"; shift 2; check_task "$role"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --brief) [ $# -ge 2 ] || die "--brief needs a file, or - for stdin"; brief="$2"; shift 2 ;;
+      --continue) cont=1; shift ;;
+      --allow) [ $# -ge 2 ] || die "--allow needs a rule, like 'Bash(npm test:*)'"; pass+=(--allow "$2"); shift 2 ;;
+      --model) [ $# -ge 2 ] || die "--model needs a name"; pass+=(--model "$2"); shift 2 ;;
+      --approve-timeout) [ $# -ge 2 ] || die "--approve-timeout needs seconds"; num "$1" "$2"; pass+=(--approve-timeout "$2"); shift 2 ;;
+      --timeout) [ $# -ge 2 ] || die "--timeout needs seconds"; num "$1" "$2"; t="$2"; shift 2 ;;
+      --detach) detach=1; shift ;;
+      *) die "unknown option '$1' for ca remote (see ca help)" ;;
+    esac
+  done
+  [ -n "$brief" ] || die "say what to do with --brief FILE (or --brief - to read stdin)"
+  local tmp; tmp="$(mktemp)"; TMPS="$tmp"; trap 'rm -f $TMPS' EXIT
+  if [ "$brief" = - ]; then cat > "$tmp"; else [ -f "$brief" ] || die "no such brief: $brief"; cat "$brief" > "$tmp"; fi
+  if [ -n "$cont" ]; then
+    grep -q '[^[:space:]]' "$tmp" || die "the follow-up is empty"
+    pass+=(--continue)
+  else
+    check_brief "$tmp"
+  fi
+  [ -n "${CA_REMOTE_LOCAL:-}" ] || ensure_remote
+  on_host "$host" __remote_check "$role" ${cont:+--continue}
+  # Fresh files for the worker: flush the Portal (exit 3 on conflicts). Without one, push
+  # once for a new conversation; a follow-up skips it so it never overwrites the worker's edits.
+  if [ -z "${CA_REMOTE_LOCAL:-}" ]; then
+    if sync_active; then sync_flush || exit $?
+    elif [ -z "$cont" ]; then push; fi
+  fi
+  n="$(on_host "$host" __remote_start "$role" --from "$HERE" ${pass[@]+"${pass[@]}"} < "$tmp")"
+  mkdir -p "$ROOT/.crossagent/remote/$host-$role"
+  cp "$tmp" "$ROOT/.crossagent/remote/$host-$role/brief-$n.md"
+  if [ -n "$detach" ]; then
+    echo "started $role on $host, turn $n ($(sname "$host" "$role")). Get the report with: ca remote wait $host $role"
+    return
+  fi
+  remote_collect "$host" "$role" "$n" "$t"
+}
+
+# Waits on the host, prints the report on stdout (and nothing else), keeps a copy here,
+# then flushes the Portal so the worker's edits are on the Mac.
+remote_collect() {
+  local host="$1" role="$2" n="$3" t="$4" out rc=0 m="$ROOT/.crossagent/remote/$1-$2"
+  out="$(mktemp)"; TMPS="${TMPS:-} $out $out.r"; trap 'rm -f $TMPS' EXIT
+  on_host "$host" __remote_wait "$role" "$n" "$t" > "$out" || rc=$?
+  if head -1 "$out" | grep -qE '^ca-turn [0-9]+$'; then
+    n="$(head -1 "$out" | cut -d' ' -f2)"
+    tail -n +2 "$out" > "$out.r" && mv "$out.r" "$out"
+  fi
+  cat "$out"
+  [ "$rc" != 124 ] || exit 124
+  if [ -n "$n" ] && [ -s "$out" ]; then
+    mkdir -p "$m"; cp "$out" "$m/result-$n.md"; cp "$out" "$m/result.md"
+  fi
+  if [ -z "${CA_REMOTE_LOCAL:-}" ] && sync_active; then sync_flush || exit $?; fi
+  exit "$rc"
+}
+
+remote_wait_cmd() {
+  [ $# -ge 2 ] || die "usage: ca remote wait <host> <role> [--timeout S]"
+  local host role t=100; host="$(remote_host "$1")"; role="$2"; shift 2; check_task "$role"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --timeout) [ $# -ge 2 ] || die "--timeout needs seconds"; num "$1" "$2"; t="$2"; shift 2 ;;
+      *) die "unknown option '$1' for ca remote wait" ;;
+    esac
+  done
+  remote_collect "$host" "$role" "" "$t"
+}
+
+check_req() { echo "$1" | grep -qE '^[a-f0-9]{12}$' || die "request ids are 12 hex chars (got '$1')"; }
+
+remote() {
+  [ -z "${CROSSAGENT_REMOTE_WORKER:-}" ] || die "you're a remote worker, do your task yourself"
+  local h
+  case "${1:-}" in
+    ""|-h|--help|help) usage ;;
+    template)
+      [ -f "$SKILL_DIR/templates/BRIEF.md" ] || die "no brief template in $SKILL_DIR/templates"
+      cat "$SKILL_DIR/templates/BRIEF.md" ;;
+    wait) shift; remote_wait_cmd "$@" ;;
+    answer)
+      [ $# -eq 4 ] || die "usage: ca remote answer <host> <request-id> allow|deny"
+      h="$(remote_host "$2")"; check_req "$3"
+      case "$4" in allow|deny) ;; *) die "answer allow or deny (got '$4')" ;; esac
+      on_host "$h" __remote_answer "$3" "$4" ;;
+    status)
+      [ "$HERE" = mac ] || die "the PC can't reach the Mac. For workers on this PC run: ca __remote_status"
+      h=pc; [ $# -lt 2 ] || h="$(remote_host "$2")"
+      [ $# -lt 3 ] || check_task "$3"
+      on_host "$h" __remote_status ${3:+"$3"} ;;
+    stop)
+      [ $# -eq 3 ] || die "usage: ca remote stop <host> <role>"
+      h="$(remote_host "$2")"; check_task "$3"
+      on_host "$h" __remote_stop "$3" ;;
+    *) remote_start "$@" ;;
+  esac
+}
+
+# ----- the worker's side (runs on the host that does the work) -----
+
+rdir() { echo "$ROOT/.crossagent/remote/$1"; }
+r_turn() { cat "$1/turn" 2>/dev/null || echo 0; }
+r_alive() {
+  local p; p="$(cat "$1/loop.pid" 2>/dev/null)" || return 1
+  [ -n "$p" ] && kill -0 "$p" 2>/dev/null && tmux has-session -t "=$(sname "$HERE" "$(basename "$1")")" 2>/dev/null
+}
+r_running() { local n; n="$(r_turn "$1")"; [ "$n" -gt 0 ] && [ ! -f "$1/turn-$n.exit" ] && r_alive "$1"; }
+
+# One event in the worker's event file, same base fields as ca-stream.py writes.
+r_event() {
+  local role="$1" ev="$2"; shift 2
+  python3 -I "$SKILL_DIR/scripts/ca-stream.py" --emit "$ev" --host "$HERE" --project "$SLUG" \
+    --role "$role" --tmux "$(sname "$HERE" "$role")" "$@" >/dev/null 2>&1 || true
+}
+
+# Ends a turn that has no exit code: the loop went away (rc 1) or ca remote stop (rc 130).
+r_close_turn() {
+  local d="$1" role="$2" rc="$3" why="$4" n; n="$(r_turn "$d")"
+  [ "$n" -gt 0 ] && [ ! -f "$d/turn-$n.exit" ] || return 0
+  printf '# %s on %s, turn %s\n\n%s\n' "$role" "$HERE" "$n" "$why" > "$d/result-$n.md"
+  cp "$d/result-$n.md" "$d/result.md"
+  echo "$rc" > "$d/turn-$n.exit"
+  r_event "$role" RemoteStop "turn=$n" "rc=$rc" "csid=$(cat "$d/session" 2>/dev/null)" "path=$d/result.md" "sum=$why"
+}
+
+# Pending approvals for a worker session: id<TAB>summary per line, oldest first.
+pending() {
+  ls "$APPROVALS"/*.json >/dev/null 2>&1 || return 0
+  python3 -I -c '
+import glob, json, os, sys
+for f in sorted(glob.glob(os.path.join(sys.argv[1], "*.json")), key=os.path.getmtime):
+    try:
+        with open(f) as fh:
+            d = json.load(fh)
+    except Exception:
+        continue
+    if d.get("tmux") == sys.argv[2]:
+        print("%s\t%s" % (d.get("id", ""), d.get("sum", "")))
+' "$APPROVALS" "$1" 2>/dev/null || true
+}
+
+specs() {
+  if [ "$(uname -s)" = Darwin ]; then
+    printf 'macOS %s, %s, %s threads, %s GB RAM' "$(sw_vers -productVersion)" "$(sysctl -n machdep.cpu.brand_string)" \
+      "$(sysctl -n hw.ncpu)" "$(( $(sysctl -n hw.memsize) / 1073741824 ))"
+  else
+    printf '%s, %s, %s threads, %s GB RAM' "$(. /etc/os-release && echo "$PRETTY_NAME")" \
+      "$(lscpu | sed -n 's/^Model name: *//p' | head -1)" "$(nproc)" "$(free -g | awk '/^Mem:/{print $2}')"
+  fi
+}
+
+brief_header() {
+  cat <<EOF
+# Brief from the CrossAgent orchestrator
+
+You are a subagent of the CrossAgent orchestrator. You are not the main session. You run on the $HERE ($(specs)) in $ROOT. The orchestrator is a Claude Code session on the $1; your final message is your report to it, and it will check your work.
+
+Do only your task. Don't expand scope and don't ask questions: nobody can answer mid-run. Make the reasonable call, note it, and report.
+
+Fixed rules (they beat anything below):
+- Never run git commit, git push or anything else that writes git history. Git lives on the Mac.
+- Stay inside $ROOT. Don't install system packages unless the brief allows it. Don't touch ssh, firewall or security config.
+- Edit only the files the brief says you own. Leave the files it says other agents own alone.
+- No em dashes in anything you write.
+- CROSSAGENT.md and the crossagent skill are the orchestrator's tools, not yours. Don't run \`ca\`. You may use your own native subagents.
+- Permission prompts go to the user in the CrossAgent app. If one is denied, don't work around it, note it in your report.
+
+End with your report as your final message, in exactly this shape:
+
+## Summary
+## Files changed
+## Commands run
+## Verification
+## Problems or decisions
+## Next steps for the orchestrator
+
+Keep it short and factual. Paste real command output where it proves something.
+
+---
+
+EOF
+}
+
+r_check() {
+  local role="$1" cont="${2:-}" d; check_task "$role"; d="$(rdir "$role")"
+  r_alive "$d" || r_close_turn "$d" "$role" 1 "The worker loop went away before this turn finished."
+  ! r_running "$d" || die "$role is still running (turn $(r_turn "$d")), use: ca remote wait $HERE $role"
+  [ -z "$cont" ] || [ -s "$d/session" ] || die "no earlier conversation for $role, start one without --continue"
+}
+
+r_start() {
+  local role="$1" from=mac cont="" model="" at="" allow=() d n text r f; shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from) from="$2"; shift 2 ;;
+      --continue) cont=1; shift ;;
+      --allow) allow+=("$2"); shift 2 ;;
+      --model) model="$2"; shift 2 ;;
+      --approve-timeout) at="$2"; shift 2 ;;
+      *) die "__remote_start: unknown option $1" ;;
+    esac
+  done
+  r_check "$role" "$cont"
+  d="$(rdir "$role")"; text="$(cat)"
+  if [ -n "$cont" ]; then
+    n=$(( $(r_turn "$d") + 1 ))
+    printf '\n## Follow-up %s\n\n%s\n' "$(( n - 1 ))" "$text" >> "$d/brief.md"
+    printf '# Follow-up from the CrossAgent orchestrator\n\nSame task, same rules, same report format as before.\n\n---\n\n%s\n' "$text" > "$d/turn-$n.md"
+  else
+    # A new conversation for this role starts clean.
+    r_kill "$d" "$role"
+    mkdir -p "$d"
+    for f in "${d:?}"/*; do [ ! -f "$f" ] || rm -f "$f"; done
+    n=1
+    { brief_header "$from"; printf '%s\n' "$text"; } > "$d/brief.md"
+    cp "$d/brief.md" "$d/turn-1.md"
+  fi
+  for r in ${allow[@]+"${allow[@]}"}; do
+    case "$r" in *"
+"*) die "--allow rules are one line each" ;; esac
+    grep -qxF -- "$r" "$d/allow" 2>/dev/null || printf '%s\n' "$r" >> "$d/allow"
+  done
+  [ -z "$model" ] || echo "$model" > "$d/model"
+  [ -z "$at" ] || echo "$at" > "$d/approve_timeout"
+  rm -f "$d/stop"
+  r_ensure_loop "$d" "$role"
+  echo "$n" > "$d/turn.tmp" && mv "$d/turn.tmp" "$d/turn"
+  echo "$n"
+}
+
+# Kills the loop's whole process group (claude, ca-stream, ca-approve) and its tmux session.
+r_kill() {
+  local d="$1" s p g me; s="$(sname "$HERE" "$2")"
+  p="$(cat "$d/loop.pid" 2>/dev/null)" || p=""
+  if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
+    g="$(ps -o pgid= -p "$p" | tr -d ' ')"; me="$(ps -o pgid= -p $$ | tr -d ' ')"
+    if [ -n "$g" ] && [ "$g" != "$me" ]; then kill -TERM -- "-$g" 2>/dev/null || true; else kill "$p" 2>/dev/null || true; fi
+  fi
+  tmux kill-session -t "=$s" 2>/dev/null || true
+  rm -f "$d/loop.pid"
+}
+
+r_ensure_loop() {
+  local d="$1" role="$2" s i; s="$(sname "$HERE" "$role")"
+  r_alive "$d" && return 0
+  tmux kill-session -t "=$s" 2>/dev/null || true
+  tmux new-session -d -s "$s" -x 200 -y 50 -c "$ROOT" \
+    -e "CROSSAGENT_PROJECT=$SLUG" -e "CROSSAGENT_HOST=$HERE" -e "CROSSAGENT_NODE=$role" \
+    -e "CA_ROOT=$ROOT" -e "CA_SLUG=$SLUG" -e "CA_HERE=$HERE" "$CA" __remote_loop "$role"
+  for i in $(seq 50); do r_alive "$d" && return 0; sleep 0.1; done
+  die "couldn't start the worker loop in tmux session $s"
+}
+
+# Runs inside the tmux session: one turn at a time, as they get requested.
+r_loop() {
+  local role="$1" d n; d="$(rdir "$role")"
+  echo $$ > "$d/loop.pid"
+  # Ctrl+C in the pane stops the current turn, not the loop.
+  trap ':' INT
+  echo "[ca] remote worker $role on the $HERE in $ROOT"
+  while [ ! -f "$d/stop" ]; do
+    n="$(r_turn "$d")"
+    if [ "$n" -gt 0 ] && [ -f "$d/turn-$n.md" ] && [ ! -f "$d/turn-$n.exit" ]; then
+      r_turn_run "$d" "$role" "$n"
+      echo
+      echo "[ca] waiting for follow-ups (ca remote $HERE $role --continue)"
+    fi
+    sleep 1
+  done
+  rm -f "$d/loop.pid"
+}
+
+r_turn_run() {
+  local d="$1" role="$2" n="$3" s at py mcp r rc args
+  s="$(sname "$HERE" "$role")"; at="$(cat "$d/approve_timeout" 2>/dev/null || echo 300)"
+  py="$(command -v python3)"
+  mcp="$("$py" -I -c 'import json, sys
+a = sys.argv[1:]
+print(json.dumps({"mcpServers": {"crossagent": {"command": a[0], "args": ["-I", a[1]], "env": {
+    "CA_HOST": a[2], "CA_ROLE": a[3], "CA_PROJECT": a[4], "CA_TMUX": a[5], "CA_APPROVE_TIMEOUT": a[6]}}}}))
+' "$py" "$SKILL_DIR/scripts/ca-approve.py" "$HERE" "$role" "$SLUG" "$s" "$at")"
+  args=(-p --output-format stream-json --verbose --permission-mode acceptEdits
+        --mcp-config "$mcp" --permission-prompt-tool mcp__crossagent__approve)
+  [ ! -s "$d/model" ] || args+=(--model "$(cat "$d/model")")
+  [ "$n" = 1 ] || args+=(--resume "$(cat "$d/session")")
+  while IFS= read -r r; do [ -z "$r" ] || args+=(--allowedTools "$r"); done < <(cat "$d/allow" 2>/dev/null)
+  rm -f "$d/turn-$n.rc" "$d/turn-$n.err"
+  set +e
+  { env -u CROSSAGENT_ROLE -u CROSSAGENT_NODE -u CROSSAGENT_PROJECT -u CA_ROOT -u CA_SLUG -u CA_HERE \
+      CROSSAGENT_REMOTE_WORKER=1 MCP_TOOL_TIMEOUT=$(( (at + 60) * 1000 )) \
+      claude "${args[@]}" < "$d/turn-$n.md" 2> "$d/turn-$n.err"
+    echo $? > "$d/turn-$n.rc"
+  } | "$py" -I "$SKILL_DIR/scripts/ca-stream.py" --dir "$d" --turn "$n" --host "$HERE" --project "$SLUG" \
+        --role "$role" --tmux "$s" --cwd "$ROOT" --rc-file "$d/turn-$n.rc" --err-file "$d/turn-$n.err"
+  rc=$?
+  set -e
+  if [ ! -f "$d/result-$n.md" ]; then
+    printf '# %s on %s, turn %s\n\nThe turn was interrupted (exit %s) before a result came back.\n' "$role" "$HERE" "$n" "$rc" > "$d/result-$n.md"
+    cp "$d/result-$n.md" "$d/result.md"
+    r_event "$role" RemoteStop "turn=$n" "rc=$rc" "csid=$(cat "$d/session" 2>/dev/null)" "path=$d/result.md" "sum=Interrupted before a result came back"
+  fi
+  echo "$rc" > "$d/turn-$n.exit"
+}
+
+r_wait() {
+  local role="$1" n="${2:-}" t="${3:-100}" d end id sum seen=" " rc; check_task "$role"; d="$(rdir "$role")"
+  [ -f "$d/turn" ] || die "no remote worker $role in $NAME on the $HERE"
+  [ -n "$n" ] || n="$(r_turn "$d")"
+  echo "ca-turn $n"
+  end=$(( $(date +%s) + t ))
+  while [ ! -f "$d/turn-$n.exit" ]; do
+    r_alive "$d" || { r_close_turn "$d" "$role" 1 "The worker loop went away before this turn finished."; continue; }
+    while IFS=$'\t' read -r id sum; do
+      [ -n "$id" ] || continue
+      case "$seen" in *" $id "*) continue ;; esac
+      seen="$seen$id "
+      say "$role is waiting on approval $id: $sum. Answer it in CrossAgent or with: ca remote answer $HERE $id allow|deny"
+    done < <(pending "$(sname "$HERE" "$role")")
+    if [ "$(date +%s)" -ge "$end" ]; then
+      say "$role on $HERE is still running (turn $n). Run: ca remote wait $HERE $role"
+      exit 124
+    fi
+    sleep 1
+  done
+  cat "$d/result-$n.md" 2>/dev/null || true
+  rc="$(cat "$d/turn-$n.exit")"
+  say "$role on $HERE: turn $n, exit $rc, session $(cat "$d/session" 2>/dev/null || echo none). Follow up with: ca remote $HERE $role --continue --brief FILE"
+  exit "$rc"
+}
+
+r_answer() {
+  check_req "$1"
+  [ -f "$APPROVALS/$1.json" ] || die "no pending request $1"
+  printf '%s\n' "$2" > "$APPROVALS/$1.answer.tmp" && mv "$APPROVALS/$1.answer.tmp" "$APPROVALS/$1.answer"
+  echo "answered $1: $2"
+}
+
+r_status() {
+  local only="${1:-}" d role n st ids any=""
+  for d in "$ROOT/.crossagent/remote"/*; do
+    [ -f "$d/turn" ] || continue
+    role="$(basename "$d")"; [ -z "$only" ] || [ "$role" = "$only" ] || continue
+    any=1; n="$(r_turn "$d")"
+    if r_running "$d"; then st="running turn $n"
+    elif r_alive "$d"; then st="idle after turn $n, exit $(cat "$d/turn-$n.exit" 2>/dev/null || echo ?)"
+    else st="stopped after turn $n, exit $(cat "$d/turn-$n.exit" 2>/dev/null || echo ?)"; fi
+    ids="$(pending "$(sname "$HERE" "$role")" | cut -f1 | tr '\n' ' ' | sed 's/ $//')"
+    printf '%-4s %-20s %-30s session %s%s\n' "$HERE" "$role" "$st" "$(cat "$d/session" 2>/dev/null || echo -)" \
+      "${ids:+  approvals: $ids}"
+  done
+  [ -n "$any" ] || echo "no remote workers for $NAME on the $HERE${only:+ named $only}"
+}
+
+r_stop() {
+  local role="$1" d s n; check_task "$role"; d="$(rdir "$role")"; s="$(sname "$HERE" "$role")"
+  [ -f "$d/turn" ] || die "no remote worker $role in $NAME on the $HERE"
+  touch "$d/stop"
+  r_kill "$d" "$role"
+  r_close_turn "$d" "$role" 130 "Stopped with ca remote stop"
+  # Requests from a killed worker can't be answered any more.
+  pending "$s" | cut -f1 | while read -r n; do [ -z "$n" ] || rm -f "$APPROVALS/$n.json" "$APPROVALS/$n.answer"; done
+  echo "stopped $s (the session id is kept, --continue resumes it)"
+}
+
 usage() {
   cat <<'EOF'
 ca: split work across the Mac and the PC
@@ -770,7 +1187,25 @@ ca: split work across the Mac and the PC
                                 wait until done (default 110s), print results, exit with the task's code
   ca stop <host> <task>         kill the session
 
+Remote workers (headless Claude Code on the other machine, from the Mac; the pc-worker subagent uses these):
+  ca remote <host> <role> --brief FILE|- [--continue] [--allow RULE]... [--model M]
+            [--timeout S] [--approve-timeout S] [--detach]
+                                hand a brief to a worker in tmux session ca-<project>-<host>-<role>, wait
+                                (default 100s) and print its report. --continue sends a follow-up to the same
+                                conversation. --allow adds an allowedTools rule like 'Bash(npm test:*)'.
+                                Permission prompts go to CrossAgent (deny after --approve-timeout, default 300s)
+  ca remote wait <host> <role> [--timeout S]
+                                wait for the latest turn and print its report (exit 124 if still running)
+  ca remote answer <host> <request-id> allow|deny
+                                answer a pending permission request
+  ca remote status [<host> [<role>]]
+                                each worker: running, idle or stopped, its session id, pending approvals
+  ca remote stop <host> <role>  kill the worker; --continue picks the conversation up again later
+  ca remote template            print the brief template (needs: Goal, Context, Files, Task, Verification)
+
 Logs: .crossagent/logs/<task>.log, results: .crossagent/results/<task>.md, on the host that ran it.
+Remote workers keep their state in .crossagent/remote/<role>/ on their host, a copy of briefs and
+reports lands in .crossagent/remote/<host>-<role>/ on the Mac.
 <project> is the folder name as a slug (lowercase a-z 0-9 and -, max 16). Task names: up to 40 chars.
 Workers log WorkerStart/WorkerStop events to ~/.crossagent/events/<session>.jsonl.
 A single command string after -- runs through bash -c, so pipes and && work.
@@ -799,11 +1234,19 @@ case "$cmd" in
       *) die "usage: ca portal start|status|flush|conflicts|stop|push|pull" ;;
     esac ;;
   run) run "$@" ;;
+  remote) remote "$@" ;;
   status) status ;;
   logs) logs "$@" ;;
   wait) waitcmd "$@" ;;
   stop) stop "$@" ;;
   __run) runner "$@" ;;
+  __remote_check) r_check "$@" ;;
+  __remote_start) r_start "$@" ;;
+  __remote_loop) r_loop "$@" ;;
+  __remote_wait) r_wait "$@" ;;
+  __remote_answer) r_answer "$@" ;;
+  __remote_status) r_status "$@" ;;
+  __remote_stop) r_stop "$@" ;;
   __probe) probe ;;
   __status) local_status ;;
   help|-h|--help) usage ;;
