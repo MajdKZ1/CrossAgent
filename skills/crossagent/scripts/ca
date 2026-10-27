@@ -589,6 +589,9 @@ runner() {
   SLUG="${CROSSAGENT_PROJECT:-$SLUG}"
   local s; s="$(sname "$HERE" "$task")"
   event WorkerStart "$HERE" "$s" "$SLUG" "$task" "$ROOT" "$*"
+  # Ctrl+C in the worker's terminal is for the command, not for this runner: keep going so
+  # the result and WorkerStop still get written. A handler (not ignore) resets in children.
+  trap ':' INT
   if [ "$mode" = claude ]; then
     tmux pipe-pane -o -t "${TMUX_PANE:-}" "cat >> $(q "$log")" || true
     local p="$1
@@ -599,7 +602,7 @@ You are a crossagent worker on the $HERE, task '$task', in $ROOT. When you are d
   else
     echo "[ca] $HERE $task: $*"
     set +e
-    { if [ $# -eq 1 ]; then bash -c "$1"; else "$@"; fi; echo $? > "$d/run/$task.rc"; } 2>&1 | tee "$log"
+    { trap ':' INT; if [ $# -eq 1 ]; then bash -c "$1"; else "$@"; fi; echo $? > "$d/run/$task.rc"; } 2>&1 | tee -i "$log"
     set -e
     rc="$(cat "$d/run/$task.rc" 2>/dev/null || echo 1)"; rm -f "$d/run/$task.rc"
     {
