@@ -5,9 +5,12 @@ import Foundation
 // .jsonl files into `TranscriptItem`s and an AgentGraph, the views only read.
 //
 // Facts this is built on (Claude Code 2.1.311, same on the Mac and the PC):
-// - ~/.claude/sessions/<pid>.json: one per running session, with pid, sessionId, cwd,
-//   startedAt (ms), procStart (to catch pid reuse), name, status, updatedAt.
-// - ~/.claude/projects/<cwd with "/" and "." as "-">/<sessionId>.jsonl: the transcript.
+// - ~/.claude/sessions/<pid>.json: one per running session, removed on exit, with pid,
+//   sessionId, cwd, startedAt (ms), procStart, name (+ nameSource), status ("idle",
+//   "busy", "waiting" + waitingFor "permission prompt" / "input needed"), tmux
+//   ("<session>:@w.%p" when inside tmux). procStart catches pid reuse: on macOS it's
+//   `ps -o lstart` in UTC, on Linux the starttime field of /proc/<pid>/stat.
+// - ~/.claude/projects/<cwd, every non alphanumeric char as "-">/<sessionId>.jsonl.
 // - <sessionId>/subagents/agent-<agentId>.jsonl (+ .meta.json with toolUseId,
 //   agentType, description, name, finished): one per built-in subagent.
 
@@ -106,4 +109,26 @@ struct TranscriptItem: Identifiable, Equatable {
     var agentId: String?
     var isError: Bool = false
     var at: Date
+    /// toolUse: its id. toolResult: the id of the call it answers. Task notifications: the
+    /// Agent call they report on.
+    var toolUseId: String? = nil
+    /// What the line says about a subagent, for the graph. Nil on most items.
+    var signal: AgentSignal? = nil
+}
+
+/// Subagent lifecycle as a transcript shows it. Claude Code has three flavors:
+/// foreground agents (the Agent call returns when they're done), background agents
+/// (the call returns at once, a `<task-notification>` comes later) and in-process
+/// teammates (the call returns at once, they message the lead and go idle).
+enum AgentSignal: Equatable {
+    /// An Agent (or Task) tool call. `name` is input.name, else the description.
+    case spawn(name: String, prompt: String?)
+    /// The Agent call returned but the agent keeps going (background or teammate).
+    case launched(agentId: String)
+    /// Done: a foreground Agent result, a task notification, or a failed Agent call.
+    case finished(agentId: String?, ok: Bool, result: String?)
+    /// A teammate messaged the lead.
+    case message(from: String, text: String)
+    /// A teammate went idle, with its last result if it sent one.
+    case teammateIdle(name: String, result: String?)
 }
