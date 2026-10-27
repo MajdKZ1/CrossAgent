@@ -29,6 +29,15 @@ enum HostStore {
         Host(id: "pc", name: "Linux PC", type: .ssh, target: "pc", accent: "#5fd39a"),
     ]
 
+    #if DEBUG
+    /// A demo run's machines. hosts.json is never read or written then, and "PC" is
+    /// played by this Mac (see `DemoMode.spawn`).
+    static let demo: [Host] = [
+        Host(id: "mac", name: "Mac", type: .local, target: nil, accent: "#6ea8fe"),
+        Host(id: "pc", name: "PC", type: .ssh, target: "pc", accent: "#5fd39a"),
+    ]
+    #endif
+
     /// Accents handed to remote machines in the order they are added.
     static let accents = ["#5fd39a", "#f2a65a", "#c792ea", "#f07178", "#89ddff", "#ffcb6b"]
 
@@ -43,6 +52,9 @@ enum HostStore {
     /// someone else could have written (not ours, group or other writable, a symlink)
     /// is ignored, and so is any host with a bad id or ssh target.
     static func load() -> [Host] {
+        #if DEBUG
+        if DemoMode.isOn { return demo }
+        #endif
         let url = fileURL
         if let problem = PrivateFiles.check(url.path, directory: false), problem != .missing {
             NSLog("CrossAgent: ignoring %@ (%@)", url.path, "\(problem)")
@@ -145,6 +157,9 @@ enum HostStore {
 
     /// Appends `host` to hosts.json (0600, in a 0700 dir).
     static func add(_ host: Host) throws {
+        #if DEBUG
+        if DemoMode.isOn { throw AddError.unreadable }
+        #endif
         let url = fileURL
         PrivateFiles.ensureDir(configDir)
         let existing: Data?
@@ -161,7 +176,7 @@ enum HostStore {
     static let setupDismissedKey = "hostSetupDismissed"
 
     /// Show the setup sheet: nothing remote is set up and it was never skipped.
-    static func needsSetup(_ hosts: [Host], defaults store: UserDefaults = .standard) -> Bool {
+    static func needsSetup(_ hosts: [Host], defaults store: UserDefaults = AppDefaults.store) -> Bool {
         hosts.allSatisfy(\.isLocal) && !store.bool(forKey: setupDismissedKey)
     }
 }

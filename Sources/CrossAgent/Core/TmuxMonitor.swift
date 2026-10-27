@@ -393,6 +393,10 @@ final class TmuxMonitor: ObservableObject {
             let clockOffset = abs(offset) > 3 ? offset : 0
             res.sessions = TmuxPoll.sessions(hostId: host.id, output: out, previous: previous,
                                              clockOffset: clockOffset, withCaptures: fast)
+            #if DEBUG
+            // One demo tmux server plays both machines: the name says whose session it is.
+            if DemoMode.isOn { res.sessions = res.sessions.filter { $0.name.contains("-\(host.id)-") } }
+            #endif
             return res
         }.value
     }

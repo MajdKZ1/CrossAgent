@@ -165,6 +165,9 @@ extension AppState {
     /// The first connect to a fresh host uploads Mutagen's agent, so it can take a minute.
     func startSync() async -> (ok: Bool, output: String) {
         guard let project else { return (false, "No project open") }
+        #if DEBUG
+        if DemoMode.isOn { return (true, "Portal open: ~/Projects/demo <-> pc:~/Projects/demo") }
+        #endif
         let path = CommandBuilder.shellQuote(project.path)
         let script = CommandBuilder.pathPrefix
             + "cd \(path) && CA_ROOT=\(path) exec \"$HOME/.claude/skills/crossagent/scripts/ca\" sync start"

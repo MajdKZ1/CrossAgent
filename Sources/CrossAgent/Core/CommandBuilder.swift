@@ -91,6 +91,9 @@ enum CommandBuilder {
     static func command(host: Host, mode: PaneMode, session: String, cwd: String? = nil, env: [String: String] = [:],
                         attachOnly: Bool = false, program: String? = nil, localShell: String = LocalShell.path) -> SpawnCommand {
         let s = script(mode: mode, session: session, cwd: cwd, env: env, attachOnly: attachOnly, program: program)
+        #if DEBUG
+        if DemoMode.isOn { return DemoMode.spawn(script: s) }
+        #endif
         switch host.type {
         case .local:
             return SpawnCommand(executable: localShell, args: ["-lc", s])
@@ -124,6 +127,9 @@ enum CommandBuilder {
     /// Runs a short script in a login shell on the host (no PTY).
     static func oneShot(host: Host, script: String, localShell: String = LocalShell.path) -> SpawnCommand {
         let s = pathPrefix + script
+        #if DEBUG
+        if DemoMode.isOn { return DemoMode.spawn(script: s) }
+        #endif
         switch host.type {
         case .local:
             return SpawnCommand(executable: localShell, args: ["-lc", s])
@@ -155,6 +161,10 @@ enum SSH {
     /// refuses (hosts built in code skip `load`) never reaches ssh at all: the command
     /// just fails with a message, like an unreachable host would.
     static func command(_ options: [String], host: Host, remote: String) -> SpawnCommand {
+        #if DEBUG
+        // A demo never reaches another machine: the remote command runs here instead.
+        if DemoMode.isOn { return DemoMode.spawn(script: remote) }
+        #endif
         let target = host.target ?? host.id
         guard HostStore.isValidTarget(target) else {
             return SpawnCommand(executable: "/bin/sh",

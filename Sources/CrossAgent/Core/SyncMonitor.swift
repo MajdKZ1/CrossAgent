@@ -267,6 +267,12 @@ final class SyncMonitor: ObservableObject {
     }
 
     private func poll() async {
+        #if DEBUG
+        if DemoMode.isOn {
+            pollDemo()
+            return
+        }
+        #endif
         if let b = binary, !FileManager.default.isExecutableFile(atPath: b) { binary = nil }
         if binary == nil, Date().timeIntervalSince(lastLookup) >= Self.lookupInterval {
             lastLookup = Date()
@@ -286,6 +292,24 @@ final class SyncMonitor: ObservableObject {
     }
 
     func isCrossing(_ s: SyncSession) -> Bool { crossing.contains(s.id) }
+
+    #if DEBUG
+    private var demoCycles: UInt64 = 40
+
+    /// A demo has one made up portal, ~/Projects/demo to the "PC", that moves files now and then.
+    private func pollDemo() {
+        if Int.random(in: 0..<6) == 0 { demoCycles += 1 }
+        let json = """
+        [{"identifier":"sync_demo","name":"ca-demo","status":"watching","successfulCycles":\(demoCycles),
+          "alpha":{"protocol":"local","path":"~/Projects/demo","connected":true},
+          "beta":{"protocol":"ssh","host":"pc","path":"~/Projects/demo","connected":true}}]
+        """
+        let found = SyncSession.parse(Data(json.utf8))
+        if !installed { installed = true }
+        noteCrossing(found)
+        if sessions != found { sessions = found }
+    }
+    #endif
 
     private func noteCrossing(_ found: [SyncSession]) {
         let now = Date()

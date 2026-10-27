@@ -125,9 +125,18 @@ struct StationView: View {
 
     /// Live Claude sessions in this project that aren't CrossAgent tiles already
     /// (Ghostty, Terminal, plain tmux, ssh ...). Same click as in the Sessions tab.
+    /// A demo station is the scripted ca-demo tiles and nothing else.
+    private static var demo: Bool {
+        #if DEBUG
+        return DemoMode.isOn
+        #else
+        return false
+        #endif
+    }
+
     @ViewBuilder private var sessionsStrip: some View {
         let live = discovery.sessions.filter { $0.isRunning && $0.launcher != .crossAgent && app.sessionInProject($0) }
-        if !live.isEmpty {
+        if !live.isEmpty, !Self.demo {
             let shown = live.prefix(Self.stripMax)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 7) {

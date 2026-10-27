@@ -78,7 +78,11 @@ struct Project: Codable, Hashable, Identifiable {
     /// `$HOME/<pcRelativePath>`, left for the remote login shell to expand
     /// (`CommandBuilder.shellPath` quotes it that way).
     func cwd(for host: Host) -> String {
-        host.isLocal ? path : "$HOME/" + pcRelativePath
+        #if DEBUG
+        // Demo panes all run in the fake home, so prompts read ~/Projects/demo.
+        if DemoMode.isOn { return "$HOME/" + pcRelativePath }
+        #endif
+        return host.isLocal ? path : "$HOME/" + pcRelativePath
     }
 
     private static func isAlnum(_ ch: Unicode.Scalar) -> Bool {
@@ -171,12 +175,22 @@ struct ProjectStore {
     static let lastProjectKey = "lastProject.v1"
     static let maxRecents = 10
 
-    var defaults: UserDefaults = .standard
-    var stateDir: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("CrossAgent/projects", isDirectory: true)
+    var defaults: UserDefaults = AppDefaults.store
+    var stateDir: URL = Self.defaultStateDir
+
+    static var defaultStateDir: URL {
+        #if DEBUG
+        if DemoMode.isOn { return DemoMode.stateDir }
+        #endif
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("CrossAgent/projects", isDirectory: true)
+    }
 
     /// Newest first. Folders that no longer exist are dropped.
     func recents() -> [RecentProject] {
+        #if DEBUG
+        if DemoMode.isOn { return DemoMode.recents() }
+        #endif
         let all = storedRecents()
         let alive = all.filter { Self.folderExists($0.path) }
         if alive.count != all.count { saveRecents(alive) }

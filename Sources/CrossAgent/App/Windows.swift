@@ -99,6 +99,9 @@ final class ProjectWindows: NSObject, ObservableObject, NSWindowDelegate {
 
     /// Opens an ssh master per remote host in the background so the first pane opens fast.
     private func warmUpConnections() {
+        #if DEBUG
+        if DemoMode.isOn { return }
+        #endif
         for host in hosts where !host.isLocal {
             Task.detached { _ = Runner.runSync(CommandBuilder.oneShot(host: host, script: "true"), timeout: 30) }
         }
@@ -110,6 +113,13 @@ final class ProjectWindows: NSObject, ObservableObject, NSWindowDelegate {
     /// already. A welcome window is replaced. `from` gets the error toast.
     func open(_ url: URL, from: AppState? = nil) {
         let path = url.standardizedFileURL.path
+        #if DEBUG
+        // The made up recents are only for show: a demo never opens a real folder.
+        if DemoMode.isOn, !DemoMode.isDemoProject(path) {
+            (from ?? current)?.flash("Only the demo project opens in a demo")
+            return
+        }
+        #endif
         guard ProjectStore.folderExists(path) else {
             (from ?? current)?.flash("That folder is gone")
             store.removeRecent(path: path)
@@ -125,8 +135,8 @@ final class ProjectWindows: NSObject, ObservableObject, NSWindowDelegate {
         state.monitor = monitor
         let win = makeWindow(for: state, title: Project(url: url).name)
         let name = Self.frameName(path: path)
-        if !win.setFrameUsingName(name) { place(win, like: welcome?.window) }
-        win.setFrameAutosaveName(name)
+        if !Self.autosavesFrames || !win.setFrameUsingName(name) { place(win, like: welcome?.window) }
+        if Self.autosavesFrames { win.setFrameAutosaveName(name) }
         entries.insert(Entry(state: state, window: win), at: 0)
         current = state
         state.openProject(url)
@@ -144,8 +154,8 @@ final class ProjectWindows: NSObject, ObservableObject, NSWindowDelegate {
         let state = AppState(hosts: hosts)
         state.monitor = monitor
         let win = makeWindow(for: state, title: "CrossAgent")
-        if !win.setFrameUsingName(Self.welcomeFrameName) { place(win, like: nil) }
-        win.setFrameAutosaveName(Self.welcomeFrameName)
+        if !Self.autosavesFrames || !win.setFrameUsingName(Self.welcomeFrameName) { place(win, like: nil) }
+        if Self.autosavesFrames { win.setFrameAutosaveName(Self.welcomeFrameName) }
         entries.insert(Entry(state: state, window: win), at: 0)
         current = state
         show(win)
@@ -189,7 +199,7 @@ final class ProjectWindows: NSObject, ObservableObject, NSWindowDelegate {
         if !quitting, e.state.project != nil, entries.contains(where: { $0.state.project != nil }) { saveOpenList() }
         e.state.closeProject()
         e.state.monitor = nil
-        win.saveFrame(usingName: win.frameAutosaveName)
+        if !win.frameAutosaveName.isEmpty { win.saveFrame(usingName: win.frameAutosaveName) }
         // Frees the name in case the project opens again while this window still lives.
         win.setFrameAutosaveName("")
         win.delegate = nil
@@ -260,6 +270,15 @@ final class ProjectWindows: NSObject, ObservableObject, NSWindowDelegate {
     // MARK: Frame names
 
     static let welcomeFrameName = "CrossAgent.welcome"
+
+    /// Frames are saved in the standard defaults, which a demo never writes.
+    static var autosavesFrames: Bool {
+        #if DEBUG
+        return !DemoMode.isOn
+        #else
+        return true
+        #endif
+    }
 
     /// Per project frame autosave name, from a hash so the path itself isn't in defaults.
     static func frameName(path: String) -> String {
