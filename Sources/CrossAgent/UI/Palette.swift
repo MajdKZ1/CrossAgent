@@ -2,30 +2,36 @@ import AppKit
 import SwiftUI
 
 /// SwiftUI colors and sizes for the window chrome. Terminal colors live in Theme.
+/// Colors follow the current theme. Reading one inside a view body subscribes that
+/// view to theme switches (ThemeTokens is @Observable), so nothing else is needed.
 enum Palette {
-    static let window = Color(nsColor: Theme.window)
-    static let pane = Color(nsColor: Theme.pane)
-    static let border = Color.white.opacity(0.07)
-    static let hairline = Color.white.opacity(0.05)
-    static let text = Color(nsColor: NSColor(hex: "#d7dae0"))
-    static let muted = Color(nsColor: NSColor(hex: "#8a909c"))
-    static let faint = Color(nsColor: NSColor(hex: "#5b616c"))
-    static let connecting = Color(nsColor: NSColor(hex: "#f5b041"))
-    static let exited = Color(nsColor: NSColor(hex: "#5b616c"))
+    private static var t: ResolvedTheme { ThemeTokens.shared.resolved }
+
+    static var window: Color { Color(nsColor: t.window) }
+    static var pane: Color { Color(nsColor: t.surface) }
+    /// One step above `pane`, for popovers and cards.
+    static var raised: Color { Color(nsColor: t.raised) }
+    static var border: Color { Color(nsColor: t.border) }
+    static var hairline: Color { Color(nsColor: t.hairline) }
+    static var text: Color { Color(nsColor: t.text) }
+    static var muted: Color { Color(nsColor: t.muted) }
+    static var faint: Color { Color(nsColor: t.faint) }
+    static var connecting: Color { Color(nsColor: t.warning) }
+    static var exited: Color { Color(nsColor: t.faint) }
     /// Broadcast toggle and the bar across the top while it is on.
-    static let broadcast = Color(nsColor: NSColor(hex: "#ff9f6e"))
+    static var broadcast: Color { Color(nsColor: t.broadcast) }
     /// Sync indicator when every session is synced and watching.
-    static let synced = Color(nsColor: NSColor(hex: "#8fd694"))
-    /// Primary actions and the drop highlight. Same blue as the Mac accent.
-    static let primary = Color(nsColor: NSColor(hex: "#6ea8fe"))
-    static let danger = Color(nsColor: NSColor(hex: "#f07178"))
-    static let success = Color(nsColor: NSColor(hex: "#5fd39a"))
-    static let warning = Color(nsColor: NSColor(hex: "#f5b041"))
+    static var synced: Color { Color(nsColor: t.synced) }
+    /// Primary actions and the drop highlight.
+    static var primary: Color { Color(nsColor: t.accent) }
+    static var danger: Color { Color(nsColor: t.danger) }
+    static var success: Color { Color(nsColor: t.success) }
+    static var warning: Color { Color(nsColor: t.warning) }
     /// Mascot body and eyes, from the theme.
-    static let mascotBody = Color(nsColor: NSColor(hex: "#b3dcff"))
-    static let mascotEyes = Color(nsColor: NSColor(hex: "#0b1218"))
-    static let chip = Color.white.opacity(0.04)
-    static let chipHover = Color.white.opacity(0.08)
+    static var mascotBody: Color { Color(nsColor: t.mascotBody) }
+    static var mascotEyes: Color { Color(nsColor: t.mascotEyes) }
+    static var chip: Color { Color(nsColor: t.chip) }
+    static var chipHover: Color { Color(nsColor: t.chipHover) }
 
     static let radius: CGFloat = 10
     static let gap: CGFloat = 6
@@ -34,7 +40,9 @@ enum Palette {
     /// Room for the traffic lights, which sit over the top bar.
     static let trafficLightInset: CGFloat = 78
 
-    static func accent(_ host: Host) -> Color { Color(nsColor: NSColor(hex: host.accent)) }
+    /// Host accents come from hosts.json unless the theme overrides that host.
+    static func accent(_ host: Host) -> Color { Color(nsColor: hostAccent(host)) }
+    static func hostAccent(_ host: Host) -> NSColor { t.hosts[host.id] ?? NSColor(hex: host.accent) }
 }
 
 /// Small rounded control used across the chrome.
