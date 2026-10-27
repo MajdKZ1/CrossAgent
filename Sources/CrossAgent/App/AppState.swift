@@ -9,7 +9,8 @@ enum AppMode: String, Codable { case panes, station, orchestrator, activity, ses
 /// One per window, see ProjectWindows.
 @MainActor
 final class AppState: ObservableObject {
-    let hosts: [Host]
+    /// From hosts.json. Replaced at runtime by `setHosts` when a machine is added.
+    @Published private(set) var hosts: [Host]
     /// Watches ca-* tmux sessions on every host. Feeds the station and free name picking.
     /// Shared by every window, set by ProjectWindows.
     var monitor: TmuxMonitor? {
@@ -84,6 +85,16 @@ final class AppState: ObservableObject {
     }
 
     func host(_ id: String) -> Host? { hosts.first { $0.id == id } }
+
+    /// New host list at runtime. Open panes keep running (each holds its own host);
+    /// the popover, chips, activity and the orchestrator's graph and followers see the
+    /// new list. The window's shared monitors are updated by `ProjectWindows.reloadHosts`.
+    func setHosts(_ new: [Host]) {
+        guard new != hosts else { return }
+        hosts = new
+        orch?.controller.setHosts(new)
+        if host(lastHostID) == nil, let first = new.first { lastHostID = first.id }
+    }
 
     /// The station is a tab. Turning it off goes back to the tab before it.
     var showStation: Bool {

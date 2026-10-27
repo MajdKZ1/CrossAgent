@@ -8,7 +8,7 @@ final class OrchestratorController: ObservableObject {
     let slug: String
     let macPath: String
     let pcRelativePath: String
-    let hosts: [Host]
+    private(set) var hosts: [Host]
     let graph: AgentGraph
 
     /// Our hooks are in the project's local settings on this Mac.
@@ -95,6 +95,39 @@ final class OrchestratorController: ObservableObject {
         for f in followers { f.start() }
         ticker = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak graph] _ in
             MainActor.assumeIsolated { graph?.tick(now: Date()) }
+        }
+    }
+
+    /// New host list at runtime. The graph learns it right away. While following, hosts
+    /// that are gone lose their follower and new ones get the hook script and a follower;
+    /// project hooks on a new host come with the next enable, like any host whose folder
+    /// wasn't there yet.
+    func setHosts(_ new: [Host]) {
+        guard new != hosts else { return }
+        let old = hosts
+        hosts = new
+        graph.hosts = new
+        guard isRunning else { return }
+        let ids = Set(new.map(\.id))
+        followers.removeAll { f in
+            let gone = !ids.contains(f.host.id) || new.first(where: { $0.id == f.host.id }) != f.host
+            if gone { f.stop() }
+            return gone
+        }
+        let slug = slug
+        let paths = projectPaths
+        RemoteEventLog.register(project: slug, projectPaths: paths)
+        for h in new where old.first(where: { $0.id == h.id }) != h {
+            let f = EventFollower(host: h) { [weak graph] events in
+                graph?.apply(events, project: slug, projectPaths: paths)
+                RemoteEventLog.add(events, project: slug)
+            }
+            followers.append(f)
+            if isEnabled, !h.isLocal {
+                Task { _ = await HookInstaller.installHookScript(on: h); f.start() }
+            } else {
+                f.start()
+            }
         }
     }
 

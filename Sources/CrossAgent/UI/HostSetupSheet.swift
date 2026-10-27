@@ -3,7 +3,7 @@ import SwiftUI
 
 /// "Add a remote machine": ssh target, name, id, a Test button, Add and Skip. Shown on
 /// first run while only this Mac is set up, and from Add Remote Machine... in the menu.
-/// Hosts are read once at launch, so a new one shows up after a restart.
+/// A new host is live right away: every window, monitor and orchestrator gets it.
 @MainActor
 final class HostSetupWindow: NSObject, NSWindowDelegate {
     static let shared = HostSetupWindow()
@@ -172,15 +172,12 @@ struct HostSetupView: View {
             Text("Added \(label)")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Palette.text)
-            Text("Restart CrossAgent to start using it.")
+            Text("It's in the New pane list now.")
                 .font(.system(size: 11))
                 .foregroundStyle(Palette.muted)
             HStack(spacing: 6) {
                 Spacer()
-                Button("Later", action: done)
-                    .buttonStyle(ChromeButtonStyle())
-                    .keyboardShortcut(.cancelAction)
-                Button("Restart Now") { AppRelauncher.relaunch() }
+                Button("Done", action: done)
                     .buttonStyle(ChromeButtonStyle(active: true, tint: Palette.primary))
                     .keyboardShortcut(.defaultAction)
             }
@@ -235,6 +232,7 @@ struct HostSetupView: View {
             try HostStore.add(host)
             UserDefaults.standard.set(true, forKey: HostStore.setupDismissedKey)
             added = host.name
+            ProjectWindows.shared.reloadHosts()
         } catch {
             self.error = switch error as? HostStore.AddError {
             case .duplicateID?: "That id is already in hosts.json"
@@ -242,22 +240,5 @@ struct HostSetupView: View {
             default: "Couldn't save hosts.json"
             }
         }
-    }
-}
-
-/// Quits and opens the app again once this process is gone. Windows and panes come back
-/// the same way they do after any quit. A bare binary (swift run) just quits.
-@MainActor
-enum AppRelauncher {
-    static func relaunch() {
-        let bundle = Bundle.main.bundlePath
-        if bundle.hasSuffix(".app") {
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/bin/sh")
-            p.arguments = ["-c", "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; exec /usr/bin/open \"$2\"",
-                           "relaunch", "\(getpid())", bundle]
-            try? p.run()
-        }
-        NSApp.terminate(nil)
     }
 }

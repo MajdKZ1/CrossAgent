@@ -52,6 +52,19 @@ final class Automation {
         case "quit":
             NSApp.terminate(nil)
             return
+        case "reloadHosts":
+            // {"cmd":"reloadHosts","out":"/tmp/h.json"} rereads hosts.json like Add does, then
+            // writes the host ids each consumer holds.
+            windows.reloadHosts()
+            let ids: [String: [String]] = [
+                "windows": windows.hosts.map(\.id),
+                "apps": windows.states.flatMap { $0.hosts.map(\.id) },
+                "tmux": windows.monitor.hosts.map(\.id),
+                "discovery": SessionDiscovery.shared.hosts.map(\.id),
+                "activity": ActivityMonitor.shared.hosts.map(\.hostId),
+            ]
+            write((try? JSONSerialization.data(withJSONObject: ids, options: [.sortedKeys])) ?? Data(), to: cmd["out"] as? String)
+            return
         case "hostSetup":
             // {"cmd":"hostSetup","firstRun":true,"target":"pc","test":true,"out":"/tmp/setup.png"}
             // opens Add Remote Machine, prefilled and tested. "close": true closes it instead.

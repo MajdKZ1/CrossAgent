@@ -272,6 +272,28 @@ final class TmuxMonitor: ObservableObject {
 
     var isRunning: Bool { !loops.isEmpty }
 
+    /// Swaps in a new host list (a host was added or removed). Polling stops for hosts
+    /// that are gone and, if the monitor is running, starts for new ones.
+    func setHosts(_ new: [Host]) {
+        guard new != hosts else { return }
+        let wasRunning = isRunning
+        let ids = Set(new.map(\.id))
+        for (id, loop) in loops where !ids.contains(id) {
+            loop.cancel()
+            loops[id] = nil
+            sessions[id] = nil
+            reachable[id] = nil
+            lastError[id] = nil
+        }
+        // A host whose details changed (say its target) restarts with the new ones.
+        for h in new where loops[h.id] != nil && hosts.first(where: { $0.id == h.id }) != h {
+            loops[h.id]?.cancel()
+            loops[h.id] = nil
+        }
+        hosts = new
+        if wasRunning { start() }
+    }
+
     func start() {
         for host in hosts where loops[host.id] == nil {
             nextDue[host.id] = .distantPast

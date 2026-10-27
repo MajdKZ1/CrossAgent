@@ -14,7 +14,7 @@ final class ProjectWindows: NSObject, ObservableObject, NSWindowDelegate {
         let window: NSWindow
     }
 
-    let hosts: [Host]
+    @Published private(set) var hosts: [Host]
     let monitor: TmuxMonitor
     let store = ProjectStore()
     /// Front first: the key window, then the ones focused before it.
@@ -37,6 +37,19 @@ final class ProjectWindows: NSObject, ObservableObject, NSWindowDelegate {
             let win = note.object as? NSWindow
             MainActor.assumeIsolated { self?.bringToFront(win) }
         }
+    }
+
+    /// Rereads hosts.json and hands the new list to every window and everything that
+    /// polls hosts: tmux monitor, session discovery, activity samplers, orchestrators.
+    /// Open panes are left alone. Called after a machine is added.
+    func reloadHosts() {
+        let new = HostStore.load()
+        guard new != hosts else { return }
+        hosts = new
+        monitor.setHosts(new)
+        SessionDiscovery.shared.setHosts(new)
+        ActivityMonitor.shared.setHosts(new)
+        for s in states { s.setHosts(new) }
     }
 
     // MARK: Lookup

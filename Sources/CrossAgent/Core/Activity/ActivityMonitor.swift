@@ -59,6 +59,13 @@ final class ActivityMonitor: ObservableObject {
 
     func host(_ id: String) -> HostActivity? { hosts.first { $0.hostId == id } }
 
+    /// New host list at runtime. Samplers are rebuilt only if the list really changed,
+    /// and sampling carries on if it was on.
+    func setHosts(_ list: [Host]) {
+        guard !configured.isEmpty else { return }
+        configure(list)
+    }
+
     private func configure(_ list: [Host]) {
         let ordered = list.filter(\.isLocal) + list.filter { !$0.isLocal }
         guard ordered != configured else { return }

@@ -304,7 +304,7 @@ final class SessionDiscovery: ObservableObject {
         set { defaults.set(newValue, forKey: Self.recentDaysKey); lastRecent = [:] }
     }
 
-    let hosts: [Host]
+    private(set) var hosts: [Host]
     private let defaults: UserDefaults
     private let local: LocalSessionScanner
     private let localQueue = DispatchQueue(label: "crossagent.sessions.discovery")
@@ -356,6 +356,28 @@ final class SessionDiscovery: ObservableObject {
         await withTaskGroup(of: Void.self) { group in
             for h in hosts { group.addTask { await self.poll(h) } }
         }
+    }
+
+    /// New host list at runtime: loops stop for hosts that are gone (their sessions go
+    /// with them) and start for new ones while anything is watching.
+    func setHosts(_ new: [Host]) {
+        guard new != hosts else { return }
+        let ids = Set(new.map(\.id))
+        for h in hosts where !ids.contains(h.id) || new.first(where: { $0.id == h.id }) != h {
+            loops[h.id]?.cancel()
+            loops[h.id] = nil
+            if !ids.contains(h.id) {
+                running[h.id] = nil
+                recent[h.id] = nil
+                remoteHeads[h.id] = nil
+                lastRecent[h.id] = nil
+                hostErrors[h.id] = nil
+            }
+        }
+        hosts = new
+        let all = hosts.flatMap { (running[$0.id] ?? []) + (recent[$0.id] ?? []) }
+        sessions = sessions.filter { s in all.contains { $0.hostId == s.hostId && $0.sessionId == s.sessionId } }
+        if viewers > 0 { startLoops() }
     }
 
     // MARK: Polling
