@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/icon/CrossAgent-1024.png" width="128" alt="CrossAgent icon"></p>
+
 # CrossAgent
 
 One window, every workstation. CrossAgent is a native macOS app that puts Claude Code (or a plain shell) on your Mac and on your Linux box side by side, in one grid of terminal panes. Remote panes go over plain `ssh`, and every pane lives in tmux on its own host, so closing the window never kills your work. Open it again and everything reattaches.
