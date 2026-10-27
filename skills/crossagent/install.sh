@@ -124,17 +124,18 @@ for h in $targets; do
   t="$(field "$h" 3)"
   if [ "$wrap" != remove ]; then
     # shellcheck disable=SC2086
-    if ! ssh $SSH_OPTS -o ConnectTimeout=20 "$t" 'mkdir -p ~/.claude/skills/crossagent' < /dev/null; then
+    if ! ssh $SSH_OPTS -o ConnectTimeout=20 -- "$t" 'mkdir -p ~/.claude/skills/crossagent' < /dev/null; then
       echo "$h: can't reach it with ssh $t, skipped" >&2; fail=1; continue
     fi
+    # No -- in -e (rsync may add -l user before the host); ca hosts add refuses targets starting with -.
     "${RSYNC[@]}" -e "ssh $SSH_OPTS" "$SRC/" "$t:.claude/skills/crossagent/"
     echo "$h: installed to ~/.claude/skills/crossagent"
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS "$t" "CA_HERE=$h ~/.claude/skills/crossagent/scripts/ca __setup_remote $HUB $(q "$(field "$h" 4)")" < /dev/null
+    ssh $SSH_OPTS -- "$t" "CA_HERE=$h ~/.claude/skills/crossagent/scripts/ca __setup_remote $HUB $(q "$(field "$h" 4)")" < /dev/null
   fi
   if [ -n "$wrap" ]; then
     # shellcheck disable=SC2086
-    { declare -f rc_blocks; echo "rc_blocks $wrap $h"; } | ssh $SSH_OPTS -o ConnectTimeout=20 "$t" bash -s
+    { declare -f rc_blocks; echo "rc_blocks $wrap $h"; } | ssh $SSH_OPTS -o ConnectTimeout=20 -- "$t" bash -s
   fi
 done
 exit "$fail"

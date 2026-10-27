@@ -58,7 +58,7 @@ dies "hosts add refuses an existing host" "already in hosts.json" "$CA" hosts ad
 dies "hosts add needs ssh to work" "can't reach 'nowhere'" "$CA" hosts add far nowhere
 "$CA" hosts add box box Big Box > "$T/add" 2>&1
 t "hosts add box" grep -q "added box (ssh box)" "$T/add"
-t "the check used BatchMode and a timeout" grep -qF -- "-o BatchMode=yes -o ConnectTimeout=10 box true" "$FAKE_SSH_LOG"
+t "the check used BatchMode and a timeout" grep -qF -- "-o BatchMode=yes -o ConnectTimeout=10 -- box true" "$FAKE_SSH_LOG"
 t "hosts.json keeps the others and gets box" python3 -I -c '
 import json, sys
 h = json.load(open(sys.argv[1]))["hosts"]
@@ -207,6 +207,38 @@ t "the hub gets build-box-worker" grep -q 'ca remote build-box <role>' "$H2/.cla
 
 t "every ca ssh call shares ~/.crossagent/ssh" sh -c "! grep -v 'BatchMode=yes' '$FAKE_SSH_LOG' | grep -vqF 'ControlPath=~/.crossagent/ssh/%C'"
 t "~/.crossagent/ssh is 0700 here" sh -c "ls -ld '$HOME/.crossagent/ssh' | grep -q '^drwx------'"
+t "every ssh call ca makes has -- before the target" sh -c "! grep -v 'rsync --server' '$FAKE_SSH_LOG' | grep -vqE ' -- (pc|box|nowhere)( |\$)'"
+
+echo "== private config"
+for c in "$HOME/.config/crossagent" "$FAKE_REMOTE/.config/crossagent"; do
+  t "$(basename "$(dirname "$(dirname "$c")")"): ~/.config/crossagent is 0700, its files 0600" python3 -I -c '
+import os, sys
+d = sys.argv[1]
+ok = os.stat(d).st_mode & 0o777 == 0o700
+for n in ("hosts.json", "hubs", "system-map.md", "projects"):
+    p = os.path.join(d, n)
+    if os.path.exists(p):
+        ok = ok and os.stat(p).st_mode & 0o777 == 0o600
+sys.exit(0 if ok else 1)' "$c"
+done
+chmod 755 "$HOME/.config/crossagent"; chmod 644 "$HOME/.config/crossagent/projects"
+"$CA" hosts > /dev/null 2>&1
+t "a loose config dir and file get tightened" sh -c "ls -ld '$HOME/.config/crossagent' | grep -q '^drwx------' && ls -l '$HOME/.config/crossagent/projects' | grep -q '^-rw-------'"
+chmod 666 "$PH/.config/crossagent/hubs"
+HOME="$PH" CA_HERE=pc "$CA" hosts > "$T/hubs-open" 2>&1
+t "a hubs file others can write is ignored, not tightened" sh -c "grep -q 'ignoring .*hubs' '$T/hubs-open' && ! grep -q '^mac ' '$T/hubs-open' && ls -l '$PH/.config/crossagent/hubs' | grep -q '^-rw-rw-rw-'"
+chmod 644 "$PH/.config/crossagent/hubs"; HOME="$PH" CA_HERE=pc "$CA" hosts > "$T/hubs-ro" 2>&1
+chmod 664 "$PH/.config/crossagent/hubs"; HOME="$PH" CA_HERE=pc "$CA" __setup_remote mac "Linux PC" > "$T/hubs-setup" 2>&1
+t "install replaces a group writable hubs file" sh -c "grep -q 'replaced ~/.config/crossagent/hubs' '$T/hubs-setup' && ls -l '$PH/.config/crossagent/hubs' | grep -q '^-rw-------' && grep -qx mac '$PH/.config/crossagent/hubs' && [ -e '$PH/.claude/agents/mac-worker.md' ]"
+chmod 644 "$PH/.config/crossagent/hubs"; HOME="$PH" CA_HERE=pc "$CA" hosts > "$T/hubs-ro" 2>&1
+t "a readable one is tightened to 0600 and used" sh -c "ls -l '$PH/.config/crossagent/hubs' | grep -q '^-rw-------' && grep -q '^mac .*set this machine up' '$T/hubs-ro'"
+echo mac > "$T/hubs-elsewhere"; chmod 600 "$T/hubs-elsewhere"; rm -f "$PH/.config/crossagent/hubs"; ln -s "$T/hubs-elsewhere" "$PH/.config/crossagent/hubs"
+HOME="$PH" CA_HERE=pc "$CA" hosts > "$T/hubs-link" 2>&1
+t "a symlinked hubs file is ignored" sh -c "grep -q 'ignoring .*hubs' '$T/hubs-link' && ! grep -q '^mac ' '$T/hubs-link'"
+rm -f "$PH/.config/crossagent/hubs"; echo mac > "$PH/.config/crossagent/hubs"
+mkdir -p "$T/realconf"; chmod 755 "$T/realconf"; mkdir -p "$T/lhome/.config"; ln -s "$T/realconf" "$T/lhome/.config/crossagent"
+HOME="$T/lhome" "$CA" hosts > /dev/null 2>&1
+t "a symlinked config dir is never chmodded through" sh -c "ls -ld '$T/realconf' | grep -q '^drwxr-xr-x'"
 
 echo "== claude wrapper"
 if script -q /dev/null true < /dev/null > /dev/null 2>&1; then

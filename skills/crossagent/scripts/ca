@@ -35,9 +35,21 @@ target_ok() { case "$1" in ""|-*|*[[:space:][:cntrl:]]*) return 1 ;; esac; [ "${
 private_dirs() {
   local d
   (umask 077 && mkdir -p "$HOME/.crossagent/ssh" "$HOME/.crossagent/events" "$HOME/.crossagent/approvals") 2>/dev/null || true
-  for d in "$HOME/.crossagent" "$HOME/.crossagent/ssh" "$HOME/.crossagent/events" "$HOME/.crossagent/approvals" "$HOME/.crossagent/bin"; do
+  (umask 077 && mkdir -p "$CONF") 2>/dev/null || true
+  for d in "$HOME/.crossagent" "$HOME/.crossagent/ssh" "$HOME/.crossagent/events" "$HOME/.crossagent/approvals" "$HOME/.crossagent/bin" "$CONF"; do
     if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ]; then chmod 700 "$d" 2>/dev/null || true; fi
   done
+  # Machine config (hosts, hubs, map, project registry) is only for this user too. hosts.json
+  # and hubs decide who is who, so one others could write stays as it is and gets ignored.
+  if [ -d "$CONF" ] && [ ! -L "$CONF" ] && [ -O "$CONF" ]; then
+    for d in "$CONF/hosts.json" "$CONF/hubs" "$CONF/system-map.md" "$CONF/projects"; do
+      [ -f "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] || continue
+      case "$d" in
+        */hosts.json|*/hubs) [ -z "$(find "$d" -prune \( -perm -020 -o -perm -002 \) 2>/dev/null)" ] || continue ;;
+      esac
+      chmod 600 "$d" 2>/dev/null || true
+    done
+  fi
 }
 # ---------- project ----------
 
@@ -191,8 +203,12 @@ for i, t, n in ssh:
         print("%s\tssh\t%s\t%s" % (i, t, n))
 hub = []
 try:
-    with open(hubs) as f:
-        hub += [l.strip() for l in f]
+    st = os.lstat(hubs)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
+        print("!ignoring %s: it has to be your own file that only you can write" % hubs)
+    else:
+        with open(hubs) as f:
+            hub += [l.strip() for l in f]
 except OSError:
     pass
 for i in hub:
@@ -291,8 +307,8 @@ hosts_cmd() {
       target_ok "$tg" || die "bad ssh target '$tg': it can't start with - or hold spaces or control characters"
       [ "$hid" != "$HERE" ] || die "$hid is this machine"
       case "$(htype "$hid")" in ""|hub) ;; self) die "$hid is another name for this machine" ;; *) die "$hid is already in hosts.json. Remove it first: ca hosts remove $hid" ;; esac
-      say "checking: ssh -o BatchMode=yes -o ConnectTimeout=10 $tg true"
-      ssh -o BatchMode=yes -o ConnectTimeout=10 "$tg" true < /dev/null \
+      say "checking: ssh -o BatchMode=yes -o ConnectTimeout=10 -- $tg true"
+      ssh -o BatchMode=yes -o ConnectTimeout=10 -- "$tg" true < /dev/null \
         || die "can't reach '$tg' with ssh without a prompt. Set up a key (and an alias in ~/.ssh/config if you like), then run this again"
       hosts_edit add "$hid" "$tg" "$*"
       say "added $hid (ssh $tg) to ~/.config/crossagent/hosts.json"
@@ -377,12 +393,12 @@ on_host() {
     *) mk="mkdir -p $(rq "$d") && cd $(rq "$d")" ;;
   esac
   # shellcheck disable=SC2086
-  ssh $SSH_OPTS "$(htarget "$h")" "PATH=\$HOME/.local/bin:\$PATH; $mk && CA_ROOT=\$PWD CA_SLUG=$(q "$SLUG") CA_HERE=$(q "$h") exec $RCA$(qall "$@")"
+  ssh $SSH_OPTS -- "$(htarget "$h")" "PATH=\$HOME/.local/bin:\$PATH; $mk && CA_ROOT=\$PWD CA_SLUG=$(q "$SLUG") CA_HERE=$(q "$h") exec $RCA$(qall "$@")"
 }
 
 remote_ok() {
   # shellcheck disable=SC2086
-  ssh $SSH_OPTS -o ConnectTimeout=20 "$(htarget "$1")" "test -x $RCA" < /dev/null 2>/dev/null
+  ssh $SSH_OPTS -o ConnectTimeout=20 -- "$(htarget "$1")" "test -x $RCA" < /dev/null 2>/dev/null
 }
 
 # Checksum of the skill files other hosts run, to spot an outdated copy there.
@@ -392,10 +408,10 @@ skill_sum() { (cd "$SKILL_DIR" && cat $SKILL_FILES 2>/dev/null | cksum); }
 ensure_remote() {
   local h="$1" t; t="$(htarget "$h")"
   # shellcheck disable=SC2086
-  ssh $SSH_OPTS -o ConnectTimeout=20 "$t" true < /dev/null 2>/dev/null || die "can't reach $h with 'ssh $t'. Is it on?"
+  ssh $SSH_OPTS -o ConnectTimeout=20 -- "$t" true < /dev/null 2>/dev/null || die "can't reach $h with 'ssh $t'. Is it on?"
   if ! remote_ok "$h"; then say "skill missing on $h, installing"; "$SKILL_DIR/install.sh" --host "$h" >&2
   # shellcheck disable=SC2086
-  elif [ "$(ssh $SSH_OPTS "$t" "cd ~/.claude/skills/crossagent && cat $SKILL_FILES 2>/dev/null | cksum" < /dev/null)" != "$(skill_sum)" ]; then
+  elif [ "$(ssh $SSH_OPTS -- "$t" "cd ~/.claude/skills/crossagent && cat $SKILL_FILES 2>/dev/null | cksum" < /dev/null)" != "$(skill_sum)" ]; then
     say "skill on $h is out of date, updating"; "$SKILL_DIR/install.sh" --host "$h" >&2
   fi
 }
@@ -406,7 +422,12 @@ setup_remote() {
   valid_id "$1" || die "bad hub id '$1'"
   mkdir -p "$CONF"
   [ -e "$HOSTS_FILE" ] || { hosts_edit init - - "${2:-}"; say "wrote ~/.config/crossagent/hosts.json, this machine is $HERE"; }
-  if [ "$1" != "$HERE" ] && ! grep -qxF "$1" "$HUBS_FILE" 2>/dev/null; then printf '%s\n' "$1" >> "$HUBS_FILE"; fi
+  # The hub installing here is the authority on it: a hubs file we can't trust (a link, or
+  # others can write it) is replaced with a fresh one instead of read.
+  if [ -L "$HUBS_FILE" ] || [ -n "$(find "$HUBS_FILE" -prune \( -perm -020 -o -perm -002 \) 2>/dev/null)" ]; then
+    rm -f "$HUBS_FILE"; say "replaced ~/.config/crossagent/hubs, others could write it"
+  fi
+  if [ "$1" != "$HERE" ] && ! grep -qxF "$1" "$HUBS_FILE" 2>/dev/null; then (umask 077 && printf '%s\n' "$1" >> "$HUBS_FILE"); fi
   "$CA" __agents
 }
 
@@ -435,6 +456,8 @@ rs_remote() {
   local p; case "$2" in /*) p="$2" ;; *) p="./$2" ;; esac
   if [ "$RS_PROTECT" = yes ]; then printf '%s:%s' "$1" "$p"; else printf '%s:%s' "$1" "$(q "$p")"; fi
 }
+# No -- in -e: rsync may put "-l user" between it and the host. target_ok already refuses
+# targets that start with -, which is all -- would guard against (mutagen URLs too).
 rs() {
   # shellcheck disable=SC2046
   rsync -az $([ "$RS_PROTECT" = yes ] && echo -s) -e "ssh $SSH_OPTS" "$@"
@@ -455,7 +478,7 @@ push() {
   [ "${1:-}" = --delete ] && del="--delete"
   d="$(host_dir "$h")" || exit 1; t="$(htarget "$h")"; rsync_mode
   # shellcheck disable=SC2086
-  ssh $SSH_OPTS "$t" "mkdir -p $(rq "$d")" < /dev/null
+  ssh $SSH_OPTS -- "$t" "mkdir -p $(rq "$d")" < /dev/null
   # shellcheck disable=SC2086
   rs $del "${EXCLUDES[@]}" "$ROOT/" "$(rs_remote "$t" "$d/")"
   say "pushed $NAME to $h:~/$d"
@@ -591,7 +614,7 @@ sync_start_one() {
   # Make the folder there (mutagen won't create parents) and refuse to merge into a folder
   # that holds something else. The marker lives in .crossagent/, which never syncs.
   # shellcheck disable=SC2086
-  r="$(ssh $SSH_OPTS "$t" "cd && if [ -n \"\$(ls -A $(rq "$pcd") 2>/dev/null)\" ] && ! grep -qx $(q "name=$NAME") $(rq "$pcd/.crossagent/project") 2>/dev/null; then echo foreign; else mkdir -p $(rq "$pcd/.crossagent") && printf 'name=%s\n' $(q "$NAME") > $(rq "$pcd/.crossagent/project") && echo ok; fi" < /dev/null)"
+  r="$(ssh $SSH_OPTS -- "$t" "cd && if [ -n \"\$(ls -A $(rq "$pcd") 2>/dev/null)\" ] && ! grep -qx $(q "name=$NAME") $(rq "$pcd/.crossagent/project") 2>/dev/null; then echo foreign; else mkdir -p $(rq "$pcd/.crossagent") && printf 'name=%s\n' $(q "$NAME") > $(rq "$pcd/.crossagent/project") && echo ok; fi" < /dev/null)"
   if [ "$r" = foreign ] && [ -z "$force" ]; then
     die "~/$pcd on $h already has files that aren't this project. Move them, set dir.$h= in .crossagent/project, or run 'ca portal start --force' to merge (conflicts get flagged, nothing is overwritten)"
   fi
@@ -704,7 +727,7 @@ sync_conflicts() {
          p="$(rq "$there/$root")"
          # -n: ssh must not eat the rest of this loop's input
          # shellcheck disable=SC2086
-         printf '  %-6s %s\n' "$hid" "$(ssh -n $SSH_OPTS -o ConnectTimeout=20 "$tgt" "cd && { stat -c '%s bytes, modified %y' $p 2>/dev/null | cut -d. -f1 | grep . || stat -f '%z bytes, modified %Sm' -t '%Y-%m-%d %H:%M:%S' $p 2>/dev/null || echo missing; }" 2>/dev/null || echo unreachable)"
+         printf '  %-6s %s\n' "$hid" "$(ssh -n $SSH_OPTS -o ConnectTimeout=20 -- "$tgt" "cd && { stat -c '%s bytes, modified %y' $p 2>/dev/null | cut -d. -f1 | grep . || stat -f '%z bytes, modified %Sm' -t '%Y-%m-%d %H:%M:%S' $p 2>/dev/null || echo missing; }" 2>/dev/null || echo unreachable)"
          conflict_diff "$mine/$root" "$there/$root" "$tgt" "$hid" ;;
       C) echo "  $([ "$a" = A ] && echo "$HERE" || echo "$hid") changed $b: $(change "$(echo "$c" | tr 'A-Z' 'a-z')" "$(echo "$d" | tr 'A-Z' 'a-z')")" ;;
     esac
@@ -724,7 +747,7 @@ conflict_diff() {
   [ -f "$1" ] && [ "$(wc -c < "$1")" -lt 65536 ] && grep -Iq . "$1" 2>/dev/null || return 0
   local tmp p; tmp="$(mktemp)"; p="$(rq "$2")"
   # shellcheck disable=SC2086
-  if ssh -n $SSH_OPTS -o ConnectTimeout=20 "$3" "cd && [ \$(wc -c < $p) -lt 65536 ] && grep -Iq . $p && cat $p" > "$tmp" 2>/dev/null; then
+  if ssh -n $SSH_OPTS -o ConnectTimeout=20 -- "$3" "cd && [ \$(wc -c < $p) -lt 65536 ] && grep -Iq . $p && cat $p" > "$tmp" 2>/dev/null; then
     diff -u --label "$HERE" --label "$4" "$1" "$tmp" | sed -n '3,22p' | sed 's/^/    /'
   fi
   rm -f "$tmp"
@@ -808,7 +831,7 @@ register_project() {  # host|- [session] [status]
     projects_rows | awk -F'\t' -v n="$NAME" -v h="$h" '!($1 == n && ($3 == h || $3 == "-"))'
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$NAME" "$(tilde "$ROOT")" "$h" "$there" \
       "${2:-$(printf '%s\n' "$old" | cut -sf5)}" "${3:-$(printf '%s\n' "$old" | cut -sf6)}"
-  } | sort > "$f.tmp"
+  } | sort | (umask 077 && cat > "$f.tmp")
   mv "$f.tmp" "$f"
 }
 
@@ -820,7 +843,7 @@ projects_table() {
 
 copy_map_to() {
   # shellcheck disable=SC2086
-  ssh $SSH_OPTS -o ConnectTimeout=10 "$(htarget "$1")" 'mkdir -p ~/.config/crossagent && cat > ~/.config/crossagent/system-map.md' < "$MAP" 2>/dev/null || true
+  ssh $SSH_OPTS -o ConnectTimeout=10 -- "$(htarget "$1")" 'umask 077 && mkdir -p ~/.config/crossagent && cat > ~/.config/crossagent/system-map.md' < "$MAP" 2>/dev/null || true
 }
 
 # Record a Portal status in the map, only when it changed, so flushes stay cheap.
@@ -830,7 +853,7 @@ sync_note() {
   [ "$cur" = "$2" ] && return 0
   register_project "$h" "$(sess "$h")" "$2 (since $(date '+%Y-%m-%d %H:%M'))"
   [ -f "$MAP" ] || return 0
-  TBL="$(projects_table)" awk '/^## Projects$/{print; print ""; print ENVIRON["TBL"]; print ""; skip=1; next} /^## /{skip=0} !skip' "$MAP" > "$MAP.tmp" && mv "$MAP.tmp" "$MAP"
+  TBL="$(projects_table)" awk '/^## Projects$/{print; print ""; print ENVIRON["TBL"]; print ""; skip=1; next} /^## /{skip=0} !skip' "$MAP" | (umask 077 && cat > "$MAP.tmp") && mv "$MAP.tmp" "$MAP"
   [ -d "$ROOT/.crossagent" ] && cp "$MAP" "$ROOT/.crossagent/system-map.md"
   copy_map_to "$h"
 }
@@ -892,7 +915,7 @@ $(printf '%s\n' "$body" | sed '/^## /d; /^$/d')
     echo "## Notes"
     echo
     echo "$notes" | sed '/./,$!d'
-  } > "$MAP.tmp"
+  } | (umask 077 && cat > "$MAP.tmp")
   mv "$MAP.tmp" "$MAP"
   for h in $ok; do copy_map_to "$h"; done
   say "map written to ~/.config/crossagent/system-map.md${ok:+ (and copied to$ok)}"
