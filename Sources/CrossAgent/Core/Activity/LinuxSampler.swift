@@ -8,7 +8,9 @@ enum LinuxSampler {
     /// Stdlib only, passed inline with `python3 -I -c`, nothing is installed on the host.
     /// Line fields: t, cpu [[name, user, nice, system, idle, iowait, irq, softirq, steal]],
     /// mem {key: kB}, psi (memory some avg10), hw [[chip, label, millidegrees]],
-    /// gpu [temp, util], ses [[session, percent of a core, rss bytes, claude]].
+    /// nv [nvidia-smi csv lines], df [total, available bytes of /],
+    /// ses [[session, percent of a core, rss bytes, claude]], and on the first line only
+    /// spec {lscpu, cpuinfo, mblk [block size hex, blocks]}.
     static let script = #"""
 import os, sys, time, json, glob, re, shutil, subprocess, threading
 iv = float(sys.argv[1]) if len(sys.argv) > 1 else 1.5
@@ -51,15 +53,25 @@ def sensors():
             for k, x in sub.items():
                 if k.startswith('temp') and k.endswith('_input'): out.append([chip.split('-')[0], label, int(x * 1000)])
     return out
-gpu = [None]
+gpu = {}
 def nv():
     try:
-        p = subprocess.Popen(['nvidia-smi', '--query-gpu=temperature.gpu,utilization.gpu', '--format=csv,noheader,nounits', '-l', '3'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        p = subprocess.Popen(['nvidia-smi', '--query-gpu=index,name,memory.total,memory.used,utilization.gpu,temperature.gpu', '--format=csv,noheader,nounits', '-l', '3'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         for l in p.stdout:
-            try: gpu[0] = [float(x) for x in l.split(',')[:2]]
-            except ValueError: pass
+            i = l.split(',')[0].strip()
+            if i.isdigit(): gpu[int(i)] = l.strip()
     except OSError: pass
 if shutil.which('nvidia-smi'): threading.Thread(target=nv, daemon=True).start()
+def disk():
+    try: v = os.statvfs('/'); return [v.f_blocks * v.f_frsize, v.f_bavail * v.f_frsize]
+    except OSError: return None
+def spec():
+    o = {}
+    try: o['lscpu'] = '\n'.join(l for l in subprocess.run(['lscpu'], capture_output=True, text=True, timeout=3, env=dict(os.environ, LC_ALL='C')).stdout.splitlines() if l.split(':')[0].strip() in ('Model name', 'CPU(s)', 'Thread(s) per core', 'Core(s) per socket', 'Socket(s)'))
+    except Exception: pass
+    if not o.get('lscpu'): o['cpuinfo'] = '\n'.join(l for l in (rd('/proc/cpuinfo') or '').splitlines() if l.split(':')[0].strip() in ('processor', 'model name', 'physical id', 'core id'))
+    o['mblk'] = [(rd('/sys/devices/system/memory/block_size_bytes') or '').strip(), len(glob.glob('/sys/devices/system/memory/memory[0-9]*'))]
+    return o
 prev = None
 def ses():
     global prev
@@ -96,8 +108,9 @@ use_sensors = not hwmon()
 n = 0
 while True:
     t0 = time.time()
-    o = {'t': round(t0, 3), 'cpu': cpu(), 'mem': mem(), 'psi': psi(), 'hw': sensors() if use_sensors else hwmon()}
-    if gpu[0]: o['gpu'] = gpu[0]
+    o = {'t': round(t0, 3), 'cpu': cpu(), 'mem': mem(), 'psi': psi(), 'hw': sensors() if use_sensors else hwmon(), 'df': disk()}
+    if gpu: o['nv'] = [gpu[k] for k in sorted(gpu)]
+    if n == 0: o['spec'] = spec()
     if n % 2 == 0:
         s = ses()
         if s is not None: o['ses'] = s
@@ -110,6 +123,14 @@ while True:
         CommandBuilder.oneShot(host: host, script: "exec python3 -I -u -c \(CommandBuilder.shellQuote(script)) \(interval)")
     }
 
+    /// The static description sent once per sampler start.
+    struct Spec: Equatable {
+        var lscpu: String?
+        var cpuinfo: String?
+        var blockSizeHex: String?
+        var blocks = 0
+    }
+
     /// One decoded line, before any deltas.
     struct Raw: Equatable {
         var cpu: [String: [UInt64]] = [:]
@@ -118,10 +139,14 @@ while True:
         var hw: [(chip: String, label: String, milli: Int)] = []
         var gpuTemp: Double?
         var gpuUtil: Double?
+        var gpus: [GPUReading] = []
+        var disk: (total: UInt64, free: UInt64)?
+        var spec: Spec?
         var sessions: [SessionLoad]?
 
         static func == (a: Raw, b: Raw) -> Bool {
             a.cpu == b.cpu && a.mem == b.mem && a.psi == b.psi && a.gpuTemp == b.gpuTemp && a.gpuUtil == b.gpuUtil
+                && a.gpus == b.gpus && a.disk?.total == b.disk?.total && a.disk?.free == b.disk?.free && a.spec == b.spec
                 && a.sessions == b.sessions && a.hw.map { "\($0.chip)|\($0.label)|\($0.milli)" } == b.hw.map { "\($0.chip)|\($0.label)|\($0.milli)" }
         }
     }
@@ -143,9 +168,24 @@ while True:
             guard let chip = row[0] as? String, let label = row[1] as? String, let v = row[2] as? NSNumber else { continue }
             raw.hw.append((chip, label, v.intValue))
         }
+        // Older scripts sent "gpu": [temp, util].
         if let g = obj["gpu"] as? [NSNumber], g.count >= 2 {
             raw.gpuTemp = g[0].doubleValue
             raw.gpuUtil = g[1].doubleValue
+        }
+        if let lines = obj["nv"] as? [String] {
+            raw.gpus = lines.compactMap(SpecParsers.nvidiaSMI)
+            if let first = raw.gpus.first {
+                raw.gpuTemp = first.celsius ?? raw.gpuTemp
+                let utils = raw.gpus.compactMap(\.util)
+                if !utils.isEmpty { raw.gpuUtil = utils.reduce(0, +) / Double(utils.count) * 100 }
+            }
+        }
+        if let d = obj["df"] as? [NSNumber], d.count >= 2 { raw.disk = (d[0].uint64Value, d[1].uint64Value) }
+        if let sp = obj["spec"] as? [String: Any] {
+            let mblk = sp["mblk"] as? [Any]
+            raw.spec = Spec(lscpu: sp["lscpu"] as? String, cpuinfo: sp["cpuinfo"] as? String,
+                            blockSizeHex: mblk?.first as? String, blocks: (mblk?.last as? NSNumber)?.intValue ?? 0)
         }
         if let rows = obj["ses"] as? [[Any]] {
             raw.sessions = rows.compactMap { r in
@@ -215,9 +255,20 @@ while True:
         return out
     }
 
+    /// Specs from the first line's description plus the GPUs nvidia-smi reports (its
+    /// stream starts a moment after the first line, so GPUs can arrive later).
+    static func specs(_ spec: Spec?, memTotal: UInt64, gpus: [GPUReading]) -> MachineSpecs? {
+        guard let spec, let cpu = spec.lscpu.flatMap(SpecParsers.lscpu) ?? spec.cpuinfo.flatMap(SpecParsers.cpuinfo) else { return nil }
+        return MachineSpecs(cpuModel: cpu.model, cores: cpu.cores, threads: cpu.threads,
+                            memInstalled: SpecParsers.installedMemory(blockSizeHex: spec.blockSizeHex, blocks: spec.blocks, usable: memTotal),
+                            gpus: gpus.map { GPUSpec(name: $0.name, memory: $0.memTotal) })
+    }
+
     /// Turns raw lines into samples. Keeps the previous CPU ticks for the deltas.
     struct Accumulator {
         private var previous: [String: CPUTicks] = [:]
+        private var spec: Spec?
+        private var specs: MachineSpecs?
 
         mutating func sample(_ raw: Raw, at time: Date = Date()) -> ActivitySample {
             var s = ActivitySample(time: time)
@@ -244,6 +295,15 @@ while True:
             if let psi = raw.psi { s.pressureDetail = String(format: "stall %.1f%%", psi) }
             s.temps = LinuxSampler.temps(raw.hw, gpuTemp: raw.gpuTemp)
             s.gpu = raw.gpuUtil.map { $0 / 100 }
+            s.gpus = raw.gpus
+            s.diskTotal = raw.disk?.total
+            s.diskFree = raw.disk?.free
+            if let sp = raw.spec { spec = sp; specs = nil }
+            // nvidia-smi can lag a line or skip one, so GPUs only ever get added.
+            if specs == nil || raw.gpus.count > specs?.gpus.count ?? 0 {
+                specs = LinuxSampler.specs(spec, memTotal: m.total, gpus: raw.gpus)
+            }
+            s.specs = specs
             return s
         }
     }

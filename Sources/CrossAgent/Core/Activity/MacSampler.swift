@@ -18,6 +18,8 @@ final class MacSampler: @unchecked Sendable {
     private var wantSessions = false
     private lazy var temperatures = MacTemperatures()
     private lazy var clusters = Self.clusterLayout()
+    private var specs: MachineSpecs?
+    private var disk: (free: UInt64, total: UInt64)?
 
     init(onSample: @escaping @MainActor (ActivitySample, [SessionLoad]?) -> Void) {
         self.onSample = onSample
@@ -86,6 +88,18 @@ final class MacSampler: @unchecked Sendable {
             s.swapTotal = swap.xsu_total
         }
         if let temps = temperatures { s.temps = MacTemperatures.group(temps.read()) }
+
+        // Specs are read until the GPU core count is in (system_profiler fallback), then kept.
+        if specs == nil || specs?.gpus.contains(where: { $0.cores == nil }) == true, tick % 10 == 0 { specs = MacSpecs.read() }
+        s.specs = specs
+        if let g = MacSpecs.gpuReading(name: specs?.gpus.first?.name ?? "GPU") {
+            s.gpus = [GPUReading(name: g.name, util: g.util, memUsed: g.memUsed, memTotal: specs?.memInstalled)]
+            s.gpu = g.util
+        }
+        // The volume query takes about 12 ms, and free space moves slowly.
+        if disk == nil || tick % 10 == 0 { disk = MacSpecs.disk() ?? disk }
+        s.diskFree = disk?.free
+        s.diskTotal = disk?.total
 
         var sessions: [SessionLoad]?
         if wantSessions, tick % 2 == 0 { sessions = sampleSessions() }

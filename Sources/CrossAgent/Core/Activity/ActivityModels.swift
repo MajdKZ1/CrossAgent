@@ -97,6 +97,13 @@ struct ActivitySample: Equatable {
     var temps: [TempGroup] = []
     /// 0...1, when the host reports a GPU.
     var gpu: Double?
+    /// Every GPU the host reports, with whatever it could read live.
+    var gpus: [GPUReading] = []
+    /// Main drive, bytes. Free is what the user can actually use.
+    var diskFree: UInt64?
+    var diskTotal: UInt64?
+    /// Static specs, attached by the sampler once it knows them.
+    var specs: MachineSpecs?
 
     var memFraction: Double { memTotal > 0 ? Double(memUsed) / Double(memTotal) : 0 }
     var swapFraction: Double { swapTotal > 0 ? Double(swapUsed) / Double(swapTotal) : 0 }
@@ -115,6 +122,12 @@ struct Series: Equatable {
         values.append(v)
         if values.count > Self.capacity { values.removeFirst(values.count - Self.capacity) }
     }
+
+    /// Mean of the last `n` values, a light smoothing for big numbers that shouldn't flicker.
+    func recentMean(_ n: Int) -> Double? {
+        let tail = values.suffix(max(1, n))
+        return tail.isEmpty ? nil : tail.reduce(0, +) / Double(tail.count)
+    }
 }
 
 /// Everything the views need for one host.
@@ -132,12 +145,15 @@ struct HostActivity: Equatable, Identifiable {
     var gpu = Series()
     var temps: [TempKind: Series] = [:]
     var sessions: [SessionLoad] = []
+    /// Kept after the host goes offline, so its half still says what it is.
+    var specs: MachineSpecs?
 
     var id: String { hostId }
 
     mutating func record(_ s: ActivitySample) {
         latest = s
         status = .live
+        if let sp = s.specs, sp != specs { specs = sp }
         if let c = s.cpu { cpu.append(c) }
         mem.append(s.memFraction)
         swap.append(Double(s.swapUsed))
