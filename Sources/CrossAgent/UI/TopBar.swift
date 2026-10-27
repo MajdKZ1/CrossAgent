@@ -3,37 +3,58 @@ import SwiftUI
 
 /// The one row at the top of the window: traffic lights, the project switcher, the
 /// tabs, then agent chips, sync, activity and the new button on the right. The tabs
-/// take whatever the fixed items leave, so nothing ever clips.
+/// take whatever the fixed items leave. When those would leave less than two tabs'
+/// worth, the agent chips go first, so nothing ever clips.
 struct TopBar: View {
     @EnvironmentObject private var app: AppState
-    /// The window's width, from the bar's frame (which never overflows).
-    @State private var width: CGFloat = 1200
+    @State private var titleWidth: CGFloat = 0
+    @State private var trailingWidth: CGFloat = 0
+    /// Last measured width of the chips, kept while they're hidden so they come back
+    /// only when they'd fit (no flicker).
+    @State private var chipsWidth: CGFloat = 0
+
+    private static let spacing: CGFloat = 8
+    private static let trailingPad: CGFloat = 10
 
     var body: some View {
-        HStack(spacing: 8) {
-            ProjectTitle()
-                .fixedSize()
-            TabStrip()
-            if width >= 1000, let o = app.orch { AgentChips(orch: o).fixedSize() }
-            SyncIndicator(sync: app.sync)
-                .fixedSize()
-            ActivityReadout()
-                .fixedSize()
-            if app.mode == .panes && !app.panes.isEmpty {
-                Button { app.toggleBroadcast() } label: { Image(systemName: "dot.radiowaves.left.and.right") }
-                    .buttonStyle(ChromeButtonStyle(active: app.broadcast, tint: Palette.broadcast))
-                    .help("Broadcast, type into every live pane (⌘⇧B)")
+        GeometryReader { geo in
+            // The proposal is the window's width, whatever the content wants.
+            let room = geo.size.width - Palette.trafficLightInset - Self.trailingPad - titleWidth - trailingWidth
+                - Self.spacing * 2
+            let showChips = room - chipsWidth - Self.spacing >= 2 * TabStrip.selectedMin
+            HStack(spacing: Self.spacing) {
+                ProjectTitle()
                     .fixedSize()
-            }
-            NewMenu()
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { titleWidth = $0 }
+                TabStrip()
+                if showChips, let o = app.orch {
+                    AgentChips(orch: o)
+                        .fixedSize()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { chipsWidth = $0 }
+                }
+                HStack(spacing: Self.spacing) {
+                    SyncIndicator(sync: app.sync)
+                        .fixedSize()
+                    ActivityReadout()
+                        .fixedSize()
+                    if app.mode == .panes && !app.panes.isEmpty {
+                        Button { app.toggleBroadcast() } label: { Image(systemName: "dot.radiowaves.left.and.right") }
+                            .buttonStyle(ChromeButtonStyle(active: app.broadcast, tint: Palette.broadcast))
+                            .help("Broadcast, type into every live pane (⌘⇧B)")
+                            .fixedSize()
+                    }
+                    NewMenu()
+                        .fixedSize()
+                }
                 .fixedSize()
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { trailingWidth = $0 }
+            }
+            .padding(.leading, Palette.trafficLightInset)
+            .padding(.trailing, Self.trailingPad)
+            .frame(width: geo.size.width, height: Palette.topBarHeight, alignment: .leading)
         }
-        .padding(.leading, Palette.trafficLightInset)
-        .padding(.trailing, 10)
-        .frame(maxWidth: .infinity)
         .frame(height: Palette.topBarHeight)
         .background(WindowDragArea())
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }
 
@@ -84,10 +105,10 @@ struct TabStrip: View {
                     .onAppear { proxy.scrollTo(app.selectedTabID) }
                     .onChange(of: app.selectedTabID) { _, id in proxy.scrollTo(id) }
                     .onChange(of: tabs.count) { proxy.scrollTo(app.selectedTabID) }
+                    .onChange(of: geo.size.width) { proxy.scrollTo(app.selectedTabID) }
                 }
             }
         }
-        .frame(minWidth: Self.minWidth)
     }
 
     /// Each tab's width, or nil when they don't fit even at the minimum.
