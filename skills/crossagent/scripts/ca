@@ -491,6 +491,49 @@ project_map() {
 
 # ---------- init ----------
 
+# The pc-worker and mac-worker subagents live in ~/.claude/agents, copied from the skill.
+ensure_agents() {
+  local a src dst
+  for a in pc-worker mac-worker; do
+    src="$SKILL_DIR/agents/$a.md"; dst="$HOME/.claude/agents/$a.md"
+    [ -f "$src" ] && ! cmp -s "$src" "$dst" || continue
+    mkdir -p "$HOME/.claude/agents"
+    if [ -f "$dst" ]; then say "updated ~/.claude/agents/$a.md"; else say "added ~/.claude/agents/$a.md"; fi
+    cp "$src" "$dst"
+  done
+}
+
+# Agent teams must not spawn teammates as new claude processes in tmux panes.
+pin_teammate_mode() {
+  local r
+  r="$(python3 -I -c '
+import json, os, sys
+p = sys.argv[1]
+d = {}
+if os.path.exists(p):
+    try:
+        with open(p) as f:
+            d = json.load(f)
+    except Exception:
+        d = None
+if not isinstance(d, dict):
+    print("bad")
+elif d.get("teammateMode") == "in-process":
+    print("ok")
+else:
+    d["teammateMode"] = "in-process"
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p + ".tmp", "w") as f:
+        f.write(json.dumps(d, indent=2) + "\n")
+    os.replace(p + ".tmp", p)
+    print("set")
+' "$ROOT/.claude/settings.local.json")" || r=bad
+  case "$r" in
+    set) say "pinned \"teammateMode\": \"in-process\" in .claude/settings.local.json" ;;
+    bad) say "couldn't read .claude/settings.local.json, add \"teammateMode\": \"in-process\" to it yourself" ;;
+  esac
+}
+
 init() {
   # Where the work goes: both (default, Portal), mac only (no Portal), pc only (one-off push, no Portal).
   local mode=both
@@ -498,9 +541,13 @@ init() {
   mkdir -p "$ROOT/.crossagent"
   [ -f "$PROJ_CONF" ] || printf 'name=%s\n# pc_dir=other/path/under/home\n# sync_allow=.env.shared,*.pem   (opt in to sending these through the Portal, comma separated)\n# sync_ignore=data,*.sqlite     (extra Portal ignores)\n' "$NAME" > "$PROJ_CONF"
 
+  local tpl="$SKILL_DIR/templates/CROSSAGENT.md" mark="<!-- crossagent template v2 -->"
   if [ ! -f "$ROOT/CROSSAGENT.md" ]; then
-    cp "$SKILL_DIR/templates/CROSSAGENT.md" "$ROOT/CROSSAGENT.md"; say "added CROSSAGENT.md"
-  elif ! cmp -s "$SKILL_DIR/templates/CROSSAGENT.md" "$ROOT/CROSSAGENT.md"; then
+    cp "$tpl" "$ROOT/CROSSAGENT.md"; say "added CROSSAGENT.md"
+  elif grep -qxF "$mark" "$tpl" && ! grep -qxF "$mark" "$ROOT/CROSSAGENT.md"; then
+    mv "$ROOT/CROSSAGENT.md" "$ROOT/.crossagent/CROSSAGENT.md.old"; cp "$tpl" "$ROOT/CROSSAGENT.md"
+    say "CROSSAGENT.md was from the old template: moved it to .crossagent/CROSSAGENT.md.old and added the new one"
+  elif ! cmp -s "$tpl" "$ROOT/CROSSAGENT.md"; then
     say "CROSSAGENT.md differs from the template, leaving it (delete it and re-run init to reset)"
   fi
 
@@ -521,6 +568,9 @@ init() {
       echo ".crossagent/" >> "$ROOT/.gitignore"; say "added .crossagent/ to .gitignore"
     fi
   fi
+
+  ensure_agents
+  pin_teammate_mode
 
   register_project
   [ "$HERE" = mac ] && [ "$mode" != mac ] && ensure_remote
