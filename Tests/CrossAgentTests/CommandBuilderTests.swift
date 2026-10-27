@@ -2,8 +2,8 @@ import XCTest
 @testable import CrossAgent
 
 final class CommandBuilderTests: XCTestCase {
-    let mac = HostStore.defaults[0]
-    let pc = HostStore.defaults[1]
+    let mac = HostStore.example[0]
+    let pc = HostStore.example[1]
 
     func testSessionNameValidation() {
         XCTAssertTrue(SessionName.isValid("ca-pc-1"))

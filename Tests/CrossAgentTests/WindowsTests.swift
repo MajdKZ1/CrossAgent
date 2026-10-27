@@ -61,7 +61,7 @@ final class WindowsTests: XCTestCase {
         let path = try makeFolder()
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ca-win-state-\(UUID().uuidString)")
         let store = ProjectStore(defaults: UserDefaults(suiteName: "ca-win-\(UUID().uuidString)")!, stateDir: dir)
-        let app = AppState(hosts: HostStore.defaults, store: store)
+        let app = AppState(hosts: HostStore.example, store: store)
         let p = Project(url: URL(fileURLWithPath: path))
         app.openProject(p.url)
         app.open(.station)
@@ -70,7 +70,7 @@ final class WindowsTests: XCTestCase {
         XCTAssertEqual(saved.tabs?.map(\.kind), [.panes, .station])
         // A window holds one project: opening another into it does nothing.
         let other = try makeFolder()
-        let app2 = AppState(hosts: HostStore.defaults, store: store)
+        let app2 = AppState(hosts: HostStore.example, store: store)
         app2.openProject(p.url)
         app2.openProject(URL(fileURLWithPath: other))
         XCTAssertEqual(app2.project?.path, p.path)

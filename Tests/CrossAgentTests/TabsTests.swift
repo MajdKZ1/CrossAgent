@@ -6,7 +6,7 @@ final class TabsTests: XCTestCase {
     private func makeApp() -> AppState {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ca-tabs-\(UUID().uuidString)")
         let defaults = UserDefaults(suiteName: "ca-tabs-\(UUID().uuidString)")!
-        return AppState(hosts: HostStore.defaults, store: ProjectStore(defaults: defaults, stateDir: dir))
+        return AppState(hosts: HostStore.example, store: ProjectStore(defaults: defaults, stateDir: dir))
     }
 
     /// A project with a graph, set up by hand so nothing is spawned or followed.

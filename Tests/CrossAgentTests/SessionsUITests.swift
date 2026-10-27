@@ -6,7 +6,7 @@ final class SessionsUITests: XCTestCase {
     private func makeApp() -> AppState {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ca-sess-\(UUID().uuidString)")
         let defaults = UserDefaults(suiteName: "ca-sess-\(UUID().uuidString)")!
-        return AppState(hosts: HostStore.defaults, store: ProjectStore(defaults: defaults, stateDir: dir))
+        return AppState(hosts: HostStore.example, store: ProjectStore(defaults: defaults, stateDir: dir))
     }
 
     private func session(_ host: String, _ sid: String, cwd: String, pid: Int32? = nil, tmux: String? = nil,

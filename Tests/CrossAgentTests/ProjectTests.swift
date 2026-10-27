@@ -3,8 +3,8 @@ import XCTest
 
 final class ProjectTests: XCTestCase {
     let home = "/Users/me"
-    let mac = HostStore.defaults[0]
-    let pc = HostStore.defaults[1]
+    let mac = HostStore.example[0]
+    let pc = HostStore.example[1]
 
     func testUnderHomeKeepsRelativePath() {
         let p = Project(path: "/Users/me/Projects/My App/", home: home, config: nil)
@@ -150,7 +150,7 @@ final class ProjectTests: XCTestCase {
     func testLiveProjectCwd() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["CA_INTEGRATION"] == "1")
         let project = Project(url: URL(fileURLWithPath: NSHomeDirectory() + "/Projects/ca-core-check"))
-        for host in HostStore.defaults {
+        for host in HostStore.example {
             let dir = CommandBuilder.shellPath(project.cwd(for: host))
             let session = CASessionName.make(slug: project.slug, host: host.id, task: "check")
             func sh(_ script: String) async -> Runner.Result {

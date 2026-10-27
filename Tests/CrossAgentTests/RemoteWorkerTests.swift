@@ -360,7 +360,7 @@ final class RemoteWorkerTests: XCTestCase {
     // MARK: Command parser
 
     func testCaRemoteTargets() {
-        func t(_ c: String) -> [RemoteTarget] { AgentGraph.caRemoteTargets(c) }
+        func t(_ c: String) -> [RemoteTarget] { AgentGraph.caRemoteTargets(c, hosts: HostStore.example) }
         let pcTests = [RemoteTarget(host: "pc", role: "tests")]
         XCTAssertEqual(t(caRemote), pcTests)
         XCTAssertEqual(t("/Users/me/.claude/skills/crossagent/scripts/ca remote pc tests --brief .crossagent/briefs/tests.md --timeout 540"), pcTests)

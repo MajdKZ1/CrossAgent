@@ -209,7 +209,7 @@ final class TmuxMonitorTests: XCTestCase {
 
     func testLiveHosts() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["CA_INTEGRATION"] == "1")
-        for host in HostStore.defaults {
+        for host in HostStore.example {
             for fast in [false, true] {
                 let r = await TmuxMonitor.fetch(host: host, fast: fast, previous: [:])
                 print("[\(host.id)] fast=\(fast) \(String(format: "%.2f", r.duration))s error=\(r.error ?? "none")")
@@ -225,12 +225,12 @@ final class TmuxMonitorTests: XCTestCase {
     @MainActor
     func testLiveMonitor() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["CA_INTEGRATION"] == "1")
-        let mon = TmuxMonitor(hosts: HostStore.defaults)
+        let mon = TmuxMonitor(hosts: HostStore.example)
         mon.setActive(true)
         mon.start()
         try await Task.sleep(nanoseconds: 6_000_000_000)
         mon.stop()
-        for h in HostStore.defaults {
+        for h in HostStore.example {
             print("[\(h.id)] reachable=\(mon.reachable[h.id] ?? false) poll=\(String(format: "%.2f", mon.lastPollDuration[h.id] ?? -1))s free=\(mon.freeSessionName(host: h, slug: "check"))")
             for s in mon.sessions[h.id] ?? [] { print("  \(s.id) cmd=\(s.currentCommand) status=\(s.status)") }
             XCTAssertEqual(mon.reachable[h.id], true)

@@ -24,7 +24,7 @@ final class EventsLiveTests: XCTestCase {
     func testLiveInstall() async throws {
         let (dir, pcDir) = try setup("install")
         let body = try scriptData
-        for h in HostStore.defaults {
+        for h in HostStore.example {
             let ok = await HookInstaller.installHookScript(on: h, script: body)
             XCTAssertTrue(ok, "script on \(h.id)")
             if !h.isLocal, !pcDir.isEmpty {
@@ -41,7 +41,7 @@ final class EventsLiveTests: XCTestCase {
         let (dir, pcDir) = try setup("follow")
         let graph = AgentGraph()
         var got: [String: [AgentEvent]] = [:]
-        let followers = HostStore.defaults.map { h in
+        let followers = HostStore.example.map { h in
             EventFollower(host: h, replay: 600) { events in
                 got[h.id, default: []] += events
                 graph.apply(events, project: "e2e", projectPaths: ["mac": dir, "pc": pcDir])
@@ -56,7 +56,7 @@ final class EventsLiveTests: XCTestCase {
         print("LIVE graph:", graph.nodes.values.map { "\($0.name)=\($0.state)" }.sorted())
 
         // A fresh line written on the PC shows up over ssh.
-        let pc = HostStore.defaults.first { !$0.isLocal }!
+        let pc = HostStore.example.first { !$0.isLocal }!
         let mark = "live-\(UUID().uuidString.prefix(8))"
         let line = #"{"ts":\#(Date().timeIntervalSince1970),"ev":"WorkerStart","host":"pc","sid":"ca-e2e-pc-\#(mark)","tmux":"ca-e2e-pc-\#(mark)","role":"worker","project":"e2e","node":"\#(mark)","sum":"live check"}"#
         try await Task.sleep(nanoseconds: 3_000_000_000)  // let the ssh follower settle at the end of files
