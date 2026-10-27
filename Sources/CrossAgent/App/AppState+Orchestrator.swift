@@ -36,6 +36,8 @@ final class ProjectOrchestrator: ObservableObject {
     var watchers: Set<AnyCancellable> = []
     var saveTask: Task<Void, Never>?
     var demoTimer: Timer?
+    /// Keeps workers that are busy in tmux from dozing off. See `keepBusyWorkers`.
+    var busyTimer: Timer?
     /// Restored running workers whose tmux session has not been checked yet.
     var unverifiedWorkers: Set<String> = []
     /// Prompt sessions ("host/session") the monitor has seen waiting for input.
@@ -99,6 +101,16 @@ extension AppState {
                 self?.checkNeedsInput()
             }
             .store(in: &o.watchers)
+        // The monitor only publishes when a poll differs, and a worker running a quiet
+        // command changes nothing, so check its last poll on a timer.
+        let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let sessions = self.monitor?.sessions else { return }
+                self.orch?.graph.keepBusyWorkers(sessions, now: Date())
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        o.busyTimer = timer
     }
 
     /// After the project state loaded: finished nodes and running workers back on the
@@ -125,6 +137,7 @@ extension AppState {
     func tearDownOrchestrator() {
         guard let o = orch else { return }
         o.controller.stop()
+        o.busyTimer?.invalidate()
         o.demoTimer?.invalidate()
         o.saveTask?.cancel()
         if o.monitorFast, mode != .station { monitor?.setActive(false) }
@@ -533,5 +546,54 @@ extension AppState {
     func injectEvents(_ events: [AgentEvent]) {
         guard let o = orch else { return }
         o.graph.apply(events, project: o.controller.slug, projectPaths: o.controller.projectPaths)
+    }
+}
+
+extension AgentGraph {
+    /// How recent tmux output must be for a Claude worker to count as busy. Above the
+    /// slow poll interval, so a working Claude (its spinner moves) never looks quiet.
+    nonisolated static let screenQuietAfter: TimeInterval = 15
+
+    /// True when a worker's tmux session says it is busy. A command worker (`ca run --
+    /// cmd`) is busy until its WorkerStop marks it done: tmux shows `bash` in front
+    /// either way, so `yes > /dev/null` and `read x` look alike from outside. A Claude
+    /// worker is busy while its screen moves (the monitor's slow polls keep an old
+    /// status around, so this goes by the last output time).
+    nonisolated static func workerBusy(_ s: TmuxSessionInfo, claude: Bool, now: Date) -> Bool {
+        if s.paneDead || s.status == .waitingForInput || s.status == .exited { return false }
+        if claude { return now.timeIntervalSince(s.lastActivity) < screenQuietAfter }
+        return true
+    }
+
+    /// `ca run --claude` wraps Claude in bash, so tmux only names it on fast polls with a
+    /// screen capture. Its hooks give it away too: a command worker gets no events
+    /// between WorkerStart and WorkerStop, so its `recent` stays empty.
+    nonisolated static func isClaudeWorker(_ n: AgentNode, _ s: TmuxSessionInfo) -> Bool {
+        s.isClaude || !n.recent.isEmpty
+    }
+
+    /// Workers emit no events while a long command runs, so `tick` would doze them off.
+    /// Every few seconds, busy workers are marked working and their clock bumped. Quiet
+    /// ones are left alone and go idle through `tick` as before. A Claude worker the
+    /// hooks put to idle (its Stop) stays idle: Claude redraws now and then at its prompt.
+    func keepBusyWorkers(_ sessions: [String: [TmuxSessionInfo]], now: Date) {
+        for (id, n) in nodes where n.kind == .worker {
+            guard let session = n.tmuxSession,
+                  let info = sessions[n.hostId]?.first(where: { $0.name == session }) else { continue }
+            let claude = Self.isClaudeWorker(n, info)
+            guard Self.workerBusy(info, claude: claude, now: now) else { continue }
+            var m = n
+            switch n.state {
+            case .idle where !claude:
+                m.state = .working
+                if m.activity.isEmpty || m.activity == "Idle" { m.activity = "Running" }
+            case .working, .thinking:
+                break
+            default:
+                continue
+            }
+            m.updatedAt = max(m.updatedAt, now)
+            nodes[id] = m
+        }
     }
 }
