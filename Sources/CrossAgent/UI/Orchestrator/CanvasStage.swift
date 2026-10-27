@@ -368,7 +368,7 @@ final class CanvasStage: NSView, CardEvents {
     }
 
     private func makeMascot(_ graph: AgentGraph) -> MascotHost {
-        let m = MascotHost(graph: graph)
+        let m = MascotHost(graph: graph) { [weak self] id in self?.actions.expand(id) }
         mascot = m
         order = []
         return m
@@ -656,13 +656,13 @@ final class CardHostingView: NSHostingView<CardRoot> {
 /// The mascot in its own small hosting view, so its animation frames only update
 /// itself and never the orchestrator card or the window around it.
 final class MascotHost: ScaledView {
-    init(graph: AgentGraph) {
-        let hosting = NSHostingView(rootView: MascotView(graph: graph))
+    /// Takes clicks: poking the mascot plays a trick, and its orbs open their agent.
+    init(graph: AgentGraph, onOpenAgent: @escaping (String) -> Void) {
+        let hosting = NSHostingView(rootView: MascotView(graph: graph, onOpenAgent: onOpenAgent))
         hosting.sizingOptions = []
         let fit = hosting.fittingSize
         let size = fit.width > 1 && fit.height > 1 ? fit : CGSize(width: 40, height: 40)
         super.init(natural: size)
-        interactive = false
         hosting.frame = CGRect(origin: .zero, size: size)
         addSubview(hosting)
     }
