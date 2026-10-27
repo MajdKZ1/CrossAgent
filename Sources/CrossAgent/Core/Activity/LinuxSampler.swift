@@ -1,7 +1,9 @@
 import Foundation
 
 /// The sampler that runs on a Linux host. Python reads raw counters and prints one
-/// JSON line per tick; all the math happens here so it can be tested.
+/// JSON line per tick; all the math happens here so it can be tested. On any other
+/// remote OS (a Mac over ssh, say) it says so on stderr and exits, and the host shows
+/// as unavailable instead of empty numbers.
 enum LinuxSampler {
     static let interval: TimeInterval = 1.5
 
@@ -13,6 +15,7 @@ enum LinuxSampler {
     /// spec {lscpu, cpuinfo, mblk [block size hex, blocks]}.
     static let script = #"""
 import os, sys, time, json, glob, re, shutil, subprocess, threading
+if not sys.platform.startswith('linux'): sys.stderr.write('remote stats only work on Linux hosts for now\n'); sys.exit(3)
 iv = float(sys.argv[1]) if len(sys.argv) > 1 else 1.5
 hz = os.sysconf('SC_CLK_TCK'); pg = os.sysconf('SC_PAGE_SIZE')
 def rd(p):

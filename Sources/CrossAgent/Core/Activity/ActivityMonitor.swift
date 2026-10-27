@@ -88,7 +88,7 @@ final class ActivityMonitor: ObservableObject {
         if wasSampling { resume() }
     }
 
-    /// "Linux PC" reads as "PC" in tight spots.
+    /// The last word of the name in tight spots: "Linux PC" reads as "PC".
     static func shortName(_ h: Host) -> String {
         h.name.split(separator: " ").last.map(String.init) ?? h.name
     }

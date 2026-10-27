@@ -7,7 +7,7 @@ extension AppState {
     // MARK: Project filter
 
     /// True when the session ran in this window's project folder, or inside it. On ssh
-    /// hosts the folder is the project's PC copy under that user's home.
+    /// hosts the folder is the project's remote copy under that user's home.
     func sessionInProject(_ s: ClaudeSession) -> Bool {
         guard let project else { return false }
         let real = Self.realPaths[project.path] ?? {

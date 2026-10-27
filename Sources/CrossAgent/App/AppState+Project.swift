@@ -151,7 +151,7 @@ extension AppState {
 
     // MARK: Sync
 
-    /// True when the project's folder exists on `host` (the PC copy for ssh hosts).
+    /// True when the project's folder exists on `host` (the remote copy for ssh hosts).
     func remoteFolderExists(host: Host) async -> Bool {
         guard let project else { return false }
         if host.isLocal { return ProjectStore.folderExists(project.path) }
@@ -162,7 +162,7 @@ extension AppState {
     /// Opens the project's Crossover Portal with `ca sync start`, the command's old name.
     /// It stays a permanent alias, so skills installed before the rename work too.
     /// Output is stdout and stderr.
-    /// The first connect to a fresh PC uploads Mutagen's agent, so it can take a minute.
+    /// The first connect to a fresh host uploads Mutagen's agent, so it can take a minute.
     func startSync() async -> (ok: Bool, output: String) {
         guard let project else { return (false, "No project open") }
         let path = CommandBuilder.shellQuote(project.path)
