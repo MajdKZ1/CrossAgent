@@ -534,3 +534,13 @@ Checked on both machines (`claude --version` says `2.1.311 (Claude Code)` on the
 - **Defaults:** every read and write goes through `AppDefaults.store`, which is the `dev.crossagent.demo` suite in a demo (wiped at launch). Window roots set `.defaultAppStorage` to it, frame autosave is off, and project state goes to `/tmp/crossagent-demo/state`. Checked by exporting the real domain before and after a run.
 - **Stats and sync are made up** (`DemoSampler`, one fake Portal). They're generic specs, not models of real machines.
 - **The mock `claude`** is a bash script that looks enough like Claude Code for the status detector to read it (spinner line, `? for shortcuts`), so Station shows running and idle states correctly.
+
+### Demo stories for recordings
+
+- **Stories play in the throwaway demo graph** (`ProjectOrchestrator.demoGraph`), like the dev demo, so nothing of them is saved. Unlike the dev demo a story stays up when another tab shows, so its agents' cards can be opened from it. `stopDemo` (or another story) ends it.
+- **Real event path:** the hero story is `AgentEvent`s through the reducer (Agent Pre/PostToolUse, SubagentStart/Stop, the pc-worker's `ca remote pc tests` Bash call, RemoteStart/Activity/PermissionAsk/Stop, a `ca run` WorkerStart). Only three cues aren't events: the Allow click, the bench worker going quiet (so it shows its zzz without waiting 45 s for the idle tick) and the clear that loops it.
+- **Hero timeline (s):** 0 lone orchestrator; 1.6 thinking; 3.2 explore, 4.0 implement, 4.8 pc-worker (PC badge from 5.3), 5.6 bench on the PC, 6.3 review; 7.0 Waiting on, Puff juggling; 7.3 to 9.2 work and messages both ways; 9.2 approval; 10.8 allowed; 11.8 to 14.1 reports back with check marks, bench dozes at 12.4; 14.6 orchestrator done; check marks fade from 15.8; over at 18.2. With `loop` everything shrinks home and it starts again 0.8 s later, from the same lone orchestrator.
+- **Approvals in demo never write or ssh:** `demoAnswerPermission` shows Sending and Allowed like a real answer, then applies the PermissionAnswer locally.
+- **No hooks, no followers in demo:** `OrchestratorController` enable, start and disable only flip their flags, so a demo never installs the hook script, touches project settings or follows event logs.
+- **Sessions:** discovery publishes `DemoSessions.list` instead of scanning ~/.claude or calling ssh, and every feed gets a scripted source. Continue here says "Not in the demo". The fake sessions have no tmux, so a click opens the Live view.
+- **Puff:** `MascotDemo` (debug only) forces a mood on every Puff, plays a trick without a click and opens a close-up window. Release builds have none of it.
