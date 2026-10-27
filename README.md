@@ -4,11 +4,11 @@
 
 One window, every workstation. CrossAgent is a native macOS app that puts Claude Code (or a plain shell) on your Mac and on your other machines (Linux boxes or other Macs) side by side, in one grid of terminal panes. Remote panes go over plain `ssh`, and every pane lives in tmux on its own host, so closing the window never kills your work. Open it again and everything reattaches.
 
+<p align="center"><img src="docs/media/hero.gif" width="960" alt="The orchestrator canvas: subagents pop out on the Mac and the PC, cables light up as work moves both ways, a PC worker asks for approval and gets it, agents report back with check marks, and Puff celebrates"></p>
+
 Everything starts from a project folder, and each project gets its own window with tabs: **Panes** for your terminals, **Station** to see every session on both machines at once, **Orchestrator**, a live graph of Claude agents working on the project with a little blob named Puff keeping an eye on them, **Sessions** for every Claude Code session on both machines (even ones you started in Ghostty or over plain ssh), **Activity** with both machines added up as one Super-Max Computer, and a tab for any agent you open. A Claude Code skill splits work across the two machines for you, and the Crossover Portal keeps the project the same on both.
 
 The examples below use one remote Linux box with the host id `pc`, so you'll read "the PC" a lot. Yours can be called anything, and you can have more than one.
-
-<p align="center"><img src="docs/images/orchestrator.png" width="760" alt="Orchestrator mode: the orchestrator in the middle, agents on the Mac and the PC around it"></p>
 
 ## Requirements
 
@@ -95,6 +95,8 @@ Click an agent anywhere it shows up small (a node on the canvas, a station tile,
 - host, session name, and how long it's been running
 - status: running, idle, needs input (Claude is waiting on a prompt), or exited
 
+<p align="center"><img src="docs/media/station.gif" width="720" alt="The Station: live previews of every session on the Mac and the PC"></p>
+
 It also picks up `ca-*` sessions you didn't open from this window, like ones the skill started, ones from other projects, older `ca-<host>-<n>` sessions, or ones you made by hand. Click any tile (or arrow to it and press Enter) to jump in full size. Esc goes back. Other Claude Code sessions in this project, the ones CrossAgent didn't start, show in a strip at the bottom. Click one to attach it (if it's in tmux) or watch it (see Sessions).
 
 ## Orchestrator
@@ -122,6 +124,8 @@ Drag empty space (or scroll) to pan, pinch or `Cmd`+scroll to zoom, drag nodes t
 
 Click a node to open it in a tab:
 
+<p align="center"><img src="docs/media/open-agent.gif" width="720" alt="Clicking a subagent on the canvas opens its card as a tab with its task, prompt and recent tool calls, then back to the canvas"></p>
+
 - **The orchestrator and command workers** open their live terminal, and you type straight into it.
 - **PC workers** open with three tabs: **Terminal** (its live tmux session on the PC, where the headless worker's feed scrolls by), **Brief** (exactly what the orchestrator told it, follow-ups included) and **Result** (its last report).
 - **Approvals:** when a PC worker wants to run something that needs permission, its node turns amber and an approval card shows up on the card and in a strip at the top of the canvas. **Allow** or **Deny**. No answer in 5 minutes means denied.
@@ -142,7 +146,7 @@ To take the hooks out, use **Orchestrator > Turn Off Orchestrator for This Proje
 
 ### Puff
 
-<p align="center"><img src="docs/images/puff.png" width="480" alt="Puff, the CrossAgent mascot, in each of its moods"></p>
+<p align="center"><img src="docs/media/puff.gif" width="480" alt="Puff, the CrossAgent mascot, going through its moods (thinking, juggling, alarmed, celebrating, sleepy) and doing a trick"></p>
 
 Puff is a soft, chunky, light blue blob with two dark leaning eyes. It sits on top of the orchestrator and reacts to the whole graph: it blinks and glances around when things are quiet, puffs up into a little cloud with a thought bubble while the orchestrator thinks, narrows its eyes and bounces while it works, bobs along with one agent and juggles one orb per agent (in its host colour) when there are more. It goes wide eyed with a little hop when something needs your answer, squishes happily with closed eyes when an agent finishes, wobbles on an error, and nods off with a soft "z z z" after a quiet minute.
 
@@ -168,6 +172,8 @@ How it works: Claude Code keeps a small file per running session (`~/.claude/ses
 
 The Activity tab opens with the **Super-Max Computer**: one card that adds both machines up as one, with a Mac half and a PC half linked by the portal ring. Cores and threads across both, combined CPU load (weighted by thread count), memory used of the combined total, each GPU with its load (the Mac's GPU with its unified memory, the PC's GeForce with its VRAM), storage free across both main drives, and the hottest spot with which machine it's on. It's honest about it: "Two machines working as one through CrossAgent". Specs are read on each machine at runtime, not hardcoded. A machine that drops off leaves the totals and stays dimmed with its last known specs.
 
+<p align="center"><img src="docs/media/supermax.gif" width="720" alt="The Activity tab: the Super-Max Computer card adding both machines up, with live CPU, memory and temperature graphs below"></p>
+
 Below it, both machines side by side, and a compact Super-Max readout in the top bar (`16c/24t 23% · 30/64 GB`, both machines added up as one computer) opens it:
 
 - CPU in total and per core cluster (performance and efficiency on the Mac, every core on the PC), memory used with pressure, swap, and temperatures (the SoC, SSD and battery on the Mac, Tctl, the NVMe and the GPU on the PC), each with a sparkline of the last few minutes.
@@ -178,6 +184,8 @@ The Mac reads its own counters and sensors (no root needed). The PC streams `/pr
 ## Themes
 
 CrossAgent ships with two themes, Default and Mono. Pick one in Settings or under View > Theme. It applies right away, including running terminals.
+
+<p align="center"><img src="docs/media/themes.gif" width="720" alt="Switching from the Default theme to Mono and back while four terminals keep running"></p>
 
 Your own themes go in `~/.config/crossagent/themes/` as `.json` files. View > Theme > Reveal Themes Folder creates the folder and opens it. Edits show up live, no restart needed. A file that can't be read is skipped, and a toast tells you why.
 
