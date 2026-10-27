@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The one row at the top of the window: traffic lights, the project switcher, the
+/// The one row at the top of the window: traffic lights, the project menu, the
 /// tabs, then agent chips, sync, activity and the new button on the right. The tabs
 /// take whatever the fixed items leave. When those would leave less than two tabs'
 /// worth, the agent chips go first, so nothing ever clips.
@@ -360,9 +360,9 @@ private struct AgentChipList: View {
     }
 }
 
-// MARK: - Project switcher
+// MARK: - Project menu
 
-/// Project name with a chevron that opens the project switcher. "CrossAgent" with no project.
+/// Project name with a chevron that opens the project menu. "CrossAgent" with no project.
 struct ProjectTitle: View {
     @EnvironmentObject private var app: AppState
     @State private var open = false
@@ -393,27 +393,21 @@ struct ProjectTitle: View {
     }
 }
 
-/// Where the open project lives, the open projects, recents, open and close.
+/// Where the project lives, recents, open and close. Other open projects are windows
+/// of their own (Window menu, Cmd+`).
 struct ProjectSwitcher: View {
     @EnvironmentObject private var app: AppState
     var close: () -> Void
 
     var body: some View {
-        let open = app.openProjects.reversed()
-        let openPaths = Set(open.map(\.path))
-        let recents = app.recentProjects.filter { !openPaths.contains($0.path) }
+        let open = Set(ProjectWindows.shared.openPaths)
+        let recents = app.recentProjects.filter { $0.path != app.project?.path }
         VStack(alignment: .leading, spacing: 2) {
             if let p = app.project { here(p) }
-            if !open.isEmpty {
-                heading("OPEN")
-                ForEach(Array(open), id: \.path) { p in
-                    projectRow(name: p.name, path: p.path, current: p.path == app.project?.path) { app.switchProject(p.url) }
-                }
-            }
             if !recents.isEmpty {
                 heading("RECENT")
                 ForEach(recents.prefix(8)) { r in
-                    projectRow(name: r.name, path: r.path, current: false) { app.switchProject(r.url) }
+                    projectRow(name: r.name, path: r.path, open: open.contains(r.path)) { app.switchProject(r.url) }
                 }
             }
             Divider().padding(.vertical, 4)
@@ -461,7 +455,8 @@ struct ProjectSwitcher: View {
             .padding(.bottom, 2)
     }
 
-    private func projectRow(name: String, path: String, current: Bool, action: @escaping () -> Void) -> some View {
+    /// `open` marks a project that has a window already; picking it brings that forward.
+    private func projectRow(name: String, path: String, open: Bool, action: @escaping () -> Void) -> some View {
         row(action: action) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 1) {
@@ -473,8 +468,9 @@ struct ProjectSwitcher: View {
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 6)
-                if current {
-                    Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(Palette.muted)
+                if open {
+                    Image(systemName: "macwindow").font(.system(size: 10)).foregroundStyle(Palette.muted)
+                        .help("Open in another window")
                 }
             }
         }
@@ -484,7 +480,7 @@ struct ProjectSwitcher: View {
         let label = label()
         return Button {
             close()
-            // Let the popover go away before the window changes under it.
+            // Let the popover go away before another window comes up or this one closes.
             DispatchQueue.main.async(execute: action)
         } label: {
             Hover { h in

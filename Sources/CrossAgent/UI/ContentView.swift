@@ -5,6 +5,15 @@ struct ContentView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        // Normally the top bar sits in the titlebar row. Once windows are merged into
+        // native tabs, the tab bar comes below that row, so everything starts under it.
+        GeometryReader { geo in
+            main.padding(.top, geo.safeAreaInsets.top > 40 ? geo.safeAreaInsets.top : 0)
+                .ignoresSafeArea()
+        }
+    }
+
+    private var main: some View {
         VStack(spacing: 0) {
             TopBar()
             TabContent()
@@ -34,7 +43,6 @@ struct ContentView: View {
         .animation(.easeOut(duration: 0.12), value: app.folderPrompt)
         .animation(.easeOut(duration: 0.18), value: app.toast)
         .background(WindowAccessor { app.attach(window: $0) })
-        .ignoresSafeArea()
     }
 }
 
