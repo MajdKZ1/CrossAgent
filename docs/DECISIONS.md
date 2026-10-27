@@ -331,3 +331,15 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   - **Project filter:** it matches the resolved path too, since macOS reports `/tmp/x` as `/private/tmp/x`. Mac and PC folders with the same home relative path share a group.
   - **Station strip:** it now lists other Claude sessions in this project, the ones CrossAgent didn't start, and they can be clicked.
   - **CPU:** release build, whole app. A Live view on an active session uses about 0.7% of a core, the Sessions tab about 1%.
+- Final verification (M24):
+  - **What passed:** the verifier passed sessions, windows, the Portal, Super-Max and the release bundle on both machines.
+  - **Fixes after the verifier:**
+    - **PC Live view order:** when subagent lines arrive after later main lines, the feed now puts everything back in time order.
+    - **Recent sessions:** Claude Code's `<id>.orphaned-<ts>-<hex>.jsonl` copies and stub transcripts with no cwd are no longer listed.
+    - **Release bundle:** `bundle.sh` no longer copies the test resource bundle into the app.
+    - **Memory tile:** the PC memory tile shows installed memory, like the Super-Max card, instead of the smaller figure Linux calls usable.
+  - **Dead code removed:** the Station's "outside tmux" Claude process scan went once Sessions replaced it, so a fast tmux poll no longer runs `ps` and `lsof`.
+  - **Numbers:**
+    - **Sessions:** with a PC Live view open, the app uses 0.27% of a core.
+    - **Windows:** 3 idle project windows use 0.33%.
+    - **Discovery:** nothing polls while no Sessions list or Live view is on screen.
