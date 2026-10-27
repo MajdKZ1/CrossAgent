@@ -179,6 +179,8 @@ final class AgentGraph: ObservableObject {
     @Published var nodes: [String: AgentNode] = [:]
     /// Finished nodes kept on the canvas until the user clears them, oldest first.
     @Published var finished: [String] = []
+    /// Which node shows which remote worker. See Core/Events/RemoteWorkers.swift.
+    var remoteTable = RemoteTable()
 
     var orchestrator: AgentNode? { nodes[Self.orchestratorID] }
     var others: [AgentNode] { nodes.values.filter { $0.kind != .orchestrator }.sorted { $0.startedAt < $1.startedAt } }

@@ -121,19 +121,13 @@ final class GraphReducerTests: XCTestCase {
         XCTAssertEqual(g.nodes[s]?.tmuxSession, s)
         XCTAssertEqual(g.nodes[s]?.state, .working)
         XCTAssertEqual(g.nodes[s]?.flow, .toNode)
+        XCTAssertEqual(g.nodes[s]?.activity, "Running swift test")
 
-        // Claude inside the worker asks for permission.
-        g.apply(AgentEvent(ts: 101, ev: "PermissionRequest", host: "pc", sid: "x", role: "worker", project: "proj",
-                           node: "tests", tool: "Bash", sum: "Needs permission: Running rm -rf build"))
-        XCTAssertEqual(g.nodes[s]?.state, .needsInput("Needs permission: Running rm -rf build"))
+        // Hook events from a Claude with role "worker" (the retired `ca run --claude`) draw nothing.
         g.apply(AgentEvent(ts: 102, ev: "PreToolUse", host: "pc", sid: "x", role: "worker", project: "proj",
-                           node: "tests", tool: "Bash", sum: "Running swift test"))
-        XCTAssertEqual(g.nodes[s]?.state, .working)
-        // A worker on the other host with the same task name is someone else.
-        g.apply(AgentEvent(ts: 102, ev: "PreToolUse", host: "mac", sid: "y", role: "worker", project: "proj",
                            node: "tests", tool: "Bash", sum: "Running ls"))
         XCTAssertEqual(g.nodes[s]?.activity, "Running swift test")
-        XCTAssertNotNil(g.nodes["ca-proj-mac-tests"])
+        XCTAssertEqual(g.nodes.count, 2)
 
         g.apply(AgentEvent(ts: 110, ev: "WorkerStop", host: "pc", sid: s, role: "worker", project: "proj",
                            node: "tests", sum: "Executed 48 tests", tmux: s, rc: 0))
@@ -157,13 +151,11 @@ final class GraphReducerTests: XCTestCase {
         XCTAssertEqual(g.nodes["w"]?.state, .working)
         g.tick(now: at(145))
         XCTAssertEqual(g.nodes["w"]?.state, .idle)
-        // Activity brings it back.
-        g.apply(AgentEvent(ts: 150, ev: "PreToolUse", host: "pc", sid: "c", role: "worker", project: "proj", node: "bench", sum: "Running make"))
-        XCTAssertEqual(g.nodes["w"]?.state, .working)
         // needsInput never dozes off.
-        g.apply(AgentEvent(ts: 151, ev: "PermissionRequest", host: "pc", sid: "c", role: "worker", project: "proj", node: "bench", sum: "Needs permission"))
+        g.apply(AgentEvent(ts: 150, ev: "PreToolUse", role: "orchestrator", tool: "Bash", sum: "Running make"))
+        g.apply(AgentEvent(ts: 151, ev: "PermissionRequest", role: "orchestrator", tool: "Bash", sum: "Needs permission"))
         g.tick(now: at(1000))
-        XCTAssertEqual(g.nodes["w"]?.state, .needsInput("Needs permission"))
+        XCTAssertEqual(g.orchestrator?.state, .needsInput("Needs permission"))
     }
 
     func testErrorClearsOnNextActivity() {
@@ -250,7 +242,13 @@ final class GraphReducerTests: XCTestCase {
             XCTAssertTrue(seen.contains(s), "demo never shows \(s)")
         }
         XCTAssertEqual(Set(g.others.filter { $0.kind == .worker }.map(\.hostId)), ["mac", "pc"])
-        XCTAssertEqual(g.others.filter { $0.kind == .subagent }.count, 3)
+        XCTAssertEqual(g.others.filter { $0.kind == .subagent }.count, 4)
+        let pc = g.others.first { $0.remote != nil }
+        XCTAssertEqual(pc?.name, "pc-worker")
+        XCTAssertEqual(pc?.hostId, "pc")
+        XCTAssertEqual(pc?.state, .done)
+        XCTAssertEqual(pc?.remote?.resultPath, "/home/me/demo/.crossagent/remote/e2e/result.md")
+        XCTAssertNil(g.nodes["ca-demo-pc-e2e"], "one node per remote worker")
     }
 
     func testResolveNeedsInputFromScreen() {
@@ -261,7 +259,8 @@ final class GraphReducerTests: XCTestCase {
         XCTAssertEqual(g.nodes[toucher]?.state, .needsInput("Needs permission: Running touch z.txt"))
         let w = "ca-proj-pc-tests"
         g.apply(AgentEvent(ts: 1019, ev: "WorkerStart", host: "pc", sid: w, role: "worker", node: "tests", tmux: w))
-        g.apply(AgentEvent(ts: 1020, ev: "PermissionRequest", host: "pc", role: "worker", node: "tests", tool: "Bash", sum: "Needs permission: Running make"))
+        g.nodes[w]?.state = .needsInput("Needs permission: Running make")
+        g.nodes[w]?.activity = "Needs permission: Running make"
 
         g.resolveNeedsInput(tmuxSession: "something-else", now: at(1030))
         XCTAssertEqual(g.nodes[toucher]?.state, .needsInput("Needs permission: Running touch z.txt"))

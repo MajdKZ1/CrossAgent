@@ -46,9 +46,9 @@ extension AgentGraph {
     /// Applies one event with no project filter.
     func apply(_ e: AgentEvent) {
         let t = Date(timeIntervalSince1970: e.ts)
+        if e.role == "remote" { applyRemote(e, at: t); return }
         if e.ev == "WorkerStart" || e.ev == "WorkerStop" { applyWorker(e, t); return }
         if e.ev == "SendMessage" { return }
-        if e.role == "worker" { applyWorkerClaude(e, t); return }
         if e.role != "orchestrator" { return }
         if let aid = e.aid, !aid.isEmpty { applySubagent(aid, e, t); return }
         applyOrchestrator(e, t)
@@ -58,9 +58,10 @@ extension AgentGraph {
         for e in events { apply(e, project: project, projectPaths: projectPaths) }
     }
 
-    /// Time based transitions: busy workers and subagents quiet for `idleAfter` go idle.
+    /// Time based transitions: busy workers and subagents quiet for `idleAfter` go idle,
+    /// unless their remote turn is still running.
     func tick(now: Date) {
-        for (id, n) in nodes where n.kind != .orchestrator {
+        for (id, n) in nodes where n.kind != .orchestrator && !isRemoteRunning(id) {
             switch n.state {
             case .thinking, .working:
                 if now.timeIntervalSince(n.updatedAt) >= Self.idleAfter {
@@ -99,6 +100,7 @@ extension AgentGraph {
                 if !tasks.isEmpty {
                     update(o, at: t) { $0.state = .waiting(tasks); $0.activity = "Waiting on " + tasks.joined(separator: ", ") }
                 }
+                for r in Self.caRemoteTargets(command) { linkRemote(nodeID: o, host: r.host, role: r.role, slug: e.project, at: t) }
             }
         case "PostToolUse":
             if e.tool == "Agent" || e.tool == "Task", let id = e.to, !id.isEmpty {
@@ -176,6 +178,28 @@ extension AgentGraph {
         return tasks
     }
 
+    /// Workers a `ca remote <host> <role> ...` or `ca remote wait <host> <role>` command
+    /// starts or waits on, anywhere in a shell line. `answer`, `status`, `stop` and
+    /// `template` name no worker to link.
+    nonisolated static func caRemoteTargets(_ command: String) -> [RemoteTarget] {
+        var out: [RemoteTarget] = []
+        for line in command.components(separatedBy: CharacterSet(charactersIn: "\n;|&()")) {
+            let words = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"'")) }
+            guard let i = words.indices.first(where: {
+                (words[$0] == "ca" || words[$0].hasSuffix("/ca")) && $0 + 1 < words.count && words[$0 + 1] == "remote"
+            }) else { continue }
+            var j = i + 2
+            if j < words.count, words[j] == "wait" { j += 1 }
+            guard j + 1 < words.count, !["answer", "status", "stop", "template"].contains(words[j]) else { continue }
+            let host = words[j], role = words[j + 1]
+            guard !host.isEmpty, !role.isEmpty, !host.hasPrefix("-"), !role.hasPrefix("-"), !role.hasPrefix(">") else { continue }
+            let r = RemoteTarget(host: remoteHost(host), role: role)
+            if !out.contains(r) { out.append(r) }
+        }
+        return out
+    }
+
     // MARK: Needs input, resolved from the screen
 
     /// The app's screen check says `tmuxSession` no longer waits for input (approving a
@@ -185,7 +209,7 @@ extension AgentGraph {
     func resolveNeedsInput(tmuxSession: String, now: Date = Date()) {
         let orchestratorSession = orchestrator?.tmuxSession == tmuxSession
         for (id, n) in nodes {
-            guard case .needsInput = n.state else { continue }
+            guard case .needsInput = n.state, n.remote?.permission == nil else { continue }
             let mine: Bool
             switch n.kind {
             case .orchestrator, .subagent: mine = orchestratorSession
@@ -249,6 +273,9 @@ extension AgentGraph {
                 if let s = report ?? e.sum { Self.push(s, into: &$0.recent) }
             }
             if e.tool == "SendMessage", let to = e.to { messageSent(to: to, from: aid, at: t) }
+            if e.tool == "Bash", let command = e.prompt {
+                for r in Self.caRemoteTargets(command) { linkRemote(nodeID: aid, host: r.host, role: r.role, slug: e.project, at: t) }
+            }
         case "PostToolUse":
             update(aid, at: t) { n in if Self.isBusyOrStuck(n.state) { n.state = .working } }
         case "PostToolUseFailure", "StopFailure":
@@ -285,60 +312,7 @@ extension AgentGraph {
                                   activity: "", tmuxSession: id, startedAt: t, updatedAt: t)
         }
         let rc = e.rc ?? 0
-        if rc == 0 {
-            finish(id, at: t, message: e.sum)
-        } else {
-            update(id, at: t) {
-                $0.state = .error("exit \(rc)")
-                $0.activity = e.sum ?? "Exited with \(rc)"
-                if let s = e.sum { Self.push(s, into: &$0.recent) }
-                $0.flow = .toOrchestrator
-                $0.flowAt = t
-                $0.finishedAt = t
-            }
-            markFinished(id)
-        }
-    }
-
-    /// Claude Code hook events from inside a `ca run --claude` worker.
-    private func applyWorkerClaude(_ e: AgentEvent, _ t: Date) {
-        guard let task = e.node, !task.isEmpty else { return }
-        let host = e.host ?? "mac"
-        let id = nodes.values.first { $0.kind == .worker && $0.hostId == host && $0.name == task }?.id
-            ?? CASessionName.make(slug: e.project ?? "", host: host, task: task)
-        if nodes[id] == nil {
-            nodes[id] = AgentNode(id: id, name: task, kind: .worker, hostId: host, state: .thinking, activity: "Starting",
-                                  tmuxSession: id, startedAt: t, updatedAt: t, flow: .toNode, flowAt: t)
-        }
-        if case .done = nodes[id]?.state { return }
-        if case .error = nodes[id]?.state, e.ev != "PreToolUse", e.ev != "UserPromptSubmit" { return }
-        switch e.ev {
-        case "UserPromptSubmit":
-            update(id, at: t) { $0.state = .thinking; $0.activity = e.sum ?? "Thinking" }
-        case "PreToolUse":
-            update(id, at: t) {
-                $0.state = .working
-                $0.activity = e.sum ?? "Working"
-                if let s = e.sum { Self.push(s, into: &$0.recent) }
-            }
-            if e.aid == nil, e.tool == "SendMessage", let to = e.to { messageSent(to: to, from: id, at: t) }
-        case "PostToolUse":
-            update(id, at: t) { n in if Self.isBusyOrStuck(n.state) { n.state = .working } }
-        case "PermissionRequest":
-            update(id, at: t) { Self.ask(&$0, e.sum ?? "Needs permission", specific: true) }
-        case "Notification":
-            guard let kind = e.tool, Self.needsInputNotifications.contains(kind) else { return }
-            update(id, at: t) { Self.ask(&$0, e.msg ?? "Needs your input") }
-        case "Stop" where e.aid == nil:
-            update(id, at: t) {
-                $0.state = .idle
-                if let m = e.msg { $0.activity = m; Self.push(m, into: &$0.recent) }
-            }
-        case "StopFailure":
-            update(id, at: t) { $0.state = .error(e.err ?? "Something failed"); $0.activity = e.err ?? "Failed" }
-        default:
-            break
-        }
+        if rc == 0 { finish(id, at: t, message: e.sum) } else { fail(id, at: t, rc: rc, message: e.sum) }
     }
 
     // MARK: Helpers
@@ -360,7 +334,7 @@ extension AgentGraph {
         nodes[id]!.flowAt = t
     }
 
-    private func finish(_ id: String, at t: Date, message: String?) {
+    func finish(_ id: String, at t: Date, message: String?) {
         guard let n = nodes[id], n.state != .done else { return }
         update(id, at: t) {
             $0.state = .done
@@ -377,6 +351,19 @@ extension AgentGraph {
         markFinished(id)
     }
 
+    /// A worker exited with `rc` (not 0).
+    func fail(_ id: String, at t: Date, rc: Int, message: String?) {
+        update(id, at: t) {
+            $0.state = .error("exit \(rc)")
+            $0.activity = message ?? "Exited with \(rc)"
+            if let s = message { Self.push(s, into: &$0.recent) }
+            $0.flow = .toOrchestrator
+            $0.flowAt = t
+            $0.finishedAt = t
+        }
+        markFinished(id)
+    }
+
     private func markFinished(_ id: String) {
         finished.removeAll { $0 == id }
         finished.append(id)
@@ -384,10 +371,11 @@ extension AgentGraph {
             let old = finished.removeFirst()
             nodes[old] = nil
         }
+        remoteNodeFinished(id)
     }
 
     /// A finished agent that acts again (teammates can be resumed) is live again.
-    private func revive(_ id: String) {
+    func revive(_ id: String) {
         guard let n = nodes[id] else { return }
         switch n.state {
         case .done, .error:
@@ -397,9 +385,10 @@ extension AgentGraph {
         }
     }
 
-    private func update(_ id: String, at t: Date?, _ change: (inout AgentNode) -> Void) {
+    func update(_ id: String, at t: Date?, _ change: (inout AgentNode) -> Void) {
         guard var n = nodes[id] else { return }
         change(&n)
+        Self.holdRemotePermission(&n)
         n.activity = Self.oneLine(n.activity)
         switch n.state {
         case .needsInput(let s): n.state = .needsInput(Self.oneLine(s))
@@ -426,7 +415,7 @@ extension AgentGraph {
     /// Sets needsInput and remembers a `ca wait` it interrupts. A generic notification
     /// never replaces a more specific ask (like the PermissionRequest's "Needs
     /// permission: Running x"); a `specific` one does.
-    private static func ask(_ n: inout AgentNode, _ text: String, specific: Bool = false) {
+    static func ask(_ n: inout AgentNode, _ text: String, specific: Bool = false) {
         if case .needsInput = n.state {
             guard specific else { return }
         } else if case .waiting = n.state {
@@ -457,7 +446,7 @@ extension AgentGraph {
         return s.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
-    private static func push(_ text: String, into recent: inout [String]) {
+    static func push(_ text: String, into recent: inout [String]) {
         let line = text.split(whereSeparator: \.isNewline).map { plain(String($0)) }.filter { !$0.isEmpty }.joined(separator: " ")
         guard !line.isEmpty else { return }
         let l = line.count > 160 ? String(line.prefix(157)) + "..." : line
