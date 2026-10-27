@@ -11,7 +11,8 @@ let package = Package(
         .executableTarget(
             name: "CrossAgent",
             dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")],
-            path: "Sources/CrossAgent"
+            path: "Sources/CrossAgent",
+            resources: [.copy("Resources/AppIcon.icns")]
         ),
         .testTarget(
             name: "CrossAgentTests",

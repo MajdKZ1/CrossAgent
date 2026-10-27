@@ -66,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Needed when launched as a bare binary (swift run) instead of a bundle.
         NSApp.setActivationPolicy(.regular)
+        if let icon = Self.bundledIcon() { NSApp.applicationIconImage = icon }
         NSApp.appearance = NSAppearance(named: .darkAqua)
         NSWindow.allowsAutomaticWindowTabbing = false
         NSApp.activate(ignoringOtherApps: true)
@@ -85,4 +86,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    /// AppIcon.icns from the .app, or from the SwiftPM resource bundle next to a bare
+    /// binary (swift run). Looked up by hand since Bundle.module traps when it's missing.
+    private static func bundledIcon() -> NSImage? {
+        let resources = Bundle.main.executableURL.flatMap {
+            Bundle(url: $0.deletingLastPathComponent().appendingPathComponent("CrossAgent_CrossAgent.bundle"))
+        }
+        let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns")
+            ?? resources?.url(forResource: "AppIcon", withExtension: "icns")
+        return url.flatMap(NSImage.init(contentsOf:))
+    }
 }
