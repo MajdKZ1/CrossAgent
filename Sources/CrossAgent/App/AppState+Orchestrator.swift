@@ -59,6 +59,9 @@ final class ProjectOrchestrator: ObservableObject {
 }
 
 extension AppState {
+    /// The local host's id from hosts.json, for graphs whose orchestrator runs here.
+    var localHostID: String { hosts.first(where: \.isLocal)?.id ?? hosts.first?.id ?? "local" }
+
     // MARK: Lifetime
 
     /// Builds the graph and controller for `project`. With `on` (or our hooks already
@@ -66,7 +69,7 @@ extension AppState {
     /// so the graph is current whatever mode the window is in.
     func setUpOrchestrator(for project: Project, on: Bool?) {
         tearDownOrchestrator()
-        let graph = AgentGraph(orchestratorHost: hosts.first(where: \.isLocal)?.id ?? "mac")
+        let graph = AgentGraph(orchestratorHost: localHostID, hosts: hosts)
         let controller = OrchestratorController(slug: project.slug, macPath: project.path,
                                                 pcRelativePath: project.pcRelativePath, hosts: hosts, graph: graph)
         let o = ProjectOrchestrator(graph: graph, controller: controller, enabled: on ?? controller.isEnabled)
@@ -515,7 +518,7 @@ extension AppState {
         stopDemo()
         o.demoPositions = [:]
         let real = o.graph.orchestrator
-        let graph = AgentGraph(orchestratorHost: real?.hostId ?? "mac", session: real?.tmuxSession)
+        let graph = AgentGraph(orchestratorHost: real?.hostId ?? localHostID, session: real?.tmuxSession, hosts: hosts)
         o.demoGraph = graph
         let start = Date()
         var steps = DemoEvents.script(slug: project.slug, start: start).enumerated()
