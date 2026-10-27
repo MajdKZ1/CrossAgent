@@ -128,15 +128,23 @@ struct LiveSessionView: View {
         return "Watching, running in \(place) on \(on)"
     }
 
+    static let wrapperTip = "Tip: sessions started with the CrossAgent claude wrapper can be used from both places."
+
     private func notice(_ text: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.circle")
                 .font(.system(size: 11))
                 .foregroundStyle(Palette.warning)
-            Text(text)
-                .font(.system(size: 11))
-                .foregroundStyle(Palette.muted)
-                .lineLimit(2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(text)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.muted)
+                    .lineLimit(2)
+                Text(Self.wrapperTip)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Palette.faint)
+                    .lineLimit(1)
+            }
             Spacer(minLength: 8)
             Button("I've closed it") { confirmOverride = true }
                 .buttonStyle(ChromeButtonStyle())
