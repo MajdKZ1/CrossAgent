@@ -48,7 +48,7 @@ final class CanvasStage: NSView, CardEvents {
     private let overlayView = LayerView()
     private let relayLine = CAShapeLayer()
     private var cards: [String: CardHost] = [:]
-    private var mascot: MascotHost?
+    private(set) var mascot: MascotHost?
     private var cables: [String: CableLayers] = [:]
     private var order: [String] = []
     private var link: CADisplayLink?
@@ -335,7 +335,8 @@ final class CanvasStage: NSView, CardEvents {
             card.set(model(orch, style: .live), events: self, orchestrator: true)
             card.place(center: center, scale: cam.zoom, opacity: 1)
             // The mascot sits on the card's top edge, sunk 3 pt into it.
-            let m = mascot ?? makeMascot(graph)
+            let m = mascot ?? makeMascot()
+            m.follow(graph)
             let top = center.y - OrchMetrics.orchestrator.height / 2 * cam.zoom
             m.place(center: CGPoint(x: center.x, y: top - (m.natural.height / 2 - 3) * cam.zoom),
                     scale: cam.zoom, opacity: 1)
@@ -367,8 +368,8 @@ final class CanvasStage: NSView, CardEvents {
         return c
     }
 
-    private func makeMascot(_ graph: AgentGraph) -> MascotHost {
-        let m = MascotHost(graph: graph) { [weak self] id in self?.actions.expand(id) }
+    private func makeMascot() -> MascotHost {
+        let m = MascotHost { [weak self] id in self?.actions.expand(id) }
         mascot = m
         order = []
         return m
@@ -653,21 +654,49 @@ final class CardHostingView: NSHostingView<CardRoot> {
     }
 }
 
-/// The mascot in its own small hosting view, so its animation frames only update
-/// itself and never the orchestrator card or the window around it.
+/// Puff, hosted straight in AppKit (no SwiftUI in between) so its own hit test
+/// decides: the body and the orbs take clicks, everything else around them passes
+/// through to the card and the canvas below. Follows whichever graph the canvas shows.
 final class MascotHost: ScaledView {
-    /// Takes clicks: poking the mascot plays a trick, and its orbs open their agent.
-    init(graph: AgentGraph, onOpenAgent: @escaping (String) -> Void) {
-        let hosting = NSHostingView(rootView: MascotView(graph: graph, onOpenAgent: onOpenAgent))
-        hosting.sizingOptions = []
-        let fit = hosting.fittingSize
-        let size = fit.width > 1 && fit.height > 1 ? fit : CGSize(width: 40, height: 40)
-        super.init(natural: size)
-        hosting.frame = CGRect(origin: .zero, size: size)
-        addSubview(hosting)
+    let puff = MascotLayerView()
+    private(set) weak var graph: AgentGraph?
+    private var hiddenWatch: NSObjectProtocol?
+
+    init(onOpenAgent: @escaping (String) -> Void) {
+        super.init(natural: MascotLayerView.size(scale: 0.75))
+        puff.frame = CGRect(origin: .zero, size: natural)
+        puff.onOpenAgent = onOpenAgent
+        addSubview(puff)
+        hiddenWatch = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil,
+                                                             queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyHidden() }
+        }
+        applyHidden()
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit {
+        if let hiddenWatch { NotificationCenter.default.removeObserver(hiddenWatch) }
+    }
+
+    /// Rebinds when the canvas switches graphs (the demo swaps in its own).
+    func follow(_ g: AgentGraph) {
+        guard g !== graph else { return }
+        graph = g
+        puff.follow(g)
+    }
+
+    /// The View menu's Show Mascot toggle.
+    private func applyHidden() {
+        let hide = UserDefaults.standard.bool(forKey: "mascotHidden")
+        if isHidden != hide { isHidden = hide }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let v = super.hitTest(point)
+        return v === self ? nil : v
+    }
 }
 
 /// Plain layer holder that never takes clicks. `root` uses top left coordinates.
