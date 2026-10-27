@@ -413,3 +413,38 @@ Checked on both machines (`claude --version` says `2.1.311 (Claude Code)` on the
 - **A pending remote permission pins needsInput.** Mac side events of the proxy (its Bash PostToolUse, transcript tool results) and the screen check can't clear it, only PermissionAnswer or RemoteStop.
 - **Live views get remote events through `RemoteEventLog`,** a per project log (last 1000) the project's followers append to. Any session feed whose cwd is in a registered project applies what it hasn't yet, so a Live view opened later still catches up. It needs the project's Orchestrator events turned on, same as the project canvas.
 - **`ca run --claude` hook events (role worker) are ignored now.** The demo shows a pc-worker with an approval instead.
+
+### M26 ca remote
+
+- **State lives on the worker's host** in `.crossagent/remote/<role>/` (brief.md, turn-N.md, turn, turn-N.exit, session, stream.jsonl, result-N.md, result.md, allow, model, approve_timeout, loop.pid, turn-N.err). `.crossagent/` never crosses the Portal. The Mac keeps copies of each brief and report in `.crossagent/remote/<host>-<role>/`.
+- **One tmux loop per role, not one process per turn.** `ca __remote_loop` polls the `turn` file once a second and runs one turn at a time, so the whole conversation's scrollback stays in one pane. `loop.pid` plus `kill -0` plus `tmux has-session` decide if it's alive; a dead loop with an open turn gets that turn closed with exit 1 so nothing waits forever.
+- **No session options on the loop's tmux session.** `ca run` sets none either; the app sets status, mouse and prefixes when it attaches, same as for every other ca session.
+- **`--allowedTools` gets one argv element per rule** (`--allowedTools 'Bash(npm test:*)' --allowedTools Read`). Checked on 2.1.311 with a haiku run: `Bash(python3 -c:*)` let `python3 -c 'print(6*7)'` through without asking while `curl` still went to the permission tool. The prompt goes in on stdin (`claude -p < turn-N.md`), which works the same as an argument and avoids any length or quoting limits.
+- **The exact command, run in the project folder on the PC:**
+  ```
+  env -u CROSSAGENT_ROLE -u CROSSAGENT_NODE -u CROSSAGENT_PROJECT -u CA_ROOT -u CA_SLUG -u CA_HERE \
+      CROSSAGENT_REMOTE_WORKER=1 MCP_TOOL_TIMEOUT=<(approve timeout + 60) * 1000> \
+    claude -p --output-format stream-json --verbose --permission-mode acceptEdits \
+      --mcp-config '{"mcpServers":{"crossagent":{"command":"<python3>","args":["-I","<skill>/scripts/ca-approve.py"],"env":{CA_HOST,CA_ROLE,CA_PROJECT,CA_TMUX,CA_APPROVE_TIMEOUT}}}}' \
+      --permission-prompt-tool mcp__crossagent__approve \
+      [--model M] [--resume <session id>] [--allowedTools RULE]... < turn-N.md 2> turn-N.err \
+    | python3 -I <skill>/scripts/ca-stream.py --dir ... --turn N ... --rc-file turn-N.rc --err-file turn-N.err
+  ```
+  PATH comes from ca itself (`~/.local/bin` first), which is where claude lives on the PC.
+- **`ca remote` checks the role before handing off files.** It asks the PC whether the role is mid-turn (or has no session for `--continue`) before it flushes or pushes, so a refused start never touches files.
+- **Without a Portal, only a new conversation pushes.** A follow-up skips the push: rsync would overwrite whatever the worker changed on the PC in earlier turns with the Mac's older copies.
+- **A new conversation for a role starts clean:** the old loop is killed and the state files (session, allow rules, model, turns) are deleted. `--allow` and `--model` persist across the turns of one conversation only.
+- **`__remote_wait` prints `ca-turn N` as its first stdout line** so the Mac knows which turn it got (for `ca remote wait` without a turn). The Mac strips it, so stdout of `ca remote` is exactly the report. The footer and approval notices go to stderr.
+- **The PC copy of the skill updates itself.** `ensure_remote` compares a cksum of ca, ca-stream.py and ca-approve.py on both machines and reruns `install.sh --pc` when they differ, so a new `ca remote` never talks to an old PC side. It runs on every `ca remote` start (two cheap ssh calls over the shared connection).
+- **`ca remote stop` kills the loop's process group** (claude, ca-stream and the approval server die with it), writes RemoteStop rc 130 if a turn was open and drops that worker's request files. `session` stays, so `--continue` recreates the loop and resumes.
+- **`CA_REMOTE_LOCAL=<dir>` runs the "remote" side on this machine** in `<dir>`. Only the tests use it, with a temp HOME, a fake claude and a private tmux server (`TMUX_TMPDIR`).
+- **install.sh leaves `tests/` out of the installed skill** and copies only `pc-worker.md` and `mac-worker.md` into `~/.claude/agents`, never deleting anything else there.
+- **`ca init` replaces a CROSSAGENT.md without the `<!-- crossagent template v2 -->` marker** only when the shipped template has it, and moves the old one to `.crossagent/CROSSAGENT.md.old`.
+- **ca-stream.py rate limits activity:** exact repeats are dropped, text to one event a second, everything to ten a second. Tool calls in a normal run never hit the cap. Text activity uses the first line that isn't a markdown heading.
+
+### M28 permission forwarding
+
+- **Each `tools/call` waits on its own thread** in ca-approve.py, so parallel tool calls show up as several approval cards at once instead of one after another.
+- **Request files are written atomically** (tmp then rename) with the full detail up to 2000 chars; the PermissionAsk event's `prompt` is capped at 600. Both files go away once answered or timed out.
+- **`ca remote wait` announces each unanswered request once** on stderr and skips ones that already have an `.answer` file waiting to be picked up.
+- **Smoke test on the PC (haiku):** turn 1 asked for `python3 hello.py` (acceptEdits doesn't cover running scripts), `ca remote answer pc <id> allow` let it through. Turn 2 (`--continue`) asked for `curl -sI https://example.com | head -n 1`, allowed the same way, got `HTTP/2 200`. Both turns reported session `143f439c-cbb1-49b5-a17f-e8234efba21c`.
