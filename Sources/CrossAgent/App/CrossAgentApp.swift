@@ -47,6 +47,7 @@ struct PaneCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Divider()
         }
+        CommandMenu("Orchestrator") { OrchestratorMenu(app: app) }
         CommandMenu("Panes") {
             item("Next Pane") { app.moveFocus(1) }
                 .keyboardShortcut("]", modifiers: [.command, .shift])
@@ -84,6 +85,22 @@ struct RecentProjectsMenu: View {
     }
 }
 
+/// The Orchestrator menu. A view so it follows the open project.
+struct OrchestratorMenu: View {
+    @ObservedObject var app: AppState
+    @AppStorage("mascotHidden") private var mascotHidden = false
+
+    var body: some View {
+        let on = app.orch?.enabled == true
+        Button("Clear Finished Agents") { app.clearFinishedAgents() }
+            .disabled(app.orch == nil)
+        Toggle("Show Mascot", isOn: Binding(get: { !mascotHidden }, set: { mascotHidden = !$0 }))
+        Divider()
+        Button("Turn Off Orchestrator for This Project") { app.turnOffOrchestrator() }
+            .disabled(!on)
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let app = AppState()
@@ -114,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         app.monitor?.stop()
         app.sync.stop()
         app.saveLayout()
+        app.tearDownOrchestrator()
         for pane in app.panes { pane.close() }
     }
 
