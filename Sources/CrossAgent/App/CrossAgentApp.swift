@@ -6,13 +6,25 @@ struct CrossAgentApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        WindowGroup("CrossAgent") {
+        // One window. Everything else is a tab in it, or a popover.
+        Window("CrossAgent", id: "main") {
             ContentView()
                 .environmentObject(appDelegate.app)
                 .frame(minWidth: 640, minHeight: 400)
         }
         .windowStyle(.hiddenTitleBar)
         .commands { PaneCommands(app: appDelegate.app) }
+        Settings { SettingsSlot() }
+    }
+}
+
+/// Placeholder for the Settings window's content.
+struct SettingsSlot: View {
+    var body: some View {
+        Text("Nothing to set yet")
+            .font(.system(size: 12))
+            .foregroundStyle(Palette.muted)
+            .frame(width: 360, height: 160)
     }
 }
 
@@ -35,24 +47,34 @@ struct PaneCommands: Commands {
                 .keyboardShortcut("o")
             Menu("Open Recent") { RecentProjectsMenu(app: app) }
             Divider()
-            item("Close Pane") { app.close() }
+            item("Close Tab") { if app.mode == .panes { app.close() } else { app.closeTab() } }
                 .keyboardShortcut("w")
             Button("Close Project") { app.leaveProject() }
         }
         CommandGroup(before: .sidebar) {
-            Button("Panes") { app.mode = .panes }
+            Button("Panes") { app.open(.panes) }
             item("Station") { app.toggleMode(.station) }
                 .keyboardShortcut("v", modifiers: [.command, .shift])
             item("Orchestrator") { if app.project != nil { app.toggleMode(.orchestrator) } }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+            Button("Activity") { app.open(.activity) }
+            Divider()
+            item("Next Tab") { app.selectAdjacentTab(1) }
+                .keyboardShortcut("]", modifiers: [.command, .shift])
+            item("Previous Tab") { app.selectAdjacentTab(-1) }
+                .keyboardShortcut("[", modifiers: [.command, .shift])
+            ForEach(1..<10) { n in
+                item("Tab \(n)") { app.select(index: n - 1) }
+                    .keyboardShortcut(KeyEquivalent(Character("\(n)")))
+            }
             Divider()
         }
         CommandMenu("Orchestrator") { OrchestratorMenu(app: app) }
         CommandMenu("Panes") {
             item("Next Pane") { app.moveFocus(1) }
-                .keyboardShortcut("]", modifiers: [.command, .shift])
+                .keyboardShortcut("]", modifiers: [.command, .option])
             item("Previous Pane") { app.moveFocus(-1) }
-                .keyboardShortcut("[", modifiers: [.command, .shift])
+                .keyboardShortcut("[", modifiers: [.command, .option])
             item("Maximize / Restore") { app.toggleMaximize() }
                 .keyboardShortcut(.return)
             Divider()
@@ -63,7 +85,7 @@ struct PaneCommands: Commands {
             Divider()
             ForEach(1..<10) { n in
                 item("Focus Pane \(n)") { app.focus(index: n - 1) }
-                    .keyboardShortcut(KeyEquivalent(Character("\(n)")))
+                    .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .control)
             }
         }
     }
@@ -116,8 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // CROSSAGENT_NO_ACTIVATE=1 keeps a test launch from stealing focus.
         if ProcessInfo.processInfo.environment["CROSSAGENT_NO_ACTIVATE"] != "1" { NSApp.activate(ignoringOtherApps: true) }
         if Automation.enabled { automation = Automation(app: app) }
-        OrchestratorDemo.openIfRequested()
-        MascotGallery.openIfRequested()
+        MascotGallery.writeSnapshotsIfRequested()
         shortcuts = Shortcuts(app: app)
         app.warmUpConnections()
         let monitor = TmuxMonitor(hosts: app.hosts)
@@ -125,6 +146,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         monitor.start()
         app.sync.start { [weak app] in app?.window }
         app.restoreLastProject()
+        // Dev views open as tabs in the window, never as windows of their own.
+        // The demo opens last so it's the one showing: its pointer checks need the canvas up.
+        if MascotGallery.isRequested { app.open(.dev(.mascotGallery)) }
+        if OrchestratorDemo.isRequested { app.open(.dev(.orchestratorDemo)) }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -132,7 +157,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         app.sync.stop()
         app.saveLayout()
         app.tearDownOrchestrator()
+        app.closeParkedWorkspaces()
         for pane in app.panes { pane.close() }
+        for pane in app.agentPanes.values { pane.close() }
+        app.orchestratorPane?.close()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

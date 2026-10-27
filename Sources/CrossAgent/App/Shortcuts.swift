@@ -46,36 +46,44 @@ final class Shortcuts {
 
         if app.showRelayPicker { return handleRelayPicker(key: key, flags: flags) }
         if app.folderPrompt != nil, !flags.contains(.command) { return handleFolderPrompt(key: key) }
-        if app.mode == .orchestrator, let o = app.orch, o.detail != nil || o.relay != nil {
-            // Esc closes the top card, unless a terminal in it has focus (Claude uses Esc).
-            if key == Key.escape, flags.isEmpty {
-                if o.relay != nil { o.relay = nil; return nil }
-                if !(main.firstResponder is PaneTerminalView) { app.closeDetail(); return nil }
-                return event
-            }
-            if key == Key.w, flags == .command {
-                if o.relay != nil { o.relay = nil } else { app.closeDetail() }
+        if app.mode == .orchestrator, let o = app.orch, o.relay != nil {
+            // Esc or Cmd+W closes the relay card.
+            if (key == Key.escape && flags.isEmpty) || (key == Key.w && flags == .command) {
+                o.relay = nil
                 return nil
             }
         }
 
-        guard flags.contains(.command), !flags.contains(.control), !flags.contains(.option) else { return event }
-        let shift = flags.contains(.shift)
-
-        switch (key, shift) {
-        case (Key.t, false): app.openNewPanePopover()
-        case (Key.o, false): app.presentOpenPanel()
-        case (Key.o, true): if app.project != nil { app.toggleMode(.orchestrator) }
-        case (Key.w, false): app.close()
-        case (Key.leftBracket, true): app.moveFocus(-1)
-        case (Key.rightBracket, true): app.moveFocus(1)
-        case (Key.returnKey, false), (Key.enter, false): app.toggleMaximize()
-        case (Key.b, true): app.toggleBroadcast()
-        case (Key.r, true): app.openRelayPicker()
-        case (Key.v, true): app.toggleMode(.station)
-        default:
-            guard !shift, let n = Key.digits.firstIndex(of: key) else { return event }
+        // Ctrl+1..9 focus a pane while the grid is up. Elsewhere the terminal gets them.
+        if flags == .control, app.mode == .panes, let n = Key.digits.firstIndex(of: key) {
             app.focus(index: n)
+            return nil
+        }
+
+        guard flags.contains(.command), !flags.contains(.control) else { return event }
+        let shift = flags.contains(.shift)
+        let option = flags.contains(.option)
+        let panes = app.mode == .panes
+
+        switch (key, shift, option) {
+        case (Key.t, false, false): app.openNewPanePopover()
+        case (Key.o, false, false): app.presentOpenPanel()
+        case (Key.o, true, false): if app.project != nil { app.toggleMode(.orchestrator) }
+        case (Key.w, false, false):
+            // The grid tab stays; Cmd+W there closes the focused pane, like before tabs.
+            if panes { app.close() } else { app.closeTab() }
+        case (Key.leftBracket, true, false): app.selectAdjacentTab(-1)
+        case (Key.rightBracket, true, false): app.selectAdjacentTab(1)
+        case (Key.leftBracket, false, true): if panes { app.moveFocus(-1) } else { return event }
+        case (Key.rightBracket, false, true): if panes { app.moveFocus(1) } else { return event }
+        case (Key.returnKey, false, false), (Key.enter, false, false):
+            if panes { app.toggleMaximize() } else { return event }
+        case (Key.b, true, false): app.toggleBroadcast()
+        case (Key.r, true, false): if panes { app.openRelayPicker() } else { return event }
+        case (Key.v, true, false): app.toggleMode(.station)
+        default:
+            guard !shift, !option, let n = Key.digits.firstIndex(of: key) else { return event }
+            app.select(index: n)
         }
         return nil
     }
