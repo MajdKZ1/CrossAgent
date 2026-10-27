@@ -23,12 +23,29 @@ HERE="${CA_HERE:-$HERE}"
 
 # ---------- project ----------
 
-ROOT="${CA_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-NAME="$(basename "$ROOT" | tr -c 'A-Za-z0-9._\n-' '_')"
-PROJ_CONF="$ROOT/.crossagent/project"
+set_root() {
+  ROOT="$1"
+  NAME="$(basename "$ROOT" | tr -c 'A-Za-z0-9._\n-' '_')"
+  PROJ_CONF="$ROOT/.crossagent/project"
+}
+set_root "${CA_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+
+# `ca sync start|stop <path>` works on another folder than the current one.
+root_from() {
+  [ -d "$1" ] || die "no such folder: $1"
+  set_root "$(cd "$1" && { git rev-parse --show-toplevel 2>/dev/null || pwd; })"
+}
 
 conf_get() { [ -f "$PROJ_CONF" ] && sed -n "s/^$1=//p" "$PROJ_CONF" | head -1 || true; }
-pc_dir() { local d; d="$(conf_get pc_dir)"; echo "${d:-crossagent/projects/$NAME}"; }
+conf_list() { conf_get "$1" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' || true; }
+
+# Same path relative to home on both machines (~/Projects/x <-> ~/Projects/x).
+# Projects outside home go to ~/crossagent/projects/<name>. pc_dir= in .crossagent/project overrides.
+pc_dir() {
+  local d; d="$(conf_get pc_dir)"
+  if [ -n "$d" ]; then echo "$d"; return; fi
+  case "$ROOT" in "$HOME"/*) echo "${ROOT#"$HOME"/}" ;; *) echo "crossagent/projects/$NAME" ;; esac
+}
 
 # ---------- hosts ----------
 
@@ -113,6 +130,192 @@ pull() {
   done
 }
 
+# ---------- live sync (mutagen) ----------
+
+# Per machine stuff and build output never cross over. .git is skipped with --ignore-vcs.
+SYNC_IGNORES=(.build build DerivedData node_modules target dist .venv venv __pycache__ .DS_Store .crossagent/ '*.log')
+# Secrets stay put unless the project opts in with sync_allow= in .crossagent/project.
+SECRET_IGNORES=(.env '.env.*' '*.pem' '*.key' 'id_*')
+
+sess() { echo "ca-$(echo "$NAME" | tr -c 'A-Za-z0-9\n' '-' | sed 's/--*/-/g; s/^-//; s/-$//')"; }
+have_mutagen() { command -v mutagen >/dev/null 2>&1; }
+need_mutagen() {
+  [ "$HERE" = mac ] || die "live sync is driven from the Mac"
+  have_mutagen || die "mutagen isn't installed: brew install mutagen-io/mutagen/mutagen"
+}
+sync_exists() { mutagen sync list "$(sess)" >/dev/null 2>&1; }
+sync_active() { [ "$HERE" = mac ] && have_mutagen && sync_exists; }
+
+build_sync_args() {
+  local p
+  SARGS=(--mode=two-way-safe --ignore-vcs --symlink-mode=portable --permissions-mode=portable
+         --default-file-mode=0644 --default-directory-mode=0755)
+  for p in "${SYNC_IGNORES[@]}" "${SECRET_IGNORES[@]}"; do SARGS+=("--ignore=$p"); done
+  while IFS= read -r p; do SARGS+=("--ignore=$p"); done < <(conf_list sync_ignore)
+  while IFS= read -r p; do SARGS+=("--ignore=!$p"); done < <(conf_list sync_allow)
+}
+
+# name, status, paused, conflicts, problems, mac path, pc path, last error (last, it's often empty)
+SYNC_TPL='{{range .}}{{.Name}}	{{.Status}}	{{.Paused}}	{{len .Conflicts}}	{{len .Alpha.ScanProblems}}{{len .Alpha.TransitionProblems}}{{len .Beta.ScanProblems}}{{len .Beta.TransitionProblems}}	{{.Alpha.Path}}	{{.Beta.Host}}:{{.Beta.Path}}	{{.LastError}}
+{{end}}'
+
+sync_rows() { mutagen sync list "$@" --template "$SYNC_TPL" 2>/dev/null | grep '^ca-' || true; }
+
+# One word (plus detail) for a sync_rows line.
+sync_word() {
+  local status paused conflicts problems err
+  IFS=$'\t' read -r _ status paused conflicts problems _ _ err <<< "$1"
+  status="$(echo "$status" | tr 'A-Z' 'a-z')"
+  if [ "$conflicts" != 0 ]; then echo "conflicts ($conflicts)"
+  elif [ -n "$err" ]; then echo "error: $err"
+  elif [ "$paused" = true ]; then echo paused
+  else case "$status" in
+    watching*) if [ "$problems" = 0000 ]; then echo "watching (in sync)"; else echo "watching (in sync, some paths skipped)"; fi ;;
+    disconnected*|halted*) echo "$status" ;;
+    *) echo "syncing ($status)" ;;
+  esac; fi
+}
+
+sync_start() {
+  need_mutagen
+  local force="" s pcd hash cur r
+  [ "${1:-}" = --force ] && { force=1; shift; }
+  [ $# -eq 0 ] || root_from "$1"
+  [ "$ROOT" != "$HOME" ] || die "won't sync your whole home folder, run this in a project"
+  s="$(sess)"; pcd="$(pc_dir)"
+  build_sync_args
+  hash="$(printf '%s\n' "${SARGS[@]}" "$ROOT" "$pcd" | shasum | cut -c1-12)"
+  if cur="$(mutagen sync list "$s" --template '{{range .}}{{index .Labels "ca-cfg"}}{{end}}' 2>/dev/null)"; then
+    if [ "$cur" = "$hash" ]; then
+      mutagen sync resume "$s" >/dev/null 2>&1 || true
+      say "$s already set up"
+      sync_flush
+      return
+    fi
+    say "sync rules or paths changed, recreating $s (files stay where they are)"
+    mutagen sync terminate "$s" >/dev/null
+  fi
+  ensure_remote
+  # Make the PC folder (mutagen won't create parents) and refuse to merge into a folder
+  # that holds something else. The marker lives in .crossagent/, which never syncs.
+  # shellcheck disable=SC2086
+  r="$(ssh $SSH_OPTS pc "cd && if [ -n \"\$(ls -A $(q "$pcd") 2>/dev/null)\" ] && ! grep -qx $(q "name=$NAME") $(q "$pcd/.crossagent/project") 2>/dev/null; then echo foreign; else mkdir -p $(q "$pcd/.crossagent") && printf 'name=%s\n' $(q "$NAME") > $(q "$pcd/.crossagent/project") && echo ok; fi")"
+  if [ "$r" = foreign ] && [ -z "$force" ]; then
+    die "~/$pcd on the PC already has files that aren't this project. Move them, set pc_dir= in .crossagent/project, or run 'ca sync start --force' to merge (conflicts get flagged, nothing is overwritten)"
+  fi
+  [ "$r" = ok ] || [ -n "$force" ] || die "couldn't prepare ~/$pcd on the PC"
+  mutagen sync create --name="$s" --label="ca-cfg=$hash" "${SARGS[@]}" "$ROOT" "pc:~/$pcd" >/dev/null
+  say "syncing $(echo "$ROOT" | sed "s|^$HOME|~|") <-> pc:~/$pcd as $s"
+  sync_flush
+}
+
+# Waits for a full cycle. Exits non zero on conflicts or errors so nobody hands off stale or clashing files.
+sync_flush() {
+  need_mutagen
+  local s row word; s="$(sess)"
+  sync_exists || die "no sync for $NAME, run: ca sync start"
+  row="$(sync_rows "$s")"
+  [ "$(echo "$row" | cut -f3)" = true ] && { sync_note "$s" paused; die "$s is paused, resume it with: mutagen sync resume $s"; }
+  mutagen sync flush "$s" >/dev/null 2>&1 || { sync_note "$s" "flush failed"; die "couldn't flush $s, is the PC reachable? (ca sync status)"; }
+  row="$(sync_rows "$s")"; word="$(sync_word "$row")"
+  sync_note "$s" "$word"
+  case "$word" in
+    watching*) say "synced $NAME"; sync_problems "$s" >&2 ;;
+    conflicts*) say "$s has $word. Stop and sort them out first:"; sync_conflicts >&2; return 3 ;;
+    *) die "$s: $word" ;;
+  esac
+}
+
+# Paths Mutagen skipped (absolute symlinks, unreadable files). Not fatal, but worth knowing.
+sync_problems() {
+  mutagen sync list "$@" --template '{{range .}}{{$n := .Name}}{{range .Alpha.ScanProblems}}{{$n}}	mac	{{.Path}}	{{.Error}}
+{{end}}{{range .Beta.ScanProblems}}{{$n}}	pc	{{.Path}}	{{.Error}}
+{{end}}{{range .Alpha.TransitionProblems}}{{$n}}	mac	{{.Path}}	{{.Error}}
+{{end}}{{range .Beta.TransitionProblems}}{{$n}}	pc	{{.Path}}	{{.Error}}
+{{end}}{{end}}' 2>/dev/null | awk -F'\t' '$1 ~ /^ca-/ {print "  skipped on " $2 ": " $3 " (" $4 ")"}' || true
+}
+
+sync_status() {
+  need_mutagen
+  local rows row
+  rows="$(sync_rows)"
+  [ -n "$rows" ] || { echo "no ca-* sync sessions"; return 0; }
+  while IFS= read -r row; do
+    printf '%-26s %-22s %s <-> %s\n' "$(echo "$row" | cut -f1)" "$(sync_word "$row")" \
+      "$(echo "$row" | cut -f6 | sed "s|^$HOME|~|")" "$(echo "$row" | cut -f7)"
+    sync_problems "$(echo "$row" | cut -f1)"
+  done <<< "$rows"
+}
+
+change() {
+  case "$1:$2" in
+    none:*) echo "created ($2)" ;;
+    *:none) echo "deleted (was $1)" ;;
+    "$2:$2") echo "modified" ;;
+    *) echo "changed from $1 to $2" ;;
+  esac
+}
+
+stat_mac() { [ -e "$1" ] && /usr/bin/stat -f '%z bytes, modified %Sm' -t '%Y-%m-%d %H:%M:%S' "$1" || echo missing; }
+
+# Every conflict with what each side did and what's there now. Never resolves anything.
+sync_conflicts() {
+  need_mutagen
+  local spec=() n=0 sname mac pcp root=""
+  sync_exists && spec=("$(sess)")
+  hint() {
+    [ -n "$root" ] || return 0
+    echo "  keep the Mac version: ssh pc 'rm -r ~/$pcp/$root', then ca sync flush"
+    echo "  keep the PC version:  rm -r '$mac/$root', then ca sync flush"
+    root=""
+  }
+  while IFS=$'\t' read -r tag a b c d; do
+    case "$tag" in
+      S) hint; sname="$a"; mac="$b"; pcp="${c#\~/}" ;;
+      R) hint; root="$a"; n=$((n + 1))
+         echo "$sname: $root"
+         echo "  mac  $(stat_mac "$mac/$root")"
+         # -n: ssh must not eat the rest of this loop's input
+         # shellcheck disable=SC2086
+         echo "  pc   $(ssh -n $SSH_OPTS -o ConnectTimeout=20 pc "cd && stat -c '%s bytes, modified %y' $(q "$pcp/$root") 2>/dev/null | cut -d. -f1 | grep . || echo missing" 2>/dev/null || echo unreachable)"
+         conflict_diff "$mac/$root" "$pcp/$root" ;;
+      C) echo "  $a changed $b: $(change "$(echo "$c" | tr 'A-Z' 'a-z')" "$(echo "$d" | tr 'A-Z' 'a-z')")" ;;
+    esac
+  done < <(mutagen sync list ${spec[@]+"${spec[@]}"} --template '{{range .}}S	{{.Name}}	{{.Alpha.Path}}	{{.Beta.Path}}
+{{range .Conflicts}}R	{{.Root}}
+{{range .AlphaChanges}}C	mac	{{.Path}}	{{if .Old}}{{.Old.Kind}}{{else}}none{{end}}	{{if .New}}{{.New.Kind}}{{else}}none{{end}}
+{{end}}{{range .BetaChanges}}C	pc	{{.Path}}	{{if .Old}}{{.Old.Kind}}{{else}}none{{end}}	{{if .New}}{{.New.Kind}}{{else}}none{{end}}
+{{end}}{{end}}{{end}}' 2>/dev/null | awk -F'\t' '$1=="S"{ok=($2 ~ /^ca-/)} ok')
+  hint
+  if [ "$n" = 0 ]; then echo "no conflicts"; return 0; fi
+  echo
+  echo "Nothing was overwritten. Pick a side per file (or merge by hand on the Mac, then delete the PC copy)."
+}
+
+# Short diff (mac vs pc) when both sides are small text files.
+conflict_diff() {
+  [ -f "$1" ] && [ "$(/usr/bin/stat -f %z "$1")" -lt 65536 ] && grep -Iq . "$1" 2>/dev/null || return 0
+  local tmp; tmp="$(mktemp)"
+  # shellcheck disable=SC2086
+  if ssh -n $SSH_OPTS -o ConnectTimeout=20 pc "cd && [ \$(stat -c %s $(q "$2")) -lt 65536 ] && grep -Iq . $(q "$2") && cat $(q "$2")" > "$tmp" 2>/dev/null; then
+    diff -u --label mac --label pc "$1" "$tmp" | sed -n '3,22p' | sed 's/^/    /'
+  fi
+  rm -f "$tmp"
+}
+
+sync_stop() {
+  need_mutagen
+  [ $# -eq 0 ] || root_from "$1"
+  local s; s="$(sess)"
+  if sync_exists; then
+    mutagen sync terminate "$s" >/dev/null
+    sync_note "$s" stopped
+    echo "stopped $s, files stay on both machines"
+  else
+    echo "$s wasn't running"
+  fi
+}
+
 # ---------- system map ----------
 
 probe() {
@@ -154,15 +357,41 @@ probe() {
 
 block() { [ -f "$MAP" ] && awk -v s="<!-- ca:$1 -->" -v e="<!-- /ca:$1 -->" '$0==s{f=1;next} $0==e{f=0} f' "$MAP" || true; }
 
+# projects file: name, mac path, pc path, sync session, last sync status (tab separated)
 register_project() {
   mkdir -p "$CONF"
-  local f="$CONF/projects" macd="-" pcd
+  local f="$CONF/projects" macd="-" pcd old
   [ "$HERE" = mac ] && macd="$(echo "$ROOT" | sed "s|^$HOME|~|")"
   pcd="~/$(pc_dir)"
   touch "$f"
+  old="$(awk -F'\t' -v n="$NAME" '$1==n' "$f")"
   grep -v "^$NAME	" "$f" > "$f.tmp" || true
-  printf '%s\t%s\t%s\n' "$NAME" "$macd" "$pcd" >> "$f.tmp"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$NAME" "$macd" "$pcd" \
+    "${1:-$(echo "$old" | cut -sf4)}" "${2:-$(echo "$old" | cut -sf5)}" >> "$f.tmp"
   sort "$f.tmp" > "$f" && rm -f "$f.tmp"
+}
+
+projects_table() {
+  echo "| project | mac | pc | sync session | last sync status |"
+  echo "|---|---|---|---|---|"
+  awk -F'\t' '{print "| "$1" | "$2" | "$3" | "($4==""?"-":$4)" | "($5==""?"-":$5)" |"}' "$CONF/projects" 2>/dev/null || true
+}
+
+copy_map_to_pc() {
+  # shellcheck disable=SC2086
+  ssh $SSH_OPTS -o ConnectTimeout=10 pc 'mkdir -p ~/.config/crossagent && cat > ~/.config/crossagent/system-map.md' < "$MAP" 2>/dev/null || true
+}
+
+# Record a sync status in the map, only when it changed, so flushes stay cheap.
+sync_note() {
+  local cur
+  cur="$(awk -F'\t' -v n="$NAME" '$1==n{print $5}' "$CONF/projects" 2>/dev/null | sed 's/ (since .*//')"
+  [ "$cur" = "$2" ] && return 0
+  register_project "$1" "$2 (since $(date '+%Y-%m-%d %H:%M'))"
+  [ -f "$MAP" ] || return 0
+  TBL="$(projects_table)" awk '/^## Projects$/{print; print ""; print ENVIRON["TBL"]; print ""; skip=1; next} /^## /{skip=0} !skip' "$MAP" > "$MAP.tmp" && mv "$MAP.tmp" "$MAP"
+  [ -d "$ROOT/.crossagent" ] && cp "$MAP" "$ROOT/.crossagent/system-map.md"
+  copy_map_to_pc
 }
 
 build_map() {
@@ -187,6 +416,7 @@ build_map() {
     echo "- pc (nicknames: pc, ssh, overseas, my pc, on my pc): reached from the Mac with \`ssh pc\`. Use ssh options \`$SSH_OPTS\`. Login shell needed for PATH (\`ssh pc 'exec \$SHELL -lc \"...\"'\`)."
     echo "- The PC can't reach the Mac. Run from the PC, ca works PC only."
     echo "- tmux sessions are named ca-<host>-<task> and show up in the CrossAgent viewing station."
+    echo "- Projects are mirrored live with Mutagen (session ca-<project>, two-way-safe, same path under home on both). Git lives on the Mac only."
     echo
     echo "<!-- ca:mac -->"
     echo "## mac"
@@ -202,19 +432,14 @@ build_map() {
     echo
     echo "## Projects"
     echo
-    echo "| project | mac | pc |"
-    echo "|---|---|---|"
-    awk -F'\t' '{print "| "$1" | "$2" | "$3" |"}' "$CONF/projects" 2>/dev/null || true
+    projects_table
     echo
     echo "## Notes"
     echo
     echo "$notes" | sed '/./,$!d'
   } > "$MAP.tmp"
   mv "$MAP.tmp" "$MAP"
-  if [ "$HERE" = mac ] && remote_ok; then
-    # shellcheck disable=SC2086
-    ssh $SSH_OPTS pc 'mkdir -p ~/.config/crossagent && cat > ~/.config/crossagent/system-map.md' < "$MAP"
-  fi
+  if [ "$HERE" = mac ] && remote_ok; then copy_map_to_pc; fi
   say "map written to ~/.config/crossagent/system-map.md$([ "$HERE" = mac ] && echo ' (and copied to the PC)')"
 }
 
@@ -228,7 +453,7 @@ project_map() {
 
 init() {
   mkdir -p "$ROOT/.crossagent"
-  [ -f "$PROJ_CONF" ] || printf 'name=%s\npc_dir=%s\n' "$NAME" "crossagent/projects/$NAME" > "$PROJ_CONF"
+  [ -f "$PROJ_CONF" ] || printf 'name=%s\n# pc_dir=other/path/under/home\n# sync_allow=.env.shared,*.pem   (opt in to syncing these, comma separated)\n# sync_ignore=data,*.sqlite     (extra ignores)\n' "$NAME" > "$PROJ_CONF"
 
   if [ ! -f "$ROOT/CROSSAGENT.md" ]; then
     cp "$SKILL_DIR/templates/CROSSAGENT.md" "$ROOT/CROSSAGENT.md"; say "added CROSSAGENT.md"
@@ -423,7 +648,12 @@ ca: split work across the Mac and the PC
   ca init                       set up this project (CROSSAGENT.md, CLAUDE.md pointer, map, push)
   ca map [--refresh]            print the system map, or re-probe both machines first
   ca host <word>                nickname -> mac | pc | both  (local, this mac -> mac; pc, ssh, overseas -> pc)
-  ca sync push [--delete]       rsync project Mac -> PC (skips node_modules, .build, build/ and friends)
+  ca sync start [--force] [path]  live two-way-safe sync to the same path on the PC (Mutagen session ca-<project>)
+  ca sync status                one line per ca-* sync session
+  ca sync flush                 sync now and wait, fails on conflicts (run and wait do this for you)
+  ca sync conflicts             list conflicting files with both sides' info, resolves nothing
+  ca sync stop [path]           end the sync session, files stay on both machines
+  ca sync push [--delete]       one-off rsync Mac -> PC, for when live sync is off
   ca sync pull [paths...]       copy paths back from the PC (no paths: PC logs and results into .crossagent/pc/)
   ca run <host> <task> -- cmd   run a command in tmux session ca-<host>-<task> (pushes first for pc)
   ca run <host> <task> --claude "prompt"
@@ -450,9 +680,14 @@ case "$cmd" in
   host) h="$(resolve "$*")" || die "unknown nickname '$*'"; echo "$h" ;;
   sync)
     case "${1:-}" in
+      start) shift; sync_start "$@" ;;
+      status) sync_status ;;
+      flush) sync_flush ;;
+      conflicts) sync_conflicts ;;
+      stop) shift; sync_stop "$@" ;;
       push) shift; push "$@" ;;
       pull) shift; pull "$@" ;;
-      *) die "usage: ca sync push|pull [paths...]" ;;
+      *) die "usage: ca sync start|status|flush|conflicts|stop|push|pull" ;;
     esac ;;
   run) run "$@" ;;
   status) status ;;
