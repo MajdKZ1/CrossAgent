@@ -149,11 +149,11 @@ enum HookInstaller {
     /// crossagent-hook.py from the .app, or from the SwiftPM resource bundle next to
     /// a bare executable. Same lookup as the app icon; never Bundle.module.
     static func bundledScriptURL() -> URL? {
-        let resources = Bundle.main.executableURL.flatMap {
-            Bundle(url: $0.deletingLastPathComponent().appendingPathComponent("CrossAgent_CrossAgent.bundle"))
-        }
+        // Next to the binary for swift run, in Contents/Resources inside the .app (bundle.sh puts it there).
+        let dirs = [Bundle.main.executableURL?.deletingLastPathComponent(), Bundle.main.resourceURL]
+        let bundles = dirs.compactMap { $0.flatMap { Bundle(url: $0.appendingPathComponent("CrossAgent_CrossAgent.bundle")) } }
         return Bundle.main.url(forResource: "crossagent-hook", withExtension: "py")
-            ?? resources?.url(forResource: "crossagent-hook", withExtension: "py")
+            ?? bundles.lazy.compactMap { $0.url(forResource: "crossagent-hook", withExtension: "py") }.first
     }
 
     /// Writes the hook script to ~/.crossagent/bin on the host. True on success.
