@@ -164,6 +164,12 @@ dies "a request id with a newline" "12 hex chars" "$CA" remote answer pc "$(prin
 dies "a model with a newline" "has to be one line" "$CA" remote pc w2 --brief "$good" --model "$(printf 'haiku\n$(touch PWNED)')"
 t "a quoted host word is just unknown" sh -c "! '$CA' host '\$(touch PWNED)' 2>/dev/null"
 
+M="$HOME/work/nodaemon"; mkdir -p "$M"; echo n > "$M/n.txt"
+(cd "$M" && "$CA" init) > "$T/enod" 2>&1; rc=$?
+t "init with a broken mutagen still finishes" sh -c "[ $rc = 0 ] && grep -q '^ready: nodaemon ' '$T/enod'"
+t "and says why, with mutagen's error" grep -qF "the Portal couldn't open, mutagen isn't working (Error: unable to connect to daemon: connection timed out). Falling back to a one-off push" "$T/enod"
+t "and pushed instead" cmp -s "$M/n.txt" "$FAKE_REMOTE/work/nodaemon/n.txt"
+dies "ca portal start says what's wrong" "mutagen isn't working: Error: unable to connect to daemon" sh -c "cd '$M' && '$CA' portal start"
 D="$HOME/work/-dash proj"; mkdir -p "$D"; echo d > "$D/d.txt"
 (cd "$D" && "$CA" init pc) > "$T/edash" 2>&1; rc=$?
 t "a folder starting with - works" sh -c "[ $rc = 0 ] && cmp -s '$D/d.txt' '$FAKE_REMOTE/work/-dash proj/d.txt'"

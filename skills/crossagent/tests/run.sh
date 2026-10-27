@@ -26,7 +26,8 @@ export PATH="$HOME/.local/bin:$PATH"
 cd "$T" || exit 1
 cp "$TESTS/fake-claude.py" "$HOME/.local/bin/claude"; chmod +x "$HOME/.local/bin/claude"
 cp "$TESTS/fake-ssh" "$HOME/.local/bin/ssh"; chmod +x "$HOME/.local/bin/ssh"
-printf '#!/bin/sh\nexit 1\n' > "$HOME/.local/bin/mutagen"; chmod +x "$HOME/.local/bin/mutagen"
+# A mutagen whose daemon never answers, like one under a home path too long for its socket.
+printf '#!/bin/sh\necho "Error: unable to connect to daemon: connection timed out" >&2\nexit 1\n' > "$HOME/.local/bin/mutagen"; chmod +x "$HOME/.local/bin/mutagen"
 ln -s "$BASH" "$HOME/.local/bin/bash"
 EV="$HOME/.crossagent/events"
 AP="$HOME/.crossagent/approvals"
@@ -37,7 +38,12 @@ PH="$T/pchome"; mkdir -p "$PH/.config/crossagent"
 printf '{"hosts": [{"accent": "#6ea8fe", "id": "pc", "name": "Linux PC", "type": "local"}]}\n' > "$PH/.config/crossagent/hosts.json"
 chmod 600 "$PH/.config/crossagent/hosts.json"; echo mac > "$PH/.config/crossagent/hubs"
 
-cleanup() { tmux kill-server 2>/dev/null; TMUX_TMPDIR="$FAKE_REMOTE_TMUX" tmux kill-server 2>/dev/null; rm -rf "${T:?}"; }
+# Retries the rm: a pane's shell can still be writing its history while it exits.
+cleanup() {
+  tmux kill-server 2>/dev/null; TMUX_TMPDIR="$FAKE_REMOTE_TMUX" tmux kill-server 2>/dev/null
+  for _ in 1 2 3 4 5; do rm -rf "${T:?}" 2>/dev/null && return; sleep 0.5; done
+  rm -rf "${T:?}"
+}
 trap cleanup EXIT
 
 pass=0; fail=0

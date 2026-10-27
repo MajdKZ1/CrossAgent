@@ -508,9 +508,17 @@ SECRET_IGNORES=(.env '.env.*' '*.pem' '*.key' 'id_*')
 # No host means the first one. One line: the app's ProjectTests greps it out.
 sess() { local b; b="ca-$(printf %s "$NAME" | tr -c 'A-Za-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//')"; [ "$b" != ca- ] || b=ca-project; if [ -z "${1:-}" ] || [ "$1" = "$(first_ssh)" ]; then printf '%s\n' "$b"; else printf '%s\n' "$b-$1"; fi; }
 have_mutagen() { command -v mutagen >/dev/null 2>&1; }
+# Is mutagen's daemon answering? Its last error line lands in MUTAGEN_ERR when it isn't
+# (a daemon that can't start, say because ~/.mutagen/daemon/daemon.sock would be too long).
+mutagen_up() {
+  MUTAGEN_ERR="$(mutagen sync list 2>&1 >/dev/null)" && return 0
+  MUTAGEN_ERR="$(printf '%s\n' "$MUTAGEN_ERR" | grep -v '^[[:space:]]*$' | tail -1)"
+  return 1
+}
 need_mutagen() {
   [ -n "$(ssh_hosts)" ] || die "no ssh hosts set up, so there's nothing to open a Portal to (ca hosts add <id> <ssh-target>)"
   have_mutagen || die "mutagen isn't installed: brew install mutagen-io/mutagen/mutagen"
+  mutagen_up || die "mutagen isn't working: ${MUTAGEN_ERR:-no answer from its daemon}"
 }
 sync_exists() { mutagen sync list "$(sess "$1")" >/dev/null 2>&1; }
 sync_active() { [ "$(htype "$1")" = ssh ] && have_mutagen && sync_exists "$1"; }
@@ -1037,7 +1045,10 @@ init() {
   if [ -z "$(ssh_hosts)" ]; then say "no ssh hosts set up, so everything runs here on $HERE (add one with: ca hosts add <id> <ssh-target>)"
   elif [ -z "$hs" ]; then say "$HERE only: no Portal"
   elif [ "$mode" != all ]; then push "$mode"
-  elif have_mutagen; then for h in $hs; do sync_start_one "$h" ""; done
+  elif have_mutagen && mutagen_up; then for h in $hs; do sync_start_one "$h" ""; done
+  elif have_mutagen; then
+    say "the Portal couldn't open, mutagen isn't working (${MUTAGEN_ERR:-no answer from its daemon}). Falling back to a one-off push"
+    for h in $hs; do push "$h"; done
   else
     say "mutagen isn't installed so no Portal, falling back to a one-off push (brew install mutagen-io/mutagen/mutagen)"
     for h in $hs; do push "$h"; done
