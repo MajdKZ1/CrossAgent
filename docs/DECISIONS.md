@@ -401,3 +401,15 @@ Checked on both machines (`claude --version` says `2.1.311 (Claude Code)` on the
 - **No keyboard shortcut answers an approval.** Buttons only, so a stray Enter in a terminal can't allow anything.
 - **The pending approvals strip lives on the Orchestrator tab** (top center, up to three rows, then "N more waiting"). The node's own card has the full approval card. The canvas card says "Waiting on you" and its Answer button opens the node card.
 - **`@name` messaging stays for remote proxy subagents** (box under the card, goes through the orchestrator). A standalone remote worker (kind worker) gets no box: its Claude is headless, so typing into its tmux session means nothing. A canvas relay to it still pastes into its session, unchanged.
+
+### M30 canvas: one node per remote worker
+
+- **Links are keyed by host and role,** not by tmux session. The transcript reducer doesn't know the project slug until the project's followers tell it, so `remote.tmuxSession` can be empty for a moment after a transcript link and gets filled by the first remote event.
+- **Without a link a worker draws as its own node** (kind worker, id = its tmux session). When the pc-worker's `ca remote` call shows up the standalone node folds into the subagent: remote info, recent lines, a pending permission, a running turn's activity. Its done state is dropped, the subagent finishes on its own SubagentStop.
+- **A new turn wakes a finished proxy.** If that proxy's own run is over (a fresh Agent call is about to take over), the node is marked revived: the new proxy's link removes it, and if no link ever comes the turn's RemoteStop finishes it so nothing stays busy forever.
+- **A newer proxy takes the worker.** The old one is removed when it's done, or loses `remote` and goes once its SubagentStop comes.
+- **The orchestrator calling `ca remote` itself links nothing** but marks the worker direct, so its RemoteStop finishes the node even if a proxy drew it before (orchestrator runs `ca remote wait` after its pc-worker timed out and returned).
+- **RemoteStart clears `resultPath`:** a result belongs to a turn, so during a follow-up the Result tab is empty until that turn's RemoteStop.
+- **A pending remote permission pins needsInput.** Mac side events of the proxy (its Bash PostToolUse, transcript tool results) and the screen check can't clear it, only PermissionAnswer or RemoteStop.
+- **Live views get remote events through `RemoteEventLog`,** a per project log (last 1000) the project's followers append to. Any session feed whose cwd is in a registered project applies what it hasn't yet, so a Live view opened later still catches up. It needs the project's Orchestrator events turned on, same as the project canvas.
+- **`ca run --claude` hook events (role worker) are ignored now.** The demo shows a pc-worker with an approval instead.
