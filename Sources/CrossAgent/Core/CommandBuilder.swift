@@ -32,7 +32,8 @@ enum CommandBuilder {
 
     /// Spec script plus `set -q status off` for this session only: the pane header
     /// already shows the session, and tmux's bright status bar clashes with the UI.
-    /// Also turns on focus-events, which Claude Code asks for.
+    /// Also turns on focus-events, which Claude Code asks for, and mouse for this session,
+    /// so the wheel scrolls tmux's history (the pane keeps clicks local, see PaneTerminalView).
     ///
     /// `cwd` is where a new session starts (`tmux new -c`, or `cd` without tmux). A
     /// leading `$HOME/` is left for the host's shell to expand, see `shellPath`.
@@ -43,7 +44,7 @@ enum CommandBuilder {
     static func script(mode: PaneMode, session: String, cwd: String? = nil, env: [String: String] = [:],
                        attachOnly: Bool = false) -> String {
         precondition(SessionName.isValid(session))
-        let opts = " \\; set -q status off \\; set -sq focus-events on"
+        let opts = " \\; set -q status off \\; set -q mouse on \\; set -sq focus-events on"
         if attachOnly {
             return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux attach -t '=\(session)'\(opts); else echo 'tmux is not installed here' >&2; exit 1; fi"
         }
