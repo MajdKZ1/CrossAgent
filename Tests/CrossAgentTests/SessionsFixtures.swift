@@ -13,9 +13,9 @@ enum SessionsFixtures {
         var cwd: String
     }
 
-    static let background = Sample(dir: "background", sessionId: "c9bc5b47-e5f7-49b4-9c45-82855815aa07", cwd: "/private/tmp/ca-sess-probe")
-    static let teammate = Sample(dir: "teammate", sessionId: "a5772ce1-8e92-4d0e-abca-380eb673cf9e", cwd: "/private/tmp/ca-sess-probe2")
-    static let foreground = Sample(dir: "foreground", sessionId: "652c9655-d89d-475a-a59e-9b64d19a30f4", cwd: "/tmp/ca-sess-probe-pc")
+    static let background = Sample(dir: "background", sessionId: "66517b9b-186b-4220-8b33-1bc4182e5add", cwd: "/private/tmp/ca-sess-probe")
+    static let teammate = Sample(dir: "teammate", sessionId: "db4efe77-2c3f-4ffa-85ae-cf560cd5791a", cwd: "/private/tmp/ca-sess-probe2")
+    static let foreground = Sample(dir: "foreground", sessionId: "c273ca9f-9268-4a54-be85-9cb3c1f13df3", cwd: "/tmp/ca-sess-probe-pc")
     static let all = [background, teammate, foreground]
 
     static var base: URL {

@@ -16,7 +16,7 @@ final class GraphReducerTests: XCTestCase {
     func testPrintSessionStepByStep() {
         let ev = HookFixtures.events(HookFixtures.eventsPrint)
         XCTAssertEqual(ev.count, 14)
-        let reader = "acc7d38897638900e"
+        let reader = "a7e2c8641a721326a"
 
         var g = run(ev, upTo: 2)
         XCTAssertEqual(g.orchestrator?.state, .thinking)
@@ -188,8 +188,8 @@ final class GraphReducerTests: XCTestCase {
         let ev = HookFixtures.events(HookFixtures.eventsPrint)
         for e in ev.prefix(5) { g.apply(e) }
         g.apply(AgentEvent(ts: 2000, ev: "PreToolUse", role: "orchestrator", tool: "SendMessage", sum: "Messaging reader: more", to: "reader"))
-        XCTAssertEqual(g.nodes["acc7d38897638900e"]?.flow, .toNode)
-        XCTAssertEqual(g.nodes["acc7d38897638900e"]?.flowAt, at(2000))
+        XCTAssertEqual(g.nodes["a7e2c8641a721326a"]?.flow, .toNode)
+        XCTAssertEqual(g.nodes["a7e2c8641a721326a"]?.flowAt, at(2000))
     }
 
     func testIgnoresOtherProjectsAndPlainSessions() {
@@ -291,8 +291,8 @@ final class GraphReducerTests: XCTestCase {
         g.apply(AgentEvent(ts: 1100, ev: "WorkerStart", host: "mac", sid: "ca-proj-mac-x", role: "worker", node: "x", tmux: "ca-proj-mac-x"))
         g.apply(AgentEvent(ts: 1101, ev: "Stop", role: "orchestrator", bg: ["tn-unknown"]))
         XCTAssertEqual(g.orchestrator?.state, .waiting(["reader"]), "unknown ids mean running subagents, never workers")
-        g.apply(AgentEvent(ts: 1102, ev: "SubagentStop", role: "orchestrator", aid: "acc7d38897638900e", atype: "general-purpose"))
-        g.apply(AgentEvent(ts: 1103, ev: "Stop", role: "orchestrator", bg: ["acc7d38897638900e", "tn-unknown"]))
+        g.apply(AgentEvent(ts: 1102, ev: "SubagentStop", role: "orchestrator", aid: "a7e2c8641a721326a", atype: "general-purpose"))
+        g.apply(AgentEvent(ts: 1103, ev: "Stop", role: "orchestrator", bg: ["a7e2c8641a721326a", "tn-unknown"]))
         XCTAssertEqual(g.orchestrator?.state, .idle, "done agents are not waited on")
     }
 

@@ -30,14 +30,14 @@ final class SessionsTranscriptTests: XCTestCase {
         let spawns = items.filter { if case .spawn = $0.signal { return true } else { return false } }
         XCTAssertEqual(spawns.map(\.text), ["Starting reader: Read a.txt", "Starting lister: List files with ls"])
         XCTAssertEqual(spawns.map(\.tool), ["Agent", "Agent"])
-        XCTAssertEqual(spawns[0].toolUseId, "toolu_01WhTGCBmhPBhucqhHJnR1tm")
+        XCTAssertEqual(spawns[0].toolUseId, "toolu_k3zUFjI2Ep1KDNyCeRVt0xku")
         if case .spawn(let name, let prompt) = spawns[0].signal {
             XCTAssertEqual(name, "reader")
             XCTAssertTrue(prompt?.contains("a.txt") ?? false)
         }
 
         let launched = items.compactMap { i -> String? in if case .launched(let a) = i.signal { return a } else { return nil } }
-        XCTAssertEqual(launched, ["a82289e49c5168a76", "ad19e90095fdace86"])
+        XCTAssertEqual(launched, ["ad6d5aa77ae248062", "a482a3080426bc88b"])
         let firstResult = try XCTUnwrap(items.first { $0.kind == .toolResult })
         XCTAssertEqual(firstResult.tool, "Agent")
         XCTAssertLessThanOrEqual(firstResult.text.split(separator: "\n").count, TranscriptParser.resultLines + 1)
@@ -46,9 +46,9 @@ final class SessionsTranscriptTests: XCTestCase {
         XCTAssertEqual(notes.count, 2, "one task notification per agent")
         XCTAssertEqual(notes[0].kind, .system)
         XCTAssertEqual(notes[0].text, #"Agent "Read a.txt" finished"#)
-        XCTAssertEqual(notes[0].toolUseId, "toolu_01WhTGCBmhPBhucqhHJnR1tm")
+        XCTAssertEqual(notes[0].toolUseId, "toolu_k3zUFjI2Ep1KDNyCeRVt0xku")
         if case .finished(let aid, let ok, let result) = notes[0].signal {
-            XCTAssertEqual(aid, "a82289e49c5168a76")
+            XCTAssertEqual(aid, "ad6d5aa77ae248062")
             XCTAssertTrue(ok)
             XCTAssertTrue(result?.contains("hello from a.txt") ?? false)
         }
@@ -57,8 +57,8 @@ final class SessionsTranscriptTests: XCTestCase {
     }
 
     func testSubagentFile() {
-        let items = parse("background/subagents/agent-ad19e90095fdace86.jsonl", agentId: "ad19e90095fdace86")
-        XCTAssertTrue(items.allSatisfy { $0.agentId == "ad19e90095fdace86" })
+        let items = parse("background/subagents/agent-a482a3080426bc88b.jsonl", agentId: "a482a3080426bc88b")
+        XCTAssertTrue(items.allSatisfy { $0.agentId == "a482a3080426bc88b" })
         XCTAssertEqual(items.first?.kind, .user, "the brief")
         let use = items.first { $0.kind == .toolUse }
         XCTAssertEqual(use?.tool, "Bash")
@@ -87,7 +87,7 @@ final class SessionsTranscriptTests: XCTestCase {
         ])
         XCTAssertTrue(items.contains { $0.kind == .toolUse && $0.text == "Asking a question" })
         let launched = items.compactMap { i -> String? in if case .launched(let a) = i.signal { return a } else { return nil } }
-        XCTAssertEqual(launched, ["asleeper-bde2c4487fdf8650"])
+        XCTAssertEqual(launched, ["asleeper-d3f7ace792f5d6fd"])
         let msg = items.first { if case .message = $0.signal { return true } else { return false } }
         XCTAssertEqual(msg?.signal, .message(from: "sleeper", text: "The sleep command finished, and its output was: slept"))
         let idle = items.first { if case .teammateIdle = $0.signal { return true } else { return false } }
@@ -98,7 +98,7 @@ final class SessionsTranscriptTests: XCTestCase {
             XCTFail("no idle notification")
         }
         // The teammate's own brief arrives as a teammate-message from the lead.
-        let sub = parse("teammate/subagents/agent-asleeper-bde2c4487fdf8650.jsonl", agentId: "asleeper-bde2c4487fdf8650")
+        let sub = parse("teammate/subagents/agent-asleeper-d3f7ace792f5d6fd.jsonl", agentId: "asleeper-d3f7ace792f5d6fd")
         XCTAssertEqual(sub.first?.kind, .user)
         XCTAssertTrue(sub.first?.text.hasPrefix("Your only job") ?? false)
         XCTAssertNil(sub.first?.signal)
@@ -109,7 +109,7 @@ final class SessionsTranscriptTests: XCTestCase {
         let done = items.compactMap { i -> (String?, Bool)? in
             if case .finished(let a, let ok, _) = i.signal { return (a, ok) } else { return nil }
         }
-        XCTAssertEqual(done.map(\.0), ["a48cca9765fad940b", "a4e4a11fea16b481d"])
+        XCTAssertEqual(done.map(\.0), ["ad3eded5e86b523e8", "aae9c288ea200a123"])
         XCTAssertTrue(done.allSatisfy(\.1))
         let spawns = items.compactMap { i -> String? in if case .spawn(let n, _) = i.signal { return n } else { return nil } }
         XCTAssertEqual(spawns, ["reader: read a.txt", "lister: list files with ls"], "no name field: the description")
@@ -166,7 +166,7 @@ final class SessionsReducerTests: XCTestCase {
         let g = graph(SessionsFixtures.background)
         let subs = g.others
         XCTAssertEqual(subs.map(\.name), ["reader", "lister"])
-        XCTAssertEqual(subs.map(\.id), ["toolu_01WhTGCBmhPBhucqhHJnR1tm", "toolu_017zNgtCJnjkhSB8ops3GayP"])
+        XCTAssertEqual(subs.map(\.id), ["toolu_k3zUFjI2Ep1KDNyCeRVt0xku", "toolu_T7G9ngXlKpQCojZGMUD3cGCE"])
         XCTAssertTrue(subs.allSatisfy { $0.state == .done && $0.kind == .subagent })
         XCTAssertEqual(g.finished.count, 2)
         let reader = subs[0]
@@ -175,7 +175,7 @@ final class SessionsReducerTests: XCTestCase {
         XCTAssertEqual(reader.flow, .toOrchestrator)
         XCTAssertEqual(g.orchestrator?.state, .idle)
         XCTAssertEqual(g.orchestrator?.activity, "Session ended")
-        XCTAssertNil(g.nodes["a82289e49c5168a76"], "agent ids fold into the call's node")
+        XCTAssertNil(g.nodes["ad6d5aa77ae248062"], "agent ids fold into the call's node")
     }
 
     func testForegroundAgentsEndDone() {

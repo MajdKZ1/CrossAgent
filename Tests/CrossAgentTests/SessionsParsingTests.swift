@@ -37,8 +37,8 @@ final class SessionsParsingTests: XCTestCase {
         XCTAssertEqual(ClaudePaths.projectSlug(cwd: "/home/me/café"), "-home-me-caf-")
         XCTAssertEqual(ClaudePaths.transcript(root: "/r", cwd: "/a.b", sessionId: "s"), "/r/projects/-a-b/s.jsonl")
         XCTAssertEqual(ClaudePaths.subagentsDir(transcript: "/r/projects/-a/s.jsonl"), "/r/projects/-a/s/subagents")
-        XCTAssertEqual(ClaudePaths.agentId(fileName: "agent-a82289e49c5168a76.jsonl"), "a82289e49c5168a76")
-        XCTAssertEqual(ClaudePaths.agentId(fileName: "agent-asleeper-bde2c4487fdf8650.meta.json"), "asleeper-bde2c4487fdf8650")
+        XCTAssertEqual(ClaudePaths.agentId(fileName: "agent-ad6d5aa77ae248062.jsonl"), "ad6d5aa77ae248062")
+        XCTAssertEqual(ClaudePaths.agentId(fileName: "agent-asleeper-d3f7ace792f5d6fd.meta.json"), "asleeper-d3f7ace792f5d6fd")
         XCTAssertNil(ClaudePaths.agentId(fileName: "notes.txt"))
     }
 
@@ -83,16 +83,16 @@ final class SessionsParsingTests: XCTestCase {
     }
 
     func testSubagentMeta() throws {
-        let bg = try XCTUnwrap(SubagentMeta.parse(SessionsFixtures.data("background/subagents/agent-a82289e49c5168a76.meta.json")))
+        let bg = try XCTUnwrap(SubagentMeta.parse(SessionsFixtures.data("background/subagents/agent-ad6d5aa77ae248062.meta.json")))
         XCTAssertEqual(bg.name, "reader")
-        XCTAssertEqual(bg.toolUseId, "toolu_01WhTGCBmhPBhucqhHJnR1tm")
+        XCTAssertEqual(bg.toolUseId, "toolu_k3zUFjI2Ep1KDNyCeRVt0xku")
         XCTAssertEqual(bg.requestShape, "background")
         XCTAssertEqual(bg.finished, true)
-        let fg = try XCTUnwrap(SubagentMeta.parse(SessionsFixtures.data("foreground/subagents/agent-a48cca9765fad940b.meta.json")))
+        let fg = try XCTUnwrap(SubagentMeta.parse(SessionsFixtures.data("foreground/subagents/agent-ad3eded5e86b523e8.meta.json")))
         XCTAssertNil(fg.name)
         XCTAssertEqual(fg.displayName, "reader: read a.txt")
         XCTAssertEqual(fg.requestShape, "foreground")
-        let tm = try XCTUnwrap(SubagentMeta.parse(SessionsFixtures.data("teammate/subagents/agent-asleeper-bde2c4487fdf8650.meta.json")))
+        let tm = try XCTUnwrap(SubagentMeta.parse(SessionsFixtures.data("teammate/subagents/agent-asleeper-d3f7ace792f5d6fd.meta.json")))
         XCTAssertEqual(tm.taskKind, "in_process_teammate")
         XCTAssertNil(tm.toolUseId)
         XCTAssertNil(tm.finished)
