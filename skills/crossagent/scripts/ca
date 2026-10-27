@@ -567,21 +567,20 @@ with os.fdopen(fd, "a") as f:
 ' "$@" >/dev/null 2>&1 || true
 }
 
+NO_CLAUDE="ca run --claude is gone. Local work goes to native subagents (Agent tool), PC work to the pc-worker subagent (ca remote)"
+
 run() {
-  [ $# -ge 2 ] || die "usage: ca run <host> <task> [--claude \"prompt\"] [-- command...]"
-  local host task mode prompt=""; host="$(host_arg "$1")"; task="$2"; shift 2
+  local a; for a in "$@"; do [ "$a" = -- ] && break; [ "$a" = --claude ] && die "$NO_CLAUDE"; done
+  [ $# -ge 2 ] || die "usage: ca run <host> <task> -- command..."
+  local host task; host="$(host_arg "$1")"; task="$2"; shift 2
   check_task "$task"
   case "${1:-}" in
-    --claude) [ $# -ge 2 ] || die "--claude needs a prompt"; mode=claude; prompt="$2"; shift 2 ;;
-    --) shift; [ $# -ge 1 ] || die "nothing to run after --"; mode=cmd ;;
-    *) die "say what to run: --claude \"prompt\" or -- command" ;;
+    --) shift; [ $# -ge 1 ] || die "nothing to run after --" ;;
+    *) die "say what to run after --, like: ca run $host $task -- make test" ;;
   esac
   # Hand off only fresh files: flush the Portal (or push once without it).
   if sync_active; then sync_flush; elif [ "$host" != "$HERE" ]; then push; fi
-  if [ "$host" != "$HERE" ]; then
-    if [ "$mode" = claude ]; then on_pc run pc "$task" --claude "$prompt"; else on_pc run pc "$task" -- "$@"; fi
-    return
-  fi
+  if [ "$host" != "$HERE" ]; then on_pc run pc "$task" -- "$@"; return; fi
   local s d="$ROOT/.crossagent"; s="$(sname "$host" "$task")"
   if tmux has-session -t "=$s" 2>/dev/null; then
     [ -f "$d/run/$task.exit" ] || die "$s is still running. Use ca wait, or ca stop $host $task"
@@ -589,20 +588,16 @@ run() {
   fi
   mkdir -p "$d/logs" "$d/results" "$d/run"
   rm -f "$d/logs/$task.log" "$d/results/$task.md" "$d/run/$task.exit"
-  echo "$mode" > "$d/run/$task.mode"
+  echo cmd > "$d/run/$task.mode"
   # Tags the session so Claude Code hooks inside it (and the runner) know who they are.
   local env=(-e "CROSSAGENT_PROJECT=$SLUG" -e CROSSAGENT_ROLE=worker -e "CROSSAGENT_NODE=$task" -e "CROSSAGENT_HOST=$host")
-  if [ "$mode" = claude ]; then
-    tmux new-session -d -s "$s" "${env[@]}" -c "$ROOT" "$CA" __run "$task" claude "$prompt"
-  else
-    tmux new-session -d -s "$s" "${env[@]}" -c "$ROOT" "$CA" __run "$task" cmd "$@"
-  fi
+  tmux new-session -d -s "$s" "${env[@]}" -c "$ROOT" "$CA" __run "$task" "$@"
   echo "started $s in $(echo "$ROOT" | sed "s|^$HOME|~|")"
 }
 
 # Runs inside the tmux session.
 runner() {
-  local task="$1" mode="$2"; shift 2
+  local task="$1"; shift
   local d="$ROOT/.crossagent" rc start last; start="$(date +%s)"
   local log="$d/logs/$task.log" res="$d/results/$task.md"
   SLUG="${CROSSAGENT_PROJECT:-$SLUG}"
@@ -611,38 +606,27 @@ runner() {
   # Ctrl+C in the worker's terminal is for the command, not for this runner: keep going so
   # the result and WorkerStop still get written. A handler (not ignore) resets in children.
   trap ':' INT
-  if [ "$mode" = claude ]; then
-    tmux pipe-pane -o -t "${TMUX_PANE:-}" "cat >> $(q "$log")" || true
-    local p="$1
-
-You are a crossagent worker on the $HERE, task '$task', in $ROOT. When you are done, write a short result (what you did, files touched, outcome, anything the user must do) to .crossagent/results/$task.md, then say you're done."
-    set +e; claude --permission-mode acceptEdits "$p"; rc=$?; set -e
-    [ -f "$res" ] || printf '# %s on %s\n\nClaude exited (code %s) without writing a result.\n' "$task" "$HERE" "$rc" > "$res"
-  else
-    echo "[ca] $HERE $task: $*"
-    set +e
-    { trap ':' INT; if [ $# -eq 1 ]; then bash -c "$1"; else "$@"; fi; echo $? > "$d/run/$task.rc"; } 2>&1 | tee -i "$log"
-    set -e
-    rc="$(cat "$d/run/$task.rc" 2>/dev/null || echo 1)"; rm -f "$d/run/$task.rc"
-    {
-      echo "# $task on $HERE"
-      echo
-      echo "- command: \`$*\`"
-      echo "- exit: $rc ($([ "$rc" = 0 ] && echo ok || echo failed))"
-      echo "- took: $(( $(date +%s) - start ))s"
-      echo "- log: .crossagent/logs/$task.log"
-      echo
-      echo "Last lines:"
-      echo
-      echo '```'
-      tail -n 15 "$log"
-      echo '```'
-    } > "$res"
-  fi
+  echo "[ca] $HERE $task: $*"
+  set +e
+  { trap ':' INT; if [ $# -eq 1 ]; then bash -c "$1"; else "$@"; fi; echo $? > "$d/run/$task.rc"; } 2>&1 | tee -i "$log"
+  set -e
+  rc="$(cat "$d/run/$task.rc" 2>/dev/null || echo 1)"; rm -f "$d/run/$task.rc"
+  {
+    echo "# $task on $HERE"
+    echo
+    echo "- command: \`$*\`"
+    echo "- exit: $rc ($([ "$rc" = 0 ] && echo ok || echo failed))"
+    echo "- took: $(( $(date +%s) - start ))s"
+    echo "- log: .crossagent/logs/$task.log"
+    echo
+    echo "Last lines:"
+    echo
+    echo '```'
+    tail -n 15 "$log"
+    echo '```'
+  } > "$res"
   echo "$rc" > "$d/run/$task.exit"
-  # Last output line: the log for commands, the result for Claude (its log is raw terminal bytes).
-  if [ "$mode" = claude ]; then last="$(grep -v '^[[:space:]]*$' "$res" 2>/dev/null | tail -n 1)" || true
-  else last="$(grep -v '^[[:space:]]*$' "$log" 2>/dev/null | tail -n 1)" || true; fi
+  last="$(grep -v '^[[:space:]]*$' "$log" 2>/dev/null | tail -n 1)" || true
   event WorkerStop "$HERE" "$s" "$SLUG" "$task" "$rc" "$last"
   echo
   echo "[ca] $task finished with exit $rc. Session stays open, close it with: ca stop $HERE $task"
@@ -689,10 +673,7 @@ logs() {
   [ $# -ge 2 ] || die "usage: ca logs <host> <task> [lines]"
   local host task n="${3:-60}"; host="$(host_arg "$1")"; task="$2"; check_task "$task"
   [ "$host" = "$HERE" ] || { on_pc logs pc "$task" "$n"; return; }
-  local s; s="$(sname "$host" "$task")"
-  if [ "$(cat "$ROOT/.crossagent/run/$task.mode" 2>/dev/null)" = claude ] && tmux has-session -t "=$s" 2>/dev/null; then
-    tmux capture-pane -p -J -S -"$n" -t "=$s:" | sed '/^$/N;/^\n$/D' | tail -n "$n"
-  elif [ -f "$ROOT/.crossagent/logs/$task.log" ]; then
+  if [ -f "$ROOT/.crossagent/logs/$task.log" ]; then
     tail -n "$n" "$ROOT/.crossagent/logs/$task.log"
   else
     die "no log for $task on $host"
@@ -1179,8 +1160,6 @@ ca: split work across the Mac and the PC
   ca portal push [--delete]     one-off rsync Mac -> PC, for when the Portal is closed
   ca portal pull [paths...]     copy paths back from the PC (no paths: PC logs and results into .crossagent/pc/)
   ca run <host> <task> -- cmd   run a command in tmux session ca-<project>-<host>-<task> (flushes the Portal first)
-  ca run <host> <task> --claude "prompt"
-                                start an interactive Claude Code worker (acceptEdits) in that session
   ca status                     list ca-* sessions on both machines (old ca-<host>-<task> ones show as legacy)
   ca logs <host> <task> [n]     last n lines of output (default 60)
   ca wait <host> <task> [<host> <task>...] [--timeout secs]
