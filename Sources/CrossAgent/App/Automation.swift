@@ -202,8 +202,10 @@ final class Automation {
                             "workerPanes": o.workerPanes.mapValues { $0.isLive ? "live" : ($0.isExited ? "exited" : "connecting") },
                             "relay": o.relay.map { ["from": $0.from, "to": $0.to, "text": $0.text] } ?? NSNull(),
                             "answering": o.answering ?? NSNull(),
-                            "finished": o.graph.finished] as [String: Any]
-            graph = o.graph.nodes.values.sorted { $0.startedAt < $1.startedAt }.map { n in
+                            "finished": o.shown.finished, "demo": o.demoGraph != nil,
+                            "unverifiedWorkers": Array(o.unverifiedWorkers),
+                            "monitorFast": app.monitor?.isActive ?? false] as [String: Any]
+            graph = o.shown.nodes.values.sorted { $0.startedAt < $1.startedAt }.map { n in
                 var state: [String: Any] = [:]
                 switch n.state {
                 case .thinking: state = ["kind": "thinking"]

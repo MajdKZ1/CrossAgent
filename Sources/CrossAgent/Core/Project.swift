@@ -111,15 +111,19 @@ struct ProjectState: Codable, Equatable {
     var finishedNodes: [AgentNode]?
     /// Orchestrator mode is on: our hooks are in the project's settings and the events are followed.
     var orchestratorOn: Bool?
+    /// Workers still running at the last save. Dropped on restore when their session is gone.
+    var workerNodes: [AgentNode]?
 
     init(panes: [SavedPane] = [], mode: String? = nil, orchestrator: OrchestratorState? = nil,
-         nodePositions: [String: CGPoint] = [:], finishedNodes: [AgentNode]? = nil, orchestratorOn: Bool? = nil) {
+         nodePositions: [String: CGPoint] = [:], finishedNodes: [AgentNode]? = nil, orchestratorOn: Bool? = nil,
+         workerNodes: [AgentNode]? = nil) {
         self.panes = panes
         self.mode = mode
         self.orchestrator = orchestrator
         self.nodePositions = nodePositions
         self.finishedNodes = finishedNodes
         self.orchestratorOn = orchestratorOn
+        self.workerNodes = workerNodes
     }
 
     init(from decoder: Decoder) throws {
@@ -130,6 +134,7 @@ struct ProjectState: Codable, Equatable {
         nodePositions = (try? c.decodeIfPresent([String: CGPoint].self, forKey: .nodePositions)) ?? [:]
         finishedNodes = try? c.decodeIfPresent([AgentNode].self, forKey: .finishedNodes)
         orchestratorOn = try? c.decodeIfPresent(Bool.self, forKey: .orchestratorOn)
+        workerNodes = try? c.decodeIfPresent([AgentNode].self, forKey: .workerNodes)
     }
 }
 

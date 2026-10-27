@@ -27,9 +27,20 @@ final class ProjectOrchestrator: ObservableObject {
     /// Attached terminals for workers, by node id. Never create a session.
     @Published var workerPanes: [String: PaneSession] = [:]
 
+    /// The demo plays in here, never in `graph`, so nothing of it is saved.
+    @Published var demoGraph: AgentGraph?
+    /// What the canvas and the cards show.
+    var shown: AgentGraph { demoGraph ?? graph }
+
     var watchers: Set<AnyCancellable> = []
     var saveTask: Task<Void, Never>?
     var demoTimer: Timer?
+    /// Restored running workers whose tmux session has not been checked yet.
+    var unverifiedWorkers: Set<String> = []
+    /// Prompt sessions ("host/session") the monitor has seen waiting for input.
+    var seenWaiting: Set<String> = []
+    /// This project asked the monitor to poll fast.
+    var monitorFast = false
 
     init(graph: AgentGraph, controller: OrchestratorController, enabled: Bool) {
         self.graph = graph
@@ -59,14 +70,39 @@ extension AppState {
             .removeDuplicates()
             .sink { [weak self] _ in self?.scheduleOrchestratorSave() }
             .store(in: &o.watchers)
+        // Running workers are saved too, so they survive a relaunch.
+        graph.$nodes
+            .map { nodes in Set(nodes.values.filter { $0.kind == .worker }.map(\.id)) }
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in self?.scheduleOrchestratorSave() }
+            .store(in: &o.watchers)
+        // Published in willSet, so read the new values on the next turn.
+        graph.$nodes
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.checkNeedsInput() }
+            .store(in: &o.watchers)
+        monitor?.$sessions
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.pruneRestoredWorkers()
+                self?.checkNeedsInput()
+            }
+            .store(in: &o.watchers)
     }
 
-    /// After the project state loaded: finished nodes back on the canvas, followers on.
-    func orchestratorRestored() {
+    /// After the project state loaded: finished nodes and running workers back on the
+    /// canvas, followers on. Workers whose session is gone drop once their host is polled.
+    func orchestratorRestored(workers: [AgentNode]) {
         guard let o = orch else { return }
         let kept = finishedNodes.filter { o.graph.nodes[$0.id] == nil && $0.kind != .orchestrator }
         for n in kept { o.graph.nodes[n.id] = n }
         o.graph.finished = kept.map(\.id)
+        for n in workers where n.kind == .worker && n.tmuxSession != nil && o.graph.nodes[n.id] == nil {
+            o.graph.nodes[n.id] = n
+            o.unverifiedWorkers.insert(n.id)
+        }
+        pruneRestoredWorkers()
         syncOrchestratorNode(orchestratorPane)
         if o.enabled {
             o.controller.start()
@@ -81,6 +117,7 @@ extension AppState {
         o.controller.stop()
         o.demoTimer?.invalidate()
         o.saveTask?.cancel()
+        if o.monitorFast, mode != .station { monitor?.setActive(false) }
         for pane in o.workerPanes.values { pane.close() }
         o.workerPanes = [:]
         o.watchers = []
@@ -94,6 +131,72 @@ extension AppState {
         n.hostId = pane?.host.id ?? orchestratorInfo?.hostId ?? n.hostId
         n.tmuxSession = pane?.session
         if n != g.orchestrator { g.nodes[AgentGraph.orchestratorID] = n }
+    }
+
+    /// Running workers of the real graph, saved with the project.
+    var activeWorkerNodes: [AgentNode] {
+        guard let g = orch?.graph else { return [] }
+        return g.nodes.values.filter { $0.kind == .worker && !g.finished.contains($0.id) }.sorted { $0.startedAt < $1.startedAt }
+    }
+
+    /// Drops restored workers whose tmux session is gone, once their host answered a poll.
+    private func pruneRestoredWorkers() {
+        guard let o = orch, !o.unverifiedWorkers.isEmpty, let monitor else { return }
+        var dropped = false
+        for id in o.unverifiedWorkers {
+            guard let n = o.graph.nodes[id], let session = n.tmuxSession else {
+                o.unverifiedWorkers.remove(id)
+                continue
+            }
+            guard monitor.reachable[n.hostId] == true else { continue }
+            o.unverifiedWorkers.remove(id)
+            if !(monitor.sessions[n.hostId] ?? []).contains(where: { $0.name == session }) {
+                o.graph.nodes[id] = nil
+                nodePositions[id] = nil
+                dropped = true
+            }
+        }
+        if dropped { scheduleOrchestratorSave() }
+    }
+
+    // MARK: Needs input
+
+    /// Sessions holding a prompt: a worker's own, else the orchestrator's (built-in
+    /// subagents ask in there). As "host/session" keys.
+    private func promptSessions(_ g: AgentGraph) -> [String: (host: String, session: String)] {
+        var out: [String: (host: String, session: String)] = [:]
+        for n in g.nodes.values {
+            guard case .needsInput = n.state else { continue }
+            let holder = n.kind == .worker ? n : g.orchestrator
+            guard let h = holder, let s = h.tmuxSession else { continue }
+            out[h.hostId + "/" + s] = (h.hostId, s)
+        }
+        return out
+    }
+
+    /// Approving a permission sends no hook event, so watch the prompt's tmux session:
+    /// once it was seen waiting and is not anymore, the prompt was answered. The monitor
+    /// polls fast while the canvas is up and something needs input.
+    func checkNeedsInput() {
+        guard let o = orch, let monitor else { return }
+        let prompts = promptSessions(o.graph)
+        let want = mode == .orchestrator && !prompts.isEmpty
+        if want, !monitor.isActive {
+            monitor.setActive(true)
+        } else if !want, o.monitorFast, mode != .station {
+            monitor.setActive(false)
+        }
+        o.monitorFast = want
+        o.seenWaiting.formIntersection(prompts.keys)
+        for (key, p) in prompts {
+            guard let info = monitor.sessions[p.host]?.first(where: { $0.name == p.session }) else { continue }
+            if info.status == .waitingForInput {
+                o.seenWaiting.insert(key)
+            } else if o.seenWaiting.contains(key) {
+                o.seenWaiting.remove(key)
+                o.graph.resolveNeedsInput(tmuxSession: p.session)
+            }
+        }
     }
 
     /// Saves positions and finished nodes a moment after the last change.
@@ -167,12 +270,18 @@ extension AppState {
         if mode == .orchestrator, orchestratorPane != nil, !o.enabled, !o.busy {
             Task { await enableOrchestrator() }
         }
-        if old == .orchestrator { closeNodeOverlays() }
+        if old == .orchestrator {
+            closeNodeOverlays()
+            stopDemo()
+        }
+        // The station's own setActive runs as its view goes away, so check after it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.checkNeedsInput() }
     }
 
     func clearFinishedAgents() {
-        guard let g = orch?.graph else { return }
-        for id in g.finished { nodePositions[id] = nil }
+        guard let o = orch else { return }
+        let g = o.shown
+        if o.demoGraph == nil { for id in g.finished { nodePositions[id] = nil } }
         g.clearFinished()
         saveLayout()
     }
@@ -181,7 +290,7 @@ extension AppState {
 
     /// Opens the detail card for a node. Workers get an attached terminal.
     func expandNode(_ id: String) {
-        guard let o = orch, let node = o.graph.nodes[id] else { return }
+        guard let o = orch, let node = o.shown.nodes[id] else { return }
         if let old = o.detail, old != id { releaseWorkerPane(old) }
         o.answering = nil
         o.detail = id
@@ -193,7 +302,7 @@ extension AppState {
     /// Opens the card on the terminal that shows the node's prompt: its own, else the
     /// orchestrator's (built-in subagents ask in there).
     func answerNode(_ id: String) {
-        guard let o = orch, let node = o.graph.nodes[id] else { return }
+        guard let o = orch, let node = o.shown.nodes[id] else { return }
         if node.kind == .worker, node.tmuxSession != nil {
             expandNode(id)
         } else {
@@ -217,7 +326,7 @@ extension AppState {
 
     /// The terminal the detail card shows, if it has one.
     var detailTerminal: PaneSession? {
-        guard let o = orch, let id = o.detail, let node = o.graph.nodes[id] else { return nil }
+        guard let o = orch, let id = o.detail, let node = o.shown.nodes[id] else { return nil }
         switch node.kind {
         case .orchestrator: return orchestratorPane
         case .worker: return o.workerPanes[id]
@@ -256,7 +365,7 @@ extension AppState {
     /// the orchestrator, terminals get the text and Enter.
     func sendToNode(_ id: String, text: String) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, let node = orch?.graph.nodes[id] else { return }
+        guard !text.isEmpty, let node = orch?.shown.nodes[id] else { return }
         if node.kind == .subagent {
             sendViaOrchestrator(to: node, text: text)
         } else {
@@ -266,7 +375,7 @@ extension AppState {
 
     /// Opens the "Send to" card, prefilled with the source terminal's selection.
     func openNodeRelay(from: String, to: String) {
-        guard let o = orch, from != to, o.graph.nodes[to] != nil else { return }
+        guard let o = orch, from != to, o.shown.nodes[to] != nil else { return }
         var source: PaneSession?
         if from == AgentGraph.orchestratorID { source = orchestratorPane } else { source = o.workerPanes[from] }
         o.relay = NodeRelay(from: from, to: to, text: source?.selectedText ?? "")
@@ -277,7 +386,7 @@ extension AppState {
     func sendNodeRelay(_ relay: NodeRelay) {
         orch?.relay = nil
         let text = relay.text.trimmingCharacters(in: .newlines)
-        guard !text.isEmpty, let node = orch?.graph.nodes[relay.to] else { return }
+        guard !text.isEmpty, let node = orch?.shown.nodes[relay.to] else { return }
         if node.kind == .subagent {
             sendViaOrchestrator(to: node, text: text)
         } else {
@@ -344,31 +453,46 @@ extension AppState {
 
     // MARK: Dev
 
-    /// Plays DemoEvents into the current graph, with ticks.
+    /// Plays DemoEvents on the canvas, with ticks. It runs in a throwaway graph, so the
+    /// project's graph and saved state never see it. Ends 15 s after the script.
     func playDemo() {
         guard let o = orch, let project else { return }
-        o.demoTimer?.invalidate()
+        stopDemo()
+        let real = o.graph.orchestrator
+        let graph = AgentGraph(orchestratorHost: real?.hostId ?? "mac", session: real?.tmuxSession)
+        o.demoGraph = graph
         let start = Date()
         var steps = DemoEvents.script(slug: project.slug, start: start).enumerated()
             .sorted { ($0.element.delay, $0.offset) < ($1.element.delay, $1.offset) }.map(\.element)[...]
+        let end = (steps.last?.delay ?? 0) + 15
         var lastTick = start
-        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak o] t in
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] t in
             MainActor.assumeIsolated {
-                guard let o else { t.invalidate(); return }
+                guard let self, self.orch?.demoGraph === graph else { t.invalidate(); return }
                 let elapsed = Date().timeIntervalSince(start)
                 while let s = steps.first, s.delay <= elapsed {
-                    o.graph.apply(s.event)
+                    graph.apply(s.event)
                     steps.removeFirst()
                 }
                 if Date().timeIntervalSince(lastTick) >= 3 {
                     lastTick = Date()
-                    o.graph.tick(now: Date())
+                    graph.tick(now: Date())
                 }
-                if steps.isEmpty, elapsed > 60 { t.invalidate() }
+                if elapsed > end { self.stopDemo() }
             }
         }
         RunLoop.main.add(timer, forMode: .common)
         o.demoTimer = timer
+    }
+
+    /// Back to the project's real graph.
+    func stopDemo() {
+        guard let o = orch, o.demoGraph != nil else { return }
+        o.demoTimer?.invalidate()
+        o.demoTimer = nil
+        if let id = o.detail, o.graph.nodes[id] == nil { closeDetail() }
+        if let r = o.relay, o.graph.nodes[r.to] == nil { o.relay = nil }
+        o.demoGraph = nil
     }
 
     /// Applies events through the project filter, like the followers do.

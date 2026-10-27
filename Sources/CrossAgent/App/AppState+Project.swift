@@ -27,7 +27,7 @@ extension AppState {
         let state = store.loadState(for: next)
         setUpOrchestrator(for: next, on: state.orchestratorOn)
         restoreState(state, project: next)
-        orchestratorRestored()
+        orchestratorRestored(workers: state.workerNodes ?? [])
         monitor?.refreshNow()
     }
 
@@ -81,7 +81,8 @@ extension AppState {
             orchestrator: orch,
             nodePositions: nodePositions,
             finishedNodes: finishedNodes.isEmpty ? nil : finishedNodes,
-            orchestratorOn: self.orch?.enabled)
+            orchestratorOn: self.orch?.enabled,
+            workerNodes: activeWorkerNodes.isEmpty ? nil : activeWorkerNodes)
         store.saveState(state, for: project)
     }
 
