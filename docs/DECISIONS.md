@@ -248,3 +248,15 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   - **Clicks:** a trick never repeats twice in a row. Quick clicks (within 1.3 s) make each trick bigger, and from the third quick click two tricks chain.
   - **Orbs:** clicking one opens that agent's tab. Orb colours follow the theme's host overrides.
   - **Cost:** about 0.01% of one core per mood in a release build. All motion is Core Animation, so the app only wakes for the gesture timer.
+- Real test fixes (M18):
+  - **Sampler and follower spin:** the PC sampler and the event followers both had a pipe handler that returned early after a stop and then fired forever at EOF. Every pause or restart leaked one, and the app climbed to 570% CPU. Handlers now clear on EOF, on stop and on termination. Both have regression tests that reproduce the old spin (720% and 950%).
+  - **Quit:** stops the samplers and every follower synchronously, so no ssh is left running on the PC.
+  - **Puff clicks:** Puff sat inside a SwiftUI hosting view that never claims points outside a real mouse event, so clicks fell through to the orchestrator card. The canvas now hosts Puff's layer view directly, Puff's own hit test decides, and it follows whichever graph the canvas shows (the demo included).
+  - **Tab strip:** tabs share the strip width, shrink from 150 to 76 pt with truncating titles (the selected tab keeps 112), then scroll. The close x overlays instead of taking room, and the fixed items never clip. Cmd+9 goes to the last tab.
+  - **Hidden tabs:** keys never reach a terminal in a hidden tab. Focus is checked after every tab switch and before every key.
+  - **Busy workers:**
+    - A `ca run` command worker stays working until its WorkerStop. tmux can't tell `yes` from `read x`, so screen activity isn't a usable signal. A Claude worker counts as busy while its screen changed in the last 15 s.
+    - The check runs every 5 s from the monitor's last poll. The monitor stays at its slow 10 s poll, well inside the 45 s idle window.
+    - Telling Claude workers from command workers is a heuristic for now: the screen capture names Claude, or hook events have filled `recent`. A `mode` field on WorkerStart would make it exact.
+  - **Ctrl+C in a `ca run` worker:** stops the command and keeps the worker. The runner and its pipeline trap SIGINT, so the result and WorkerStop still get written (exit 130).
+- Performance, release build, real app with the orchestrator tab on screen: idle 1.05% of a core, `demo` busy 8.15%, Panes tab 1.2%. Puff alone stays at the app's baseline, because its motion is Core Animation.
