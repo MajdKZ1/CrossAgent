@@ -94,7 +94,7 @@ private struct HostColumn: View, Equatable {
             HStack(alignment: .lastTextBaseline, spacing: 4) {
                 if let s, s.memTotal > 0 {
                     BigNumber(text: ActivityFormat.gb(s.memUsed), color: color)
-                    Text("/ \(ActivityFormat.bytes(s.memTotal))").font(.system(size: 13).monospacedDigit()).foregroundStyle(Palette.muted)
+                    Text("/ \(ActivityFormat.bytes(max(host.specs?.memInstalled ?? 0, s.memTotal)))").font(.system(size: 13).monospacedDigit()).foregroundStyle(Palette.muted)
                 } else {
                     BigNumber(text: "--", color: Palette.faint)
                 }
