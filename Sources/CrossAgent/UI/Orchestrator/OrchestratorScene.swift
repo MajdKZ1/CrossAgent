@@ -110,6 +110,10 @@ final class OrchestratorScene {
     private var wakeItem: DispatchWorkItem?
     private var cameraAnim: (from: Camera, to: Camera, at: Date)?
     private var seenFlow: [String: Date] = [:]
+    /// The positions binding as last seen, and what we wrote into it ourselves. An
+    /// entry that matches neither came from outside.
+    private var known: [String: CGPoint] = [:]
+    private var written: [String: CGPoint] = [:]
     private var flashes: [FlowFlash] = []
 
     private(set) var dragging: String?
@@ -137,13 +141,17 @@ final class OrchestratorScene {
                 }
                 item.node = node
                 items[node.id] = item
+                if let p = positions[node.id], p != known[node.id], p != written[node.id], dragging != node.id {
+                    // Moved from outside (not a position we wrote ourselves): pin it there.
+                    layout.pin(node.id, at: p)
+                    moved = true
+                }
             } else {
-                items[node.id] = Item(node: node, bornAt: seeded ? now : nil)
-                layout.add(id: node.id, size: OrchMetrics.footprint, pinnedAt: positions[node.id])
-                moved = true
-            }
-            if let p = positions[node.id], layout.body(node.id)?.position != p, dragging != node.id {
-                layout.pin(node.id, at: p)
+                // A node with a saved spot goes straight there and stays, so a reopened
+                // canvas looks the way it was left. New ones spawn from the orchestrator.
+                let saved = positions[node.id]
+                items[node.id] = Item(node: node, bornAt: seeded && saved == nil ? now : nil)
+                layout.add(id: node.id, size: OrchMetrics.footprint, pinnedAt: saved)
                 moved = true
             }
             if node.flow != .none, let at = node.flowAt, at != seenFlow[node.id] {
@@ -158,6 +166,7 @@ final class OrchestratorScene {
             seenFlow[id] = nil
             moved = true
         }
+        known = positions
         if !seeded {
             // Nodes that were already there when the canvas opened skip their entrance.
             seeded = true
@@ -349,6 +358,21 @@ final class OrchestratorScene {
         let o = OrchMetrics.orchestrator
         if abs(p.x) <= o.width / 2, abs(p.y) <= o.height / 2 { return AgentGraph.orchestratorID }
         return nil
+    }
+
+    /// Where every node on the canvas is now (not those on their way out), for saving.
+    /// Comes from the layout itself, so it is right even if no frame has drawn yet.
+    func currentPositions() -> [String: CGPoint] {
+        var out: [String: CGPoint] = [:]
+        for (id, item) in items where item.leave == nil {
+            if let b = layout.body(id) { out[id] = b.position }
+        }
+        return out
+    }
+
+    /// Positions the app now holds because we wrote them.
+    func noteWritten(_ positions: [String: CGPoint]) {
+        written.merge(positions) { _, new in new }
     }
 
     func position(of id: String) -> CGPoint? {

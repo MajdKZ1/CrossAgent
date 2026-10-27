@@ -16,7 +16,7 @@ struct CanvasStageView: NSViewRepresentable {
         stage.graph = graph
         stage.hosts = Dictionary(hosts.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         stage.actions = actions
-        stage.onMoved = { id, p in binding.wrappedValue[id] = p }
+        stage.onPositions = { changed in binding.wrappedValue.merge(changed) { _, new in new } }
         stage.update(nodes: graph.nodes, finished: graph.finished, positions: positions)
     }
 
@@ -41,7 +41,8 @@ final class CanvasStage: NSView, CardEvents {
     weak var graph: AgentGraph?
     var hosts: [String: Host] = [:]
     var actions = OrchestratorActions()
-    var onMoved: (String, CGPoint) -> Void = { _, _ in }
+    /// Hands over node positions that changed, to merge into the positions binding.
+    var onPositions: ([String: CGPoint]) -> Void = { _ in }
 
     private let cableView = LayerView()
     private let overlayView = LayerView()
@@ -64,6 +65,11 @@ final class CanvasStage: NSView, CardEvents {
 
     private enum Drag { case none, pan(CGPoint), move(String, CGSize), relay(String) }
     private var drag = Drag.none
+    /// The card gesture `drag` belongs to: node id and where the press began. A new
+    /// gesture never inherits state from one that ended without telling us (SwiftUI
+    /// drops onEnded when it cancels a gesture, and a mouseUp can go missing).
+    private var dragSession: (id: String, start: CGPoint)?
+    private var lastDragEvent = Date.distantPast
     private var relayTo: CGPoint?
     private var dropTarget: String?
 
@@ -180,9 +186,31 @@ final class CanvasStage: NSView, CardEvents {
     @objc private func tick(_ link: CADisplayLink) { frameTick() }
 
     private func frameTick() {
+        // A node drag whose mouseUp never came would keep frames running forever.
+        if scene.dragging != nil, Date().timeIntervalSince(lastDragEvent) > 2, NSEvent.pressedMouseButtons & 1 == 0 {
+            resetDrag()
+            publishPositions()
+        }
         let busy = render(step: true)
         if logFPS { countFrame() }
-        if !busy { pauseFrames() }
+        if !busy {
+            pauseFrames()
+            publishPositions()
+        }
+    }
+
+    /// Hands every position that moved more than half a point to the app. Runs on drag
+    /// end and whenever the layout comes to rest.
+    private func publishPositions() {
+        let current = scene.currentPositions()
+        let saved = lastPositions
+        let changed = current.filter { id, p in
+            guard let old = saved[id] else { return true }
+            return abs(old.x - p.x) > 0.5 || abs(old.y - p.y) > 0.5
+        }
+        guard !changed.isEmpty else { return }
+        scene.noteWritten(changed)
+        onPositions(changed)
     }
 
     private func pauseFrames() {
@@ -207,6 +235,12 @@ final class CanvasStage: NSView, CardEvents {
     func screen(_ p: CGPoint, _ cam: Camera) -> CGPoint {
         CGPoint(x: bounds.width / 2 + cam.pan.width + p.x * cam.zoom,
                 y: bounds.height / 2 + cam.pan.height + p.y * cam.zoom)
+    }
+
+    /// A node's center in window coordinates, for automation.
+    func windowPoint(of id: String) -> CGPoint? {
+        guard let p = scene.position(of: id) else { return nil }
+        return convert(screen(p, scene.camera), to: nil)
     }
 
     func canvas(_ p: CGPoint) -> CGPoint {
@@ -369,6 +403,11 @@ final class CanvasStage: NSView, CardEvents {
 
     func cardDragChanged(_ id: String, start: CGPoint) {
         let m = mouse
+        if dragSession?.id != id || dragSession?.start != start {
+            resetDrag()
+            dragSession = (id, start)
+        }
+        lastDragEvent = Date()
         if case .none = drag {
             // Start from where the press began, not where the gesture kicked in, so
             // nothing lags the cursor. `start` is relative to the card, which sits
@@ -401,12 +440,28 @@ final class CanvasStage: NSView, CardEvents {
         }
     }
 
+    /// Drops whatever an earlier gesture left behind.
+    private func resetDrag() {
+        if scene.dragging != nil { scene.endDrag() }
+        if case .relay = drag {
+            relayTo = nil
+            dropTarget = nil
+        }
+        drag = .none
+        dragSession = nil
+    }
+
     func cardDragEnded(_ id: String) {
+        defer { dragSession = nil }
         switch drag {
-        case .move(let id, _):
-            if let p = scene.position(of: id) { onMoved(id, p) }
+        case .move(let id, let grab):
+            // Pin the spot under the final pointer, not the last drawn frame, which can
+            // lag behind when the display link is slow or paused.
+            let c = canvas(mouse)
+            scene.drag(id, to: CGPoint(x: c.x + grab.width, y: c.y + grab.height))
             scene.endDrag()
             drag = .none
+            publishPositions()
         case .relay:
             finishRelay()
         default:
@@ -414,12 +469,17 @@ final class CanvasStage: NSView, CardEvents {
         }
     }
 
-    func handleDragChanged(_ id: String) { setRelay(from: id, to: canvas(mouse)) }
+    func handleDragChanged(_ id: String) {
+        if case .relay(let from) = drag, from == id {} else { resetDrag() }
+        setRelay(from: id, to: canvas(mouse))
+    }
     func handleDragEnded(_ id: String) { finishRelay() }
 
     // MARK: - Mouse on empty space
 
     override func mouseDown(with e: NSEvent) {
+        // A press on empty space starts fresh, whatever an earlier gesture left behind.
+        resetDrag()
         if e.clickCount == 2 {
             scene.recenter()
             return
@@ -528,8 +588,30 @@ final class CardHost: ScaledView {
 }
 
 /// Cards act on the first click even when their window is not key, like the canvas.
+/// If a mouseUp never reached the card, SwiftUI keeps the old drag open and ignores
+/// every later press on it, so the card goes dead. A press that arrives while the
+/// button still looks down closes the stale gesture first.
 final class CardHostingView: NSHostingView<CardRoot> {
+    private var lastDown: NSEvent?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        if let stale = lastDown,
+           let up = NSEvent.mouseEvent(with: .leftMouseUp, location: stale.locationInWindow,
+                                       modifierFlags: stale.modifierFlags, timestamp: event.timestamp,
+                                       windowNumber: stale.windowNumber, context: nil, eventNumber: 0,
+                                       clickCount: stale.clickCount, pressure: 0) {
+            super.mouseUp(with: up)
+        }
+        lastDown = event
+        super.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        lastDown = nil
+        super.mouseUp(with: event)
+    }
 }
 
 /// The mascot in its own small hosting view, so its animation frames only update
