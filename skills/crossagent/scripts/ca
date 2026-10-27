@@ -452,6 +452,9 @@ project_map() {
 # ---------- init ----------
 
 init() {
+  # Where the work goes: both (default, live sync), mac only (no sync), pc only (one-off push, no live sync).
+  local mode=both
+  if [ $# -gt 0 ]; then mode="$(resolve "$*")" || die "unknown machine '$*' (mac, pc or both)"; fi
   mkdir -p "$ROOT/.crossagent"
   [ -f "$PROJ_CONF" ] || printf 'name=%s\n# pc_dir=other/path/under/home\n# sync_allow=.env.shared,*.pem   (opt in to syncing these, comma separated)\n# sync_ignore=data,*.sqlite     (extra ignores)\n' "$NAME" > "$PROJ_CONF"
 
@@ -480,10 +483,14 @@ init() {
   fi
 
   register_project
-  [ "$HERE" = mac ] && ensure_remote
+  [ "$HERE" = mac ] && [ "$mode" != mac ] && ensure_remote
   build_map
   project_map
-  if [ "$HERE" = mac ]; then push; else say "on the PC: PC only mode, nothing to sync"; fi
+  if [ "$HERE" != mac ]; then say "on the PC: PC only mode, nothing to sync"
+  elif [ "$mode" = mac ]; then say "Mac only: no sync"
+  elif [ "$mode" = pc ]; then push
+  elif have_mutagen; then sync_start
+  else say "mutagen isn't installed, falling back to a one-off push (brew install mutagen-io/mutagen/mutagen)"; push; fi
   echo "ready: $NAME  mac=$( [ "$HERE" = mac ] && echo "$ROOT" | sed "s|^$HOME|~|" || echo -)  pc=~/$(pc_dir)"
 }
 
@@ -650,7 +657,8 @@ usage() {
   cat <<'EOF'
 ca: split work across the Mac and the PC
 
-  ca init                       set up this project (CROSSAGENT.md, CLAUDE.md pointer, map, push)
+  ca init [mac|pc]              set up this project (CROSSAGENT.md, CLAUDE.md pointer, map) and start
+                                live sync. With mac: no sync. With pc: one-off push, no live sync.
   ca map [--refresh]            print the system map, or re-probe both machines first
   ca host <word>                nickname -> mac | pc | both  (local, this mac -> mac; pc, ssh, overseas -> pc)
   ca sync start [--force] [path]  live two-way-safe sync to the same path on the PC (Mutagen session ca-<project>)
@@ -676,7 +684,7 @@ EOF
 
 cmd="${1:-help}"; [ $# -gt 0 ] && shift
 case "$cmd" in
-  init) init ;;
+  init) init "$@" ;;
   map)
     if [ "${1:-}" = --refresh ] || [ ! -f "$MAP" ]; then
       [ "$HERE" = mac ] && ensure_remote; register_project; build_map; project_map
