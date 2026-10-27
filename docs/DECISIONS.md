@@ -152,3 +152,11 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   - Claude's own trust dialog defaults to "No, exit", so answer it with the arrow keys rather than Enter.
 - The "dead card" from the real test turned out to be the canvas freezing while its window was covered. The display link pauses there, which is right, but a node that spawned meanwhile stayed at the start of its entrance: invisible, at 30% scale, on top of the orchestrator. It swallowed or misdirected clicks. Now, whenever frames can't run, entrances, exits, fades, camera moves and the layout all jump straight to their end state. The built in pointer regression covers it.
 - Nodes keep their spot across launches. The positions map now holds every node, written when the layout settles and when a drag ends. Positions the canvas writes itself don't pin nodes, so the live layout still reflows. Only a user drag or an outside change pins a node.
+- Keys typed into a pane while it connects are held until 0.4 s after its first output, then sent in order. tmux attaching over ssh sometimes ate the first keystroke typed into a freshly opened worker card.
+- Final verification (release bundle builds and launches, 98 tests, the 13 check canvas pointer regression): everything passed after the fixes above.
+- Cut or limited, and why:
+  - "Waiting on" covers the orchestrator only: background subagents from `Stop`, plus `ca wait` commands. Subagents waiting on each other don't report anything a hook can see.
+  - Permission prompts raised by built-in subagents are matched to the subagent by timing (a Notification within 3 s of its PermissionRequest), because Notification carries no agent id.
+  - Teammate style subagents can be marked done at SubagentStop while Claude still lists them as idle teammates. That's left as Claude reports it.
+  - The hover handle for relay drags can't be triggered with synthetic events, since hover follows the real cursor. It shares its code with Option-drag, which is tested.
+  - Pulses, zzz and Patch run on Core Animation, so offscreen snapshots don't show them. Their models and keyframes are unit tested instead.
