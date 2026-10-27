@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import SwiftUI
 
@@ -44,3 +45,4 @@ extension Automation {
         }
     }
 }
+#endif

@@ -125,7 +125,9 @@ struct OrchestratorMenu: View {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    #if DEBUG
     private var automation: Automation?
+    #endif
     private var shortcuts: Shortcuts?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -136,7 +138,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // CROSSAGENT_NO_ACTIVATE=1 keeps a test launch from stealing focus.
         if ProcessInfo.processInfo.environment["CROSSAGENT_NO_ACTIVATE"] != "1" { NSApp.activate(ignoringOtherApps: true) }
         let windows = ProjectWindows.shared
+        // Debug builds only: release builds carry no remote control channel at all.
+        #if DEBUG
         if Automation.enabled { automation = Automation(windows: windows) }
+        #endif
         MascotGallery.writeSnapshotsIfRequested()
         shortcuts = Shortcuts(windows: windows)
         windows.restore()

@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 
 /// Terminal checks for a pane (default: the focused one, or "index").
@@ -64,3 +65,4 @@ extension Automation {
         return true
     }
 }
+#endif

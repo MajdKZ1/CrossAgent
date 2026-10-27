@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 
 /// Dev only remote control so flows can be tested without clicking.
@@ -396,3 +397,4 @@ final class Automation {
         write(out.representation(using: .png, properties: [:]) ?? Data(), to: path)
     }
 }
+#endif

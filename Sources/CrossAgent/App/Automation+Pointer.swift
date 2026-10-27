@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 
 /// Pointer commands, run by `SyntheticPointer`. Window coordinates, origin bottom left, like `click`.
@@ -16,3 +17,4 @@ extension Automation {
         SyntheticPointer.handle(name, cmd)
     }
 }
+#endif

@@ -1,3 +1,4 @@
+#if DEBUG
 import Foundation
 
 /// Remote worker commands, so cards, docs and approvals can be checked without clicking.
@@ -113,3 +114,4 @@ extension Automation {
         }
     }
 }
+#endif

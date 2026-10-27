@@ -1,3 +1,4 @@
+#if DEBUG
 import Foundation
 
 /// Session commands, so discovery, the Live view and Continue here can be tested
@@ -88,3 +89,4 @@ extension Automation {
         }
     }
 }
+#endif

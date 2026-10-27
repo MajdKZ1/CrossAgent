@@ -1,5 +1,6 @@
 #!/bin/sh
-# Dev helper: send a JSON command to a running CrossAgent started with
+# Dev helper, debug builds only (swift build): release builds have no automation
+# channel. Sends a JSON command to a running debug CrossAgent started with
 # CROSSAGENT_AUTOMATION=1. Example: scripts/automation.sh '{"cmd":"new","host":"pc","mode":"shell"}'
 # Set CROSSAGENT_AUTOMATION_ID to reach only the instance started with the same value.
 set -eu
