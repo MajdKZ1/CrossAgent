@@ -19,7 +19,7 @@ final class Shortcuts {
 
     // Physical key codes (ANSI layout positions), so Shift and keyboard layouts do not matter.
     private enum Key {
-        static let t: UInt16 = 17, w: UInt16 = 13, b: UInt16 = 11, r: UInt16 = 15, v: UInt16 = 9
+        static let t: UInt16 = 17, o: UInt16 = 31, w: UInt16 = 13, b: UInt16 = 11, r: UInt16 = 15, v: UInt16 = 9
         static let leftBracket: UInt16 = 33, rightBracket: UInt16 = 30
         static let returnKey: UInt16 = 36, enter: UInt16 = 76, escape: UInt16 = 53
         static let up: UInt16 = 126, down: UInt16 = 125
@@ -45,22 +45,35 @@ final class Shortcuts {
         let key = event.keyCode
 
         if app.showRelayPicker { return handleRelayPicker(key: key, flags: flags) }
+        if app.folderPrompt != nil, !flags.contains(.command) { return handleFolderPrompt(key: key) }
 
         guard flags.contains(.command), !flags.contains(.control), !flags.contains(.option) else { return event }
         let shift = flags.contains(.shift)
 
         switch (key, shift) {
-        case (Key.t, false): app.showNewPane = true
+        case (Key.t, false): app.openNewPanePopover()
+        case (Key.o, false): app.presentOpenPanel()
+        case (Key.o, true): if app.project != nil { app.toggleMode(.orchestrator) }
         case (Key.w, false): app.close()
         case (Key.leftBracket, true): app.moveFocus(-1)
         case (Key.rightBracket, true): app.moveFocus(1)
         case (Key.returnKey, false), (Key.enter, false): app.toggleMaximize()
         case (Key.b, true): app.toggleBroadcast()
         case (Key.r, true): app.openRelayPicker()
-        case (Key.v, true): app.showStation.toggle()
+        case (Key.v, true): app.toggleMode(.station)
         default:
             guard !shift, let n = Key.digits.firstIndex(of: key) else { return event }
             app.focus(index: n)
+        }
+        return nil
+    }
+
+    /// The missing folder card: Enter starts sync, Esc cancels, other plain keys go nowhere.
+    private func handleFolderPrompt(key: UInt16) -> NSEvent? {
+        switch key {
+        case Key.escape: app.cancelFolderPrompt()
+        case Key.returnKey, Key.enter: app.promptStartSync()
+        default: break
         }
         return nil
     }

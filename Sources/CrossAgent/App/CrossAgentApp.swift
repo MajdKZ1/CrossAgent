@@ -29,10 +29,23 @@ struct PaneCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            item("New Pane") { app.showNewPane = true }
+            item("New Pane") { app.openNewPanePopover() }
                 .keyboardShortcut("t")
+            item("Open Project…") { app.presentOpenPanel() }
+                .keyboardShortcut("o")
+            Menu("Open Recent") { RecentProjectsMenu(app: app) }
+            Divider()
             item("Close Pane") { app.close() }
                 .keyboardShortcut("w")
+            Button("Close Project") { app.leaveProject() }
+        }
+        CommandGroup(before: .sidebar) {
+            Button("Panes") { app.mode = .panes }
+            item("Station") { app.toggleMode(.station) }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+            item("Orchestrator") { if app.project != nil { app.toggleMode(.orchestrator) } }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+            Divider()
         }
         CommandMenu("Panes") {
             item("Next Pane") { app.moveFocus(1) }
@@ -46,14 +59,28 @@ struct PaneCommands: Commands {
                 .keyboardShortcut("b", modifiers: [.command, .shift])
             item("Relay Selection") { app.openRelayPicker() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
-            item("Viewing Station") { app.showStation.toggle() }
-                .keyboardShortcut("v", modifiers: [.command, .shift])
             Divider()
             ForEach(1..<10) { n in
                 item("Focus Pane \(n)") { app.focus(index: n - 1) }
                     .keyboardShortcut(KeyEquivalent(Character("\(n)")))
             }
         }
+    }
+}
+
+/// File > Open Recent. A view so it follows the app's changes (recents are not published,
+/// but the app publishes whenever they change).
+struct RecentProjectsMenu: View {
+    @ObservedObject var app: AppState
+
+    var body: some View {
+        let recents = app.recentProjects
+        ForEach(recents) { r in
+            Button(r.name) { app.switchProject(r.url) }
+        }
+        if !recents.isEmpty { Divider() }
+        Button("Clear Menu") { app.clearRecents() }
+            .disabled(recents.isEmpty)
     }
 }
 
@@ -69,7 +96,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let icon = Self.bundledIcon() { NSApp.applicationIconImage = icon }
         NSApp.appearance = NSAppearance(named: .darkAqua)
         NSWindow.allowsAutomaticWindowTabbing = false
-        NSApp.activate(ignoringOtherApps: true)
+        // CROSSAGENT_NO_ACTIVATE=1 keeps a test launch from stealing focus.
+        if ProcessInfo.processInfo.environment["CROSSAGENT_NO_ACTIVATE"] != "1" { NSApp.activate(ignoringOtherApps: true) }
         if Automation.enabled { automation = Automation(app: app) }
         OrchestratorDemo.openIfRequested()
         MascotGallery.openIfRequested()
@@ -93,7 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// AppIcon.icns from the .app, or from the SwiftPM resource bundle next to a bare
     /// binary (swift run). Looked up by hand since Bundle.module traps when it's missing.
-    private static func bundledIcon() -> NSImage? {
+    static func bundledIcon() -> NSImage? {
         let resources = Bundle.main.executableURL.flatMap {
             Bundle(url: $0.deletingLastPathComponent().appendingPathComponent("CrossAgent_CrossAgent.bundle"))
         }
