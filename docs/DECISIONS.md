@@ -119,7 +119,7 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   - The "PC folder missing" choice is a card over the window rather than inside the New pane popover. That way it works however a pane is opened and can be driven by automation.
   - A failed ssh check counts as missing, so you get the choice instead of an error. Typing an existing session name skips the check.
   - Cmd+Shift+V toggles the station back to the previous mode, and Cmd+Shift+O toggles Orchestrator back to Panes.
-  - Host chips hide under 1000 pt and the mode switch goes icon only under 760 pt, to keep the top bar uncluttered.
+  - Host chips hide under 1200 pt with a project open (1000 without) and the mode switch goes icon only under 760 pt, to keep the top bar uncluttered.
   - Dev only: `CROSSAGENT_NO_ACTIVATE=1` launches without stealing focus, and `CROSSAGENT_AUTOMATION_ID` gives each test instance its own automation channel. Before that, parallel test runs received each other's commands.
 - Orchestrator wiring:
   - Each open project has one graph and one controller. Hooks go in when you hit Start, or when you enter the mode with an orchestrator already running, never just from looking at the start card.
