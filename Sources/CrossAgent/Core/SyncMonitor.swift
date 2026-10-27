@@ -120,7 +120,10 @@ struct SyncSession: Decodable, Equatable, Identifiable {
 
     var health: SyncHealth {
         let s = status ?? ""
-        if !(conflicts ?? []).isEmpty || (excludedConflicts ?? 0) > 0 || error != nil
+        if !(conflicts ?? []).isEmpty || (excludedConflicts ?? 0) > 0 { return .problem }
+        // Still connecting (at launch, or after a drop): amber, even with the last error around.
+        if s.hasPrefix("connecting") { return .busy }
+        if error != nil
             || s == "disconnected" || s.hasPrefix("halted")
             || alpha?.hasProblems == true || beta?.hasProblems == true {
             return .problem

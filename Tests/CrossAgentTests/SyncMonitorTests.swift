@@ -39,6 +39,9 @@ final class SyncMonitorTests: XCTestCase {
         XCTAssertEqual(session(#"{\#(clean),"status":"watching","paused":true}"#)?.health, .busy)
         XCTAssertEqual(session(#"{\#(clean),"status":"staging-alpha"}"#)?.health, .busy)
         XCTAssertEqual(session(#"{\#(clean),"status":"connecting-beta"}"#)?.health, .busy)
+        // Connecting at launch often still carries the last error: amber, not red.
+        XCTAssertEqual(session(#"{\#(clean),"status":"connecting-beta","lastError":"ssh: connection refused"}"#)?.health, .busy)
+        XCTAssertEqual(session(#"{\#(clean),"status":"connecting-alpha","conflicts":[{"root":"a.txt"}]}"#)?.health, .problem)
         XCTAssertEqual(session(#"{\#(clean),"status":"something-new"}"#)?.health, .busy)
         XCTAssertEqual(session(#"{\#(clean),"status":"watching","conflicts":[{"root":"a.txt"}]}"#)?.health, .problem)
         XCTAssertEqual(session(#"{\#(clean),"status":"watching","excludedConflicts":3}"#)?.health, .problem)
