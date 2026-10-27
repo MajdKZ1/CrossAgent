@@ -1,13 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// Dev only: a window with the orchestrator canvas fed by DemoEvents through the
+/// Dev only: a tab with the orchestrator canvas fed by DemoEvents through the
 /// reducer, opened with CROSSAGENT_ORCH_DEMO=1.
 ///
 /// - CROSSAGENT_ORCH_DEMO=idle: six nodes that settle and then sit still.
 /// - CROSSAGENT_ORCH_DEMO_NODES=<n>: n nodes at once with data flowing all the time.
 /// - CROSSAGENT_ORCH_DEMO_SNAPSHOT=<path>: writes a PNG of the window every 3 s.
-///   A `%d` in the path is replaced by a counter. The window opens behind others.
+///   A `%d` in the path is replaced by a counter.
 /// - CROSSAGENT_ORCH_DEMO_POSITIONS=<path>: JSON {id: [x, y]} to start from, like a relaunch.
 /// - CROSSAGENT_ORCH_DEMO_POINTER=regression with CROSSAGENT_ORCH_DEMO=idle: canvas
 ///   interaction checks, one PASS or FAIL line each, then a summary line.
@@ -15,39 +15,49 @@ import SwiftUI
 ///   each with an optional "wait" in seconds before it. {"log":"label"} prints the
 ///   camera and node positions; {"snapshot":"path"} writes a PNG.
 enum OrchestratorDemo {
-    private static var window: NSWindow?
     private static var driver: DemoDriver?
+    private static var attached = false
+    fileprivate static let hosts = HostStore.load()
 
-    @MainActor static func openIfRequested() {
+    static var isRequested: Bool {
+        guard let mode = ProcessInfo.processInfo.environment["CROSSAGENT_ORCH_DEMO"] else { return false }
+        return mode != "0"
+    }
+
+    /// Made and started the first time the tab shows, kept for the rest of the run.
+    @MainActor fileprivate static func shared() -> DemoDriver {
+        if let driver { return driver }
         let env = ProcessInfo.processInfo.environment
-        guard let mode = env["CROSSAGENT_ORCH_DEMO"], mode != "0" else { return }
-        let driver = DemoDriver()
-        let root = DemoRoot(graph: driver.graph, hosts: HostStore.load(), ui: driver.ui)
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 750),
-                         styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-        w.title = "Orchestrator demo"
-        w.isReleasedWhenClosed = false
-        w.backgroundColor = Theme.window
-        w.appearance = NSAppearance(named: .darkAqua)
-        w.contentView = NSHostingView(rootView: root)
-        w.center()
-        let snapshot = env["CROSSAGENT_ORCH_DEMO_SNAPSHOT"]
-        // Automated runs stay behind other windows.
-        if snapshot != nil || env["CROSSAGENT_ORCH_DEMO_POINTER"] != nil { w.orderBack(nil) } else { w.makeKeyAndOrderFront(nil) }
-        window = w
-        self.driver = driver
-
+        let d = DemoDriver()
+        driver = d
         if let n = env["CROSSAGENT_ORCH_DEMO_NODES"].flatMap(Int.init), n > 0 {
-            driver.startCrowd(n)
-        } else if mode == "idle" {
-            driver.startIdle()
+            d.startCrowd(n)
+        } else if env["CROSSAGENT_ORCH_DEMO"] == "idle" {
+            d.startIdle()
         } else {
-            driver.startScript()
+            d.startScript()
         }
-        if let snapshot { driver.startSnapshots(of: w, to: snapshot) }
+        return d
+    }
+
+    /// Snapshots and pointer runs start once the tab is in the window.
+    @MainActor fileprivate static func attach(to w: NSWindow) {
+        guard !attached, let driver else { return }
+        attached = true
+        let env = ProcessInfo.processInfo.environment
+        if let snapshot = env["CROSSAGENT_ORCH_DEMO_SNAPSHOT"] { driver.startSnapshots(of: w, to: snapshot) }
         if let pointer = env["CROSSAGENT_ORCH_DEMO_POINTER"] {
             if pointer == "regression" { driver.runRegression(in: w) } else { driver.runPointerScript(pointer, in: w) }
         }
+    }
+}
+
+/// The demo as the main window's dev tab.
+struct OrchestratorDemoTab: View {
+    var body: some View {
+        let d = OrchestratorDemo.shared()
+        DemoRoot(graph: d.graph, hosts: OrchestratorDemo.hosts, ui: d.ui)
+            .background(WindowAccessor { OrchestratorDemo.attach(to: $0) })
     }
 }
 
@@ -275,7 +285,7 @@ private final class DemoDriver {
                 } else if let out = step["snapshot"] as? String {
                     Self.snapshot(window, to: out)
                 } else if let name = step["cmd"] as? String {
-                    // Always this window: the main window may show a canvas too.
+                    // Always this window, by title.
                     var cmd = step
                     cmd["window"] = cmd["window"] ?? window.title
                     _ = PointerAutomation.handle(name, cmd)
@@ -291,6 +301,16 @@ private final class DemoDriver {
     func runRegression(in window: NSWindow) {
         // Looked up when the checks run: SwiftUI builds the canvas after this returns.
         var stage: CanvasStage { PointerAutomation.stage(in: window.contentView)! }
+        // Window points relative to the canvas, which sits below the tab strip: its
+        // bottom left corner, and its center.
+        func corner(_ dx: CGFloat, _ dy: CGFloat) -> [String: Any] {
+            let r = stage.convert(stage.bounds, to: nil)
+            return ["x": r.minX + dx, "y": r.minY + dy]
+        }
+        func fromCenter(_ dx: CGFloat, _ dy: CGFloat) -> [String: Any] {
+            let r = stage.convert(stage.bounds, to: nil)
+            return ["x": r.midX + dx, "y": r.midY + dy]
+        }
         let title = window.title
         var failures = 0
         var at: TimeInterval = 5
@@ -374,22 +394,23 @@ private final class DemoDriver {
         step(0.6) {
             check("card with the lost mouseUp taps again", self.ui.expanded == ["lint"])
             self.ui.detail = nil
-            pointer(["cmd": "drag", "x": 80, "y": 80, "toX": 140, "toY": 120, "steps": 10])
+            let a = corner(80, 80), b = corner(140, 120)
+            pointer(["cmd": "drag", "x": a["x"]!, "y": a["y"]!, "toX": b["x"]!, "toY": b["y"]!, "steps": 10])
         }
         step(0.8) {
             check("drag on empty space pans", stage.scene.camera.pan == CGSize(width: 60, height: -40))
-            pointer(["cmd": "dblclick", "x": 80, "y": 80])
+            pointer(["cmd": "dblclick"].merging(corner(80, 80)) { $1 })
         }
         step(0.8) {
             check("double click recenters", stage.scene.camera == Camera())
-            pointer(["cmd": "scroll", "x": 800, "y": 500, "dx": 0, "dy": 50, "mods": ["cmd"]])
+            pointer(["cmd": "scroll", "dx": 0, "dy": 50, "mods": ["cmd"]].merging(fromCenter(250, 125)) { $1 })
         }
         step(0.6) {
             let cam = stage.scene.camera
             check("cmd scroll zooms around the pointer",
                   abs(cam.zoom - 1.492) < 0.01 && abs(cam.pan.width + 123) < 1 && abs(cam.pan.height - 61.5) < 1,
                   "pan \(cam.pan) zoom \(cam.zoom)")
-            pointer(["cmd": "dblclick", "x": 80, "y": 80])
+            pointer(["cmd": "dblclick"].merging(corner(80, 80)) { $1 })
         }
         step(0.8) {
             // No frames run while the window is covered; a node spawned then must still
