@@ -273,3 +273,17 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   - We only ever read these files. Nothing writes to them, and the per session messaging socket is left alone.
 - Where a session runs comes from walking its parent processes, for example `claude <- zsh <- login <- Ghostty`. A tmux server ancestor means it's in tmux, and the pane pid maps it to the tmux session.
 - Mac GPU load: `Device Utilization %` from the IOAccelerator's performance statistics is readable without root, so the Mac shows live GPU load too.
+- One window per project (M21):
+  - **Windows:** project windows are plain NSWindows managed by `ProjectWindows`, not a SwiftUI WindowGroup. That gives direct control of dedupe, closing, frame restore and automation. The only SwiftUI scene left is Settings, which SwiftUI opens at launch, so the app closes it right away.
+  - **Frames:** each window saves its frame under `CrossAgent.project.<hash of the path>`, so paths stay out of defaults. A new project takes the welcome window's frame, or cascades from the front window.
+  - **Open list:** the list of open projects is `openProjects.v1`. It's saved in `applicationShouldTerminate`, because SwiftUI closes windows one by one before quitting. The first launch after the update falls back to `lastProject.v1`.
+  - **Closing:** the close button on one of several windows closes that project. Closing the last window quits and keeps it, so it reopens next launch. File > Close Project on the last window shows Welcome. tmux sessions always keep running.
+  - **Shared services:** the tmux monitor, Portal status, activity and themes are shared by every window. Fast tmux polling is counted per viewer. Event followers belong to a project, and so to its window, so nothing runs twice.
+  - **Menus and tabbing:** menus act on the key window, or on the last project window that was key. Native window tabbing is on. Which windows were merged isn't restored, so they come back separate.
+  - **Top bar:** the in-window project switcher is gone. Recents in the project menu open the project's window or bring it forward.
+- Crossover Portal (M22), CLI part:
+  - **Commands:** `ca portal` takes start, status, flush, conflicts, stop, push and pull. `ca sync` is the same command under its old name.
+  - **What was renamed:** every message the CLI prints, the help, SKILL.md and the CROSSAGENT.md template.
+  - **What stayed:** the Mutagen session name `ca-<project>`, the `ca-cfg` label, the `sync_allow`/`sync_ignore` keys, function names and status words like "watching (in sync)". Renaming those would break existing portals. Projects that already have a CROSSAGENT.md keep their old wording, because `ca init` never overwrites it.
+  - **Flush fix:** `ca portal flush` now waits up to about 10 s while Mutagen is still scanning or staging, where before it failed straight away after a resolved conflict.
+  - **Installed skill:** the installed copy on both machines was updated with `install.sh`.
