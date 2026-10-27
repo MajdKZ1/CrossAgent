@@ -722,7 +722,13 @@ stop() {
   local s; s="$(sname "$host" "$task")"
   # Falls back to the old ca-<host>-<task> name so sessions from before projects can be stopped too.
   if ! tmux has-session -t "=$s" 2>/dev/null && tmux has-session -t "=ca-$host-$task" 2>/dev/null; then s="ca-$host-$task"; fi
-  tmux kill-session -t "=$s" 2>/dev/null && echo "stopped $s" || echo "$s wasn't running"
+  if tmux kill-session -t "=$s" 2>/dev/null; then
+    echo "stopped $s"
+    # A task that finished already logged its WorkerStop; one cut short gets one here.
+    [ -f "$ROOT/.crossagent/run/$task.exit" ] || event WorkerStop "$HERE" "$s" "$SLUG" "$task" 0 "Stopped with ca stop"
+  else
+    echo "$s wasn't running"
+  fi
   rm -f "$ROOT/.crossagent/run/$task.mode"
 }
 
