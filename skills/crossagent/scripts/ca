@@ -953,7 +953,7 @@ r_close_turn() {
   r_event "$role" RemoteStop "turn=$n" "rc=$rc" "csid=$(cat "$d/session" 2>/dev/null)" "path=$d/result.md" "sum=$why"
 }
 
-# Pending approvals for a worker session: id<TAB>summary per line, oldest first.
+# Unanswered approvals for a worker session (all of them with "all"): id<TAB>summary per line, oldest first.
 pending() {
   ls "$APPROVALS"/*.json >/dev/null 2>&1 || return 0
   python3 -I -c '
@@ -964,9 +964,9 @@ for f in sorted(glob.glob(os.path.join(sys.argv[1], "*.json")), key=os.path.getm
             d = json.load(fh)
     except Exception:
         continue
-    if d.get("tmux") == sys.argv[2]:
+    if d.get("tmux") == sys.argv[2] and (sys.argv[3] == "all" or not os.path.exists(f[:-5] + ".answer")):
         print("%s\t%s" % (d.get("id", ""), d.get("sum", "")))
-' "$APPROVALS" "$1" 2>/dev/null || true
+' "$APPROVALS" "$1" "${2:-}" 2>/dev/null || true
 }
 
 specs() {
@@ -1188,7 +1188,7 @@ r_stop() {
   r_kill "$d" "$role"
   r_close_turn "$d" "$role" 130 "Stopped with ca remote stop"
   # Requests from a killed worker can't be answered any more.
-  pending "$s" | cut -f1 | while read -r n; do [ -z "$n" ] || rm -f "$APPROVALS/$n.json" "$APPROVALS/$n.answer"; done
+  pending "$s" all | cut -f1 | while read -r n; do [ -z "$n" ] || rm -f "$APPROVALS/$n.json" "$APPROVALS/$n.answer"; done
   echo "stopped $s (the session id is kept, --continue resumes it)"
 }
 
