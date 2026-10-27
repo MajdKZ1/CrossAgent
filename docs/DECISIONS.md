@@ -164,3 +164,25 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
 ## Tabs, native panes, activity, themes and the new mascot (M12 to M18)
 - Contracts went in first again. `App/Tabs.swift` holds `TabKind`, plus `AgentRef` (a graph node or any tmux session) and `openAgent`. `Core/ThemeModel.swift` holds the theme tokens (ui, terminal, mascot) and a theme changed notification. That let the tab strip, native panes, the activity monitor, the theme system and the mascot be built at the same time, each in its own files.
 - Everything keeps reading colours through `Palette` and `Theme`, and the theme work turns those into computed values backed by the current theme, so most call sites don't change. Layer based views (canvas, mascot) recolour on the notification.
+- Activity monitor:
+  - The Mac uses host_processor_info, host_statistics64, sysctl and libproc on a 1.5 s timer off the main thread.
+  - The PC uses one long lived ssh running an inline python script that prints raw counters (/proc/stat, meminfo, hwmon, PSI). All the maths is in Swift and unit tested. Nothing is installed on the PC. The script costs about 0.4% of one core.
+  - Sampling only runs while the Activity tab or the readout is visible, and pauses when the window is hidden.
+  - On the test Mac the efficiency cores come first (cpu0 to 5 are E, cpu6 to 9 are P, called "Super"), so cluster membership comes from the IORegistry `cluster-type`, not from an assumed order.
+  - Apple Silicon temperatures readable without root: 24 PMU tdie die sensors (shown as SoC: average, with the hottest as detail), the SSD (NAND) and the battery. There are no cluster or GPU sensors by name, so the Mac has no GPU tile. One sensor reads -9199 and is filtered out.
+  - An NVIDIA GPU on the proprietary driver, which has no hwmon, so its temperature and load come from `nvidia-smi` when it exists. PC memory "used" is total minus MemAvailable, like `free`. The total is a bit under the installed size because the kernel reserves some. PC pressure comes from PSI some avg10, with my own cut offs: under 1% normal, under 10% elevated, above that critical.
+  - Session CPU is percent of one core, like top, summed over each `ca-*` session's process tree.
+- Activity accuracy, measured at the same moments as the reference tools:
+
+  | Reading | Reference | CrossAgent |
+  | --- | --- | --- |
+  | Mac CPU idle | top 5.46% | 5.6% |
+  | Mac CPU under 5x `yes` | top 52.7% | 53.4 to 61.7% (top uses a 1 s window, CrossAgent 1.5 s) |
+  | Mac memory | vm_stat math 13.96 / 14.04 GiB | 13.96 / 14.04 GiB |
+  | PC CPU idle | top 0.9% | 1.0 to 1.5% |
+  | PC CPU under 9 busy loops | top 57.1% | 57.0 to 58.2% |
+  | PC memory | free 4117 MiB | 4.02 GiB |
+  | PC Tctl idle / load | 39.75 / 61.5 °C | 39.8 / 61.4 to 61.9 °C |
+  | PC NVMe | 36.85 °C | 36.9 °C |
+  | PC GPU | nvidia-smi 42 °C | 42 °C |
+  | Session test (a busy loop in a ca-* session) | about 100% | 99.9% on the Mac, 100% on the PC |
