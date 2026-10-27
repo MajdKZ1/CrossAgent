@@ -55,5 +55,12 @@ Below, `ca` is short for that path.
   old `ca-<host>-<task>` ones marked legacy.
 - `ca sync ...` is the old name for `ca portal ...` and still works. Write `ca portal` in
   anything new.
+- claude wrapper (optional, `install.sh --wrapper`, undo with `install.sh --remove-wrapper`,
+  both take `--mac` / `--pc`): typing `claude` in an interactive shell starts it in a tmux
+  session `ca-<project>-<host>-<n>` and attaches, so several terminals or the app can view the
+  same session. Closing the window only detaches. `claude --ca-name NAME` picks the name and
+  reattaches if it exists. It runs claude plain inside tmux, with `-p`, `--version`, `--help`,
+  subcommands, piped input or output, and with `CLAUDE_NO_TMUX=1`. `command claude` always
+  skips it. Scripts never see it (only interactive shells source it).
 - Each worker logs a start and a finish event to `~/.crossagent/events/<session>.jsonl`
   on the machine it ran on, which the CrossAgent app picks up.
