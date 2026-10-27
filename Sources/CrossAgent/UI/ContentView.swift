@@ -2,25 +2,14 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var app: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let gridVisible = app.mode == .panes
         VStack(spacing: 0) {
             TopBar()
-            ZStack {
-                // The grid stays alive under the other modes so terminals keep running and sized.
-                PaneGrid()
-                    .opacity(gridVisible ? 1 : 0)
-                    .allowsHitTesting(gridVisible)
-                if app.showsWelcome {
-                    WelcomeView()
-                } else if gridVisible && app.panes.isEmpty {
-                    EmptyState()
-                }
-                if app.showStation, let monitor = app.monitor { StationView(monitor: monitor) }
-                if app.mode == .orchestrator { OrchestratorModeView() }
-            }
-            .padding([.horizontal, .bottom], Palette.gap)
+            TabContent()
+                .padding([.horizontal, .bottom], Palette.gap)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: app.selectedTabID)
         }
         .background(Palette.window)
         .modifier(FolderDrop())
@@ -44,14 +33,40 @@ struct ContentView: View {
         .animation(.easeOut(duration: 0.18), value: app.toast)
         .background(WindowAccessor { app.attach(window: $0) })
         .ignoresSafeArea()
-        .onChange(of: app.mode) { _, mode in
-            // A hidden terminal must not keep eating keystrokes.
-            if mode != .panes {
-                if let win = app.window, app.panes.contains(where: { $0.terminal === win.firstResponder }) {
-                    win.makeFirstResponder(nil)
-                }
-            } else if let id = app.focusedID {
-                app.focus(id)
+    }
+}
+
+/// What the selected tab shows. Tabs with terminals (the pane grid, agent tabs) stay in
+/// the hierarchy when hidden, so their terminals keep running, sized, with scrollback.
+/// The rest hold no terminals and are built while they show.
+struct TabContent: View {
+    @EnvironmentObject private var app: AppState
+
+    var body: some View {
+        let selected = app.selectedTab
+        ZStack {
+            if app.project != nil {
+                let on = app.mode == .panes
+                PaneGrid()
+                    .opacity(on ? 1 : 0)
+                    .allowsHitTesting(on)
+                if on && app.panes.isEmpty { EmptyState() }
+            }
+            ForEach(app.tabs.filter(\.isAgent)) { tab in
+                let on = tab.id == app.selectedTabID
+                AgentTabView(tab: tab, selected: on)
+                    .opacity(on ? 1 : 0)
+                    .allowsHitTesting(on)
+            }
+            switch selected?.kind {
+            case .welcome?: WelcomeView().transition(.opacity)
+            case .station?:
+                if let monitor = app.monitor { StationView(monitor: monitor).transition(.opacity) }
+            case .orchestrator?: OrchestratorModeView().transition(.opacity)
+            case .activity?: ActivityTab().transition(.opacity)
+            case .dev(.orchestratorDemo)?: OrchestratorDemoTab()
+            case .dev(.mascotGallery)?: MascotGalleryView()
+            default: EmptyView()
             }
         }
     }
