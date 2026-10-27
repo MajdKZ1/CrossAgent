@@ -434,7 +434,11 @@ final class SessionFeed: ObservableObject {
     func apply(_ b: FeedBatch) {
         if !b.items.isEmpty {
             var all = items
+            let tail = all.last?.at
             all.append(contentsOf: b.items)
+            // The PC follower sends each file's lines as they come, so a subagent's lines
+            // can land after later main lines. Put them back in time order.
+            if let tail, b.items.contains(where: { $0.at < tail }) { FeedDecoder.sortItems(&all) }
             if all.count > Self.maxItems { all.removeFirst(all.count - Self.maxItems) }
             items = all
             reducer.apply(b.items)

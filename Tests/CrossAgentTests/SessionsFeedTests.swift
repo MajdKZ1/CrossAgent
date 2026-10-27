@@ -107,6 +107,18 @@ final class SessionsFeedTests: XCTestCase {
         if p.isRunning { p.terminate() }
     }
 
+    /// Subagent lines from the PC can arrive after later main lines; the feed keeps time order.
+    func testLateLinesGoBackInTimeOrder() {
+        let feed = SessionFeed.feed(host: "pc", sessionId: "order-test")
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        func item(_ id: String, _ dt: Double) -> TranscriptItem {
+            TranscriptItem(id: id, kind: .assistant, text: id, at: t0.addingTimeInterval(dt))
+        }
+        feed.apply(FeedBatch(items: [item("main-1", 0), item("summary", 30)]))
+        feed.apply(FeedBatch(items: [item("sub-1", 10), item("sub-2", 20)]))
+        XCTAssertEqual(feed.items.map(\.id), ["main-1", "sub-1", "sub-2", "summary"])
+    }
+
     func testSharedFeedPerSession() {
         let a = SessionFeed.feed(host: "mac", sessionId: "shared-test")
         let b = SessionFeed.feed(host: "mac", sessionId: "shared-test")
