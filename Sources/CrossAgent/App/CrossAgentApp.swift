@@ -149,6 +149,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         app.monitor?.stop()
         app.sync.stop()
+        // Synchronous, so no ssh sampler is left running on the PC after quit.
+        ActivityMonitor.shared.shutdown()
         app.saveLayout()
         app.tearDownOrchestrator()
         app.closeParkedWorkspaces()
