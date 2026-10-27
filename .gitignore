@@ -12,3 +12,7 @@ xcuserdata/
 system-map.md
 hosts.json
 __pycache__/
+
+# raw screen recordings, never committed
+*.mov
+*.mp4
