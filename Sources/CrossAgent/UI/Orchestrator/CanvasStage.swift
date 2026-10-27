@@ -57,6 +57,7 @@ final class CanvasStage: NSView, CardEvents {
     private var timer: Timer?
     private var visible = true
     private var renderPending = false
+    private var catchUpPending = false
     private var observer: NSObjectProtocol?
 
     private var lastNodes: [String: AgentNode] = [:]
@@ -129,10 +130,20 @@ final class CanvasStage: NSView, CardEvents {
     }
 
     private func updateVisibility() {
-        let v = ignoreOcclusion || (window?.occlusionState.contains(.visible) ?? false)
+        applyVisibility(ignoreOcclusion || (window?.occlusionState.contains(.visible) ?? false))
+    }
+
+    /// The window was covered or uncovered. Internal so the demo's regression can
+    /// cover it on purpose.
+    func applyVisibility(_ v: Bool) {
         guard v != visible else { return }
         visible = v
-        if v { scene.wake() } else { pauseFrames() }
+        if v {
+            scene.wake()
+        } else {
+            pauseFrames()
+            catchUp()
+        }
     }
 
     override func layout() {
@@ -163,7 +174,10 @@ final class CanvasStage: NSView, CardEvents {
     // MARK: - Frames
 
     private func startFrames() {
-        guard visible else { return }
+        guard visible else {
+            catchUp()
+            return
+        }
         if ignoreOcclusion {
             guard timer == nil else { return }
             fpsStart = CACurrentMediaTime()
@@ -196,6 +210,21 @@ final class CanvasStage: NSView, CardEvents {
         if !busy {
             pauseFrames()
             publishPositions()
+        }
+    }
+
+    /// No frames while the window is covered, so land everything in its final place
+    /// now. Coalesced, since every event while covered asks for frames.
+    private func catchUp() {
+        guard !catchUpPending else { return }
+        catchUpPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.catchUpPending = false
+            guard !self.visible else { return }
+            self.scene.finishNow()
+            self.render(step: false)
+            self.publishPositions()
         }
     }
 

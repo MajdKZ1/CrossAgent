@@ -347,6 +347,26 @@ final class OrchestratorScene {
         return SceneFrame(camera: camera, nodes: visuals, busy: layoutMoving || animating || dragging != nil)
     }
 
+    /// Jumps every animation to its end and lets the layout come to rest, for when no
+    /// frames can run (window covered or hidden). A card left half way into its
+    /// entrance would sit invisible on the orchestrator and take no clicks.
+    func finishNow() {
+        for (id, item) in items {
+            if item.leave != nil {
+                items[id] = nil
+            } else {
+                items[id]?.bornAt = nil
+                items[id]?.fade = nil
+            }
+        }
+        if let anim = cameraAnim {
+            camera = anim.to
+            cameraAnim = nil
+        }
+        for _ in 0..<900 where layout.step(1.0 / 60) {}
+        lastTick = nil
+    }
+
     // MARK: - Interaction
 
     /// Topmost node whose card contains `p` (canvas coordinates).
