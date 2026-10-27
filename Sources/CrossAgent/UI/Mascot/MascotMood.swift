@@ -1,14 +1,21 @@
 import Foundation
 
-/// What Patch is doing right now, worked out from the agent graph.
+/// One busy agent floating around the mascot as a small orb in its host colour.
+struct MascotOrb: Equatable, Hashable {
+    /// Node id, handed to `onOpenAgent` when the orb is clicked.
+    var id: String
+    var host: String
+}
+
+/// What Puff is doing right now, worked out from the agent graph.
 enum MascotMood: Equatable, Hashable {
     case idle
     case thinking
     case working
-    /// Exactly one subagent or worker busy. `orb` is its host id.
-    case bobbing(orb: String)
-    /// Two or more busy. One orb per agent (host ids, oldest first, at most 5).
-    case juggling(orbs: [String])
+    /// Exactly one subagent or worker busy.
+    case bobbing(orb: MascotOrb)
+    /// Two or more busy. One orb per agent, oldest first, at most 5.
+    case juggling(orbs: [MascotOrb])
     case needsInput
     case done
     case error
@@ -28,8 +35,9 @@ enum MascotMood: Equatable, Hashable {
         if let t = lastFinish(all), now >= t, now.timeIntervalSince(t) < doneFor { return .done }
 
         let active = others.filter(\.isBusy).sorted { $0.startedAt < $1.startedAt }
-        if active.count >= 2 { return .juggling(orbs: active.prefix(maxOrbs).map(\.hostId)) }
-        if let one = active.first { return .bobbing(orb: one.hostId) }
+        let orbs = active.prefix(maxOrbs).map { MascotOrb(id: $0.id, host: $0.hostId) }
+        if orbs.count >= 2 { return .juggling(orbs: orbs) }
+        if let one = orbs.first { return .bobbing(orb: one) }
 
         switch orchestrator?.state {
         case .working: return .working
@@ -42,6 +50,14 @@ enum MascotMood: Equatable, Hashable {
 
     @MainActor static func from(_ graph: AgentGraph, now: Date) -> MascotMood {
         from(orchestrator: graph.orchestrator, others: graph.others, now: now)
+    }
+
+    var orbs: [MascotOrb] {
+        switch self {
+        case .bobbing(let o): [o]
+        case .juggling(let o): o
+        default: []
+        }
     }
 
     /// When the latest node finished. Start of the done celebration.
