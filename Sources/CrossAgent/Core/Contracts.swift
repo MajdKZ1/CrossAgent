@@ -86,7 +86,23 @@ struct AgentEvent: Codable, Equatable {
     var err: String?              // failure text
     var tmux: String?             // worker tmux session
     var rc: Int?                  // worker exit code
+    var turn: Int?                // remote worker: 1 for the brief, 2+ for follow-ups
+    var csid: String?             // remote worker: its headless Claude session id
+    var path: String?             // remote worker: brief.md (RemoteStart) or result.md (RemoteStop), absolute on `host`
+    var req: String?              // permission request id (PermissionAsk / PermissionAnswer)
 }
+
+// Remote worker events, written on the machine the worker runs on by `ca remote`
+// (RemoteStart/Stop), its stream formatter (RemoteActivity) and its permission tool
+// (PermissionAsk/Answer). All carry role "remote", node = the worker's role, tmux = its
+// session ca-<slug>-<host>-<role>, sid = the same session (it names the event file).
+//   RemoteStart       turn, path (brief.md), cwd, sum (goal), csid on follow-ups
+//   RemoteActivity    tool (absent for plain text), sum
+//   RemoteStop        turn, rc, csid, path (result.md), sum (first line of the summary)
+//   PermissionAsk     req, tool, sum ("Needs permission: Running x"), prompt (detail)
+//   PermissionAnswer  req, msg ("allow", "deny" or "timeout")
+// The app answers a PermissionAsk by writing "allow" or "deny" to
+// ~/.crossagent/approvals/<req>.answer on that host (same as `ca remote answer`).
 
 // MARK: - Agent graph
 
@@ -128,6 +144,30 @@ struct AgentNode: Identifiable, Equatable, Codable {
     var flowAt: Date?
     /// While `needsInput`: the state it interrupted (a pending `ca wait`), restored once answered.
     var resumeState: AgentState? = nil
+    /// Set when this node is (or proxies) a remote worker started with `ca remote`.
+    var remote: RemoteInfo? = nil
+}
+
+/// A headless Claude Code worker on another machine. The Mac side `pc-worker` subagent
+/// and the PC side worker are one node: the subagent's node carries this once its
+/// `ca remote` call is seen.
+struct RemoteInfo: Equatable, Codable {
+    var host: String              // where the worker runs
+    var role: String
+    var tmuxSession: String       // ca-<slug>-<host>-<role>, on `host`
+    var claudeSession: String?    // headless session id, the same for every follow-up
+    var turn: Int = 0
+    var briefPath: String?        // absolute on `host`
+    var resultPath: String?       // absolute on `host`
+    var permission: PermissionAsk? = nil
+}
+
+struct PermissionAsk: Equatable, Codable {
+    var id: String                // request id, names ~/.crossagent/approvals/<id>.answer
+    var host: String
+    var text: String              // "Needs permission: Running npm test"
+    var detail: String?
+    var at: Date
 }
 
 /// The live graph for one project. The orchestrator is always `nodes[orchestratorID]`.
