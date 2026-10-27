@@ -84,8 +84,9 @@ It also picks up `ca-*` sessions you didn't open from this window, like ones the
 
 `Cmd+Shift+O` or the `+` menu in the tab strip. Pick a host (the Mac by default) and hit **Start orchestrator**. That opens a real Claude Code session for this project in tmux (`ca-<project>-<host>-orch`), drawn as the box in the middle of a canvas. Give it work, and every agent it brings in shows up around it:
 
-- **Built-in subagents** that Claude Code launches with its Agent tool.
-- **Workers** the crossagent skill starts with `ca run`, on the Mac or the PC. Each has its own terminal.
+- **Built-in subagents** that Claude Code launches with its Agent tool. That's all local work: no extra Claude processes, they live inside the orchestrator's session.
+- **PC workers**: a `pc-worker` subagent that hands a task to a headless Claude Code on the PC (see the crossagent skill below). The Mac side subagent and the PC side worker are one node with a PC badge.
+- **Command workers** the crossagent skill starts with `ca run` (builds, tests, scripts), on the Mac or the PC. Each has its own terminal.
 
 New agents pop out of the orchestrator and drift into place along their cable. Each node shows its name, a Mac or PC badge, and one line of what it's doing ("Running swift build", "Editing PaneView.swift"). You can see at a glance which state each one is in:
 
@@ -104,7 +105,9 @@ Drag empty space (or scroll) to pan, pinch or `Cmd`+scroll to zoom, drag nodes t
 
 Click a node to open it in a tab:
 
-- **The orchestrator and workers** open their live terminal, and you type straight into it.
+- **The orchestrator and command workers** open their live terminal, and you type straight into it.
+- **PC workers** open with three tabs: **Terminal** (its live tmux session on the PC, where the headless worker's feed scrolls by), **Brief** (exactly what the orchestrator told it, follow-ups included) and **Result** (its last report).
+- **Approvals:** when a PC worker wants to run something that needs permission, its node turns amber and an approval card shows up on the card and in a strip at the top of the canvas. **Allow** or **Deny**. No answer in 5 minutes means denied.
 - **Built-in subagents** don't have a terminal of their own. You get their prompt, their recent tool calls and output, and a box to write to them. Whatever you write goes to the orchestrator as `@<name> ...`.
 
 Option-drag from one node onto another (or drag the small handle on a node's edge) to send it some text. It's the relay from Panes, so a selection in the source terminal is filled in for you.
@@ -116,7 +119,7 @@ The canvas is built from Claude Code hooks. When you start the orchestrator, Cro
 - copies one small Python script to `~/.crossagent/bin/crossagent-hook.py` on both machines.
 - adds hooks for that script to the project's `.claude/settings.local.json` (local, not committed). Your own hooks in that file stay as they are. If the PC already has the project folder, its copy gets them too.
 
-The hooks run async, so Claude never waits on them. Each call adds one short JSON line (time, session, event, agent, tool, a one-line summary) to `~/.crossagent/events/<session>.jsonl` on that machine. Workers started with `ca run` add their own start and finish lines. The app follows the Mac files directly and the PC files through one ssh connection over the existing control master. Event files are trimmed as they grow and cleared after 3 days. Only sessions CrossAgent tagged (the orchestrator, its subagents and `ca run` workers) show up. Any other Claude session in the same folder doesn't.
+The hooks run async, so Claude never waits on them. Each call adds one short JSON line (time, session, event, agent, tool, a one-line summary) to `~/.crossagent/events/<session>.jsonl` on that machine. Workers started with `ca run` add their own start and finish lines, and PC workers add their start, activity, approval and finish lines on the PC. The app follows the Mac files directly and the PC files through one ssh connection over the existing control master. Event files are trimmed as they grow and cleared after 3 days. Only sessions CrossAgent tagged (the orchestrator, its subagents and `ca run` workers) show up. Any other Claude session in the same folder doesn't.
 
 To take the hooks out, use **Orchestrator > Turn Off Orchestrator for This Project**. It removes only CrossAgent's entries, on both machines, and leaves the rest of the file alone.
 
@@ -223,29 +226,42 @@ skills/crossagent/install.sh          # copies to ~/.claude/skills/crossagent on
 skills/crossagent/install.sh --mac    # or just one side (--pc)
 ```
 
-Then inside any project, ask Claude Code to use it ("use crossagent to run the tests on my pc and build locally", or just "/crossagent"). It will:
+Then inside any project, ask Claude Code to use it ("use crossagent to run the tests on my pc and build locally", or just "/crossagent"). `ca init` sets the project up without starting anything:
 
-- drop a `CROSSAGENT.md` in the project and point the project's `CLAUDE.md` at it. That file holds the split rules: heavy builds, test suites, long runs, Linux and docker work go to the PC, while UI, Xcode, macOS stuff and quick edits stay on the Mac. Independent pieces run on both at once.
-- map your machines into `~/.config/crossagent/system-map.md` (OS, CPU, RAM, disk, tools, paths, how to reach each, where the project lives on each), keep it in sync on both machines, and put a copy in `.crossagent/` (gitignored) in the project.
-- keep the project mirrored to the PC (live with Mutagen, see Crossover Portal below) and run each piece in a tmux session named `ca-<project>-<host>-<task>`. They show up in the station on their own, and as worker nodes in Orchestrator mode.
+- drops a `CROSSAGENT.md` in the project and points the project's `CLAUDE.md` at it. That's the playbook for the orchestrator (below).
+- puts the `pc-worker` and `mac-worker` subagent definitions in `~/.claude/agents/` and keeps agent teams in-process for the project.
+- maps your machines into `~/.config/crossagent/system-map.md` (OS, CPU, RAM, disk, tools, paths, how to reach each) on both machines, with a copy in `.crossagent/` (gitignored).
+- opens the Crossover Portal so the project is mirrored to the PC (see below).
 
-By default it splits across both machines. Name a machine to keep it on one:
+### How orchestration works
 
-- Mac only: "local", "mac", "this mac", "on my mac"
-- PC only: "pc", "ssh", "overseas", "my pc", "on my pc"
+The Claude Code session you talk to is the orchestrator. It splits the work and stays in charge.
+
+- **Work on the Mac** goes to Claude Code's own subagents (the Agent tool, background agents, your `.claude/agents`). They show up in Claude's agent list as usual and as nodes on the canvas. No new `claude` processes or tmux sessions.
+- **Work on the PC** goes to the `pc-worker` subagent. To the orchestrator it's a normal subagent (`pc-worker  Running tests on PC  3m 12s`). Inside, it's a thin proxy: it runs `ca remote pc <role>`, which flushes the Portal, starts one headless Claude Code (`claude -p --output-format stream-json`) on the PC in tmux session `ca-<project>-pc-<role>` in the synced folder, waits, flushes again and returns the worker's report word for word.
+- **The brief:** the PC worker starts with zero context, so the orchestrator writes a full brief from a template (Goal, Context, Files it owns and must not touch, Task, Constraints, Verification). `ca remote` refuses a brief with a missing section and adds a fixed header: you're a subagent, on this machine, in this folder, no git, no scope creep, no questions, report in this shape.
+- **Follow-ups** go to the same worker and resume the same conversation (`claude -p --resume <id>`), so it remembers what it did.
+- **Background:** the orchestrator can run pc-worker in the background and keep working locally.
+- **Checks:** the orchestrator reviews each report, reads the diff and reruns key checks itself before accepting anything.
+- **Permissions:** the PC worker runs with `acceptEdits`. Anything else goes through a small MCP tool (`--permission-prompt-tool`) to an approval card in CrossAgent, or `ca remote answer pc <id> allow|deny`. Never bypass mode.
+- **Git** only runs on the Mac.
+
+Machine nicknames: "local", "mac", "this mac", "on my mac" keep it on the Mac; "pc", "ssh", "overseas", "my pc", "on my pc" keep it on the PC. Say nothing and it uses both: heavy builds, tests and long runs on the PC, UI and macOS work on the Mac.
 
 Under the hood it's one script you can use yourself:
 
 ```sh
 ~/.claude/skills/crossagent/scripts/ca init
-~/.claude/skills/crossagent/scripts/ca run pc tests -- make test
-~/.claude/skills/crossagent/scripts/ca run mac build -- make build
-~/.claude/skills/crossagent/scripts/ca run pc refactor --claude "split utils.py into modules"
-~/.claude/skills/crossagent/scripts/ca wait pc tests mac build
+~/.claude/skills/crossagent/scripts/ca remote template > .crossagent/briefs/tests.md   # fill it in
+~/.claude/skills/crossagent/scripts/ca remote pc tests --brief .crossagent/briefs/tests.md
+~/.claude/skills/crossagent/scripts/ca remote pc tests --continue --brief .crossagent/briefs/tests-2.md
+~/.claude/skills/crossagent/scripts/ca remote status pc
+~/.claude/skills/crossagent/scripts/ca run pc bench -- make bench                       # plain commands
+~/.claude/skills/crossagent/scripts/ca wait pc bench
 ~/.claude/skills/crossagent/scripts/ca status
 ```
 
-`ca help` lists the rest.
+`ca help` lists the rest. The PC can't reach the Mac, so an orchestrator running on the PC works PC only (`mac-worker` exists for the day it can).
 
 ## The claude wrapper
 
