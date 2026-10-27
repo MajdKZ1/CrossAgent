@@ -149,13 +149,7 @@ extension AppState {
             flash("Unknown host \(ask.host)")
             return
         }
-        // Written to a temp name and moved, so the waiting tool never reads half a file.
-        let word = allow ? "allow" : "deny"
-        let dir = "\"$HOME/.crossagent/approvals\""
-        // Only while the request is still waiting, so a late answer leaves no file behind.
-        let script = "test -f \(dir)/\(ask.id).json || { echo 'that request already timed out' >&2; exit 1; }"
-            + " && printf \(word) > \(dir)/\(ask.id).answer.tmp"
-            + " && mv -f \(dir)/\(ask.id).answer.tmp \(dir)/\(ask.id).answer"
+        let script = Self.answerScript(id: ask.id, allow: allow)
         o.permissionSends[ask.id] = .sending
         // Answers for prompts that are gone by now.
         let live = Set(o.shown.nodes.values.compactMap { $0.remote?.permission?.id })
@@ -171,5 +165,25 @@ extension AppState {
                 self.flash("Couldn't send the answer" + (err.isEmpty ? "" : ": " + String(err.prefix(80))))
             }
         }
+    }
+
+    /// Shell script that answers request `id` on a host. Only while the request is still
+    /// waiting, so a late answer leaves no file behind. ~/.crossagent and its approvals
+    /// dir must be real dirs owned by this user; both end up 0700. The answer goes to a
+    /// 0600 mktemp file that is renamed into place, so the waiting tool never reads half
+    /// a file and a symlink planted at the answer's name is never followed.
+    nonisolated static func answerScript(id: String, allow: Bool) -> String {
+        precondition(validPermissionID(id))
+        let word = allow ? "allow" : "deny"
+        return "umask 077; r=\"$HOME/.crossagent\"; d=\"$r/approvals\"; mkdir -p \"$d\" || exit 1"
+            + "; for x in \"$r\" \"$d\"; do if [ -L \"$x\" ] || [ ! -d \"$x\" ] || [ ! -O \"$x\" ];"
+            + " then echo \"$x is not a private dir\" >&2; exit 1; fi; done"
+            + "; chmod 700 \"$r\" \"$d\" || exit 1"
+            + "; [ -f \"$d/\(id).json\" ] || { echo 'that request already timed out' >&2; exit 1; }"
+            + "; a=\"$d/\(id).answer\"; t=$(mktemp \"$d/.\(id).XXXXXX\") || exit 1"
+            + "; printf \(word) > \"$t\" || { rm -f \"$t\"; exit 1; }"
+            + "; if [ -L \"$a\" ]; then rm -f \"$a\"; fi"
+            + "; if [ -d \"$a\" ]; then rm -f \"$t\"; echo \"$a is a dir\" >&2; exit 1; fi"
+            + "; mv -f \"$t\" \"$a\""
     }
 }
