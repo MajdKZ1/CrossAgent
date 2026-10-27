@@ -129,7 +129,8 @@ def make_event(d):
             summary = "Needs permission: " + summary
         put("sum", clip(summary, 160))
         if tool in ("Agent", "Task"):
-            put("name", clip(inp.get("name") or inp.get("subagent_type"), 60))
+            # Same order as the transcript parser: an unnamed call shows its description.
+            put("name", clip(inp.get("name") or inp.get("description") or inp.get("subagent_type"), 60))
             put("prompt", clip(inp.get("prompt"), 600))
             resp = d.get("tool_response")
             if isinstance(resp, dict):
