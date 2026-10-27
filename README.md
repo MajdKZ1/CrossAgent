@@ -103,6 +103,42 @@ Under the hood it's one script you can use yourself:
 
 `ca help` lists the rest.
 
+## Sync
+
+When the skill splits work across both machines, it mirrors the project live with
+[Mutagen](https://mutagen.io) over your existing `ssh pc`. Same path on both sides
+(`~/Projects/app` on the Mac is `~/Projects/app` on the PC), two-way, so a file one machine
+writes shows up on the other a second or two later (over a slow tunnel, more like 1 to 2 s).
+
+Install it once on the Mac. It copies its own small agent to the PC the first time it connects.
+
+```sh
+brew install mutagen-io/mutagen/mutagen
+mutagen daemon register     # start the daemon at login
+```
+
+The safety rules:
+
+- Git stays on the Mac. `.git` never syncs and the PC never commits or pushes in a synced folder.
+- Secrets stay put: `.env`, `.env.*`, `*.pem`, `*.key` and `id_*` don't sync unless a project opts in
+  with `sync_allow=.env.shared` in its `.crossagent/project`.
+- Build output and dependencies (`node_modules`, `.build`, `build`, `target`, `dist`, `.venv` and
+  friends) are per machine. Each side builds its own.
+- Conflicts are never auto resolved. Mutagen runs in `two-way-safe` mode, so if both sides change
+  the same file, nothing gets overwritten. `ca` stops handing off work and tells you.
+
+```sh
+ca sync start [path]    # start (or resume) live sync for a project, safe to run twice
+ca sync status          # one line per project: watching, syncing, conflicts or errors
+ca sync flush           # sync right now and wait (ca run and ca wait do this for you)
+ca sync conflicts       # what clashed, with size, time and a short diff from both sides
+ca sync stop [path]     # stop syncing, files stay on both machines
+```
+
+`ca init` starts sync for you unless you named one machine ("on my mac", "on my pc"). The top
+bar shows a small Sync dot while any `ca-*` session is running: green is in sync, amber is
+syncing or paused, red is a conflict or error. Click it for the details.
+
 ## How it works
 
 - SwiftUI app, one window. Terminals are [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) `LocalProcessTerminalView`s, each running a real PTY.
