@@ -1175,7 +1175,7 @@ r_status() {
     elif r_alive "$d"; then st="idle after turn $n, exit $(cat "$d/turn-$n.exit" 2>/dev/null || echo ?)"
     else st="stopped after turn $n, exit $(cat "$d/turn-$n.exit" 2>/dev/null || echo ?)"; fi
     ids="$(pending "$(sname "$HERE" "$role")" | cut -f1 | tr '\n' ' ' | sed 's/ $//')"
-    printf '%-4s %-20s %-30s session %s%s\n' "$HERE" "$role" "$st" "$(cat "$d/session" 2>/dev/null || echo -)" \
+    printf '%-4s %-20s %-32s  session %s%s\n' "$HERE" "$role" "$st" "$(cat "$d/session" 2>/dev/null || echo -)" \
       "${ids:+  approvals: $ids}"
   done
   [ -n "$any" ] || echo "no remote workers for $NAME on the $HERE${only:+ named $only}"
