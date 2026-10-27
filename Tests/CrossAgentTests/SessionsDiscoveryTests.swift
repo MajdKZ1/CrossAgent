@@ -62,6 +62,16 @@ final class SessionsDiscoveryTests: XCTestCase {
         XCTAssertEqual(s.recent(days: 7, excluding: [], now: Date().addingTimeInterval(8 * 86400)).count, 0)
     }
 
+    /// Claude Code parks old copies as `<id>.orphaned-<ts>-<hex>.jsonl`; they aren't sessions.
+    func testOrphanedTranscriptsAreSkipped() throws {
+        let fg = SessionsFixtures.foreground
+        let dir = root.appendingPathComponent("projects/-private-tmp-ca-sess-probe")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("{}\n".utf8).write(to: dir.appendingPathComponent("\(fg.sessionId).orphaned-1792659203960-26ba07f0.jsonl"))
+        let ids = scanner().recent(days: 7, excluding: []).map(\.sid)
+        XCTAssertFalse(ids.contains { $0.contains("orphaned") }, "\(ids)")
+    }
+
     func testPidReuseIsNotASession() throws {
         try writeSession(pid: getpid(), SessionsFixtures.background, status: "busy")
         XCTAssertEqual(scanner(lstart: "Tue Oct 27 09:00:00 2026").running().count, 0)

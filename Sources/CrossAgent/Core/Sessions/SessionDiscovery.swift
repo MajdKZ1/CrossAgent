@@ -171,7 +171,7 @@ final class LocalSessionScanner: @unchecked Sendable {
             let dir = projects + "/" + d
             for f in (try? fm.contentsOfDirectory(atPath: dir)) ?? [] where f.hasSuffix(".jsonl") {
                 let sid = String(f.dropLast(6))
-                guard !running.contains(sid) else { continue }
+                guard UUID(uuidString: sid) != nil, !running.contains(sid) else { continue }
                 let path = dir + "/" + f
                 guard let a = try? fm.attributesOfItem(atPath: path), a[.type] as? FileAttributeType == .typeRegular,
                       let m = (a[.modificationDate] as? Date)?.timeIntervalSince1970, m >= cut else { continue }
@@ -373,7 +373,9 @@ final class SessionDiscovery: ObservableObject {
         let ids = Set(newRunning.map(\.sessionId))
         var ended: [ClaudeSession]
         if let rec {
-            ended = rec.map { ClaudeSession.make(hostId: hostId, raw: $0, now: now) }
+            // A transcript with no cwd is a stub with no conversation in it (nothing to
+            // show, nowhere to resume), so it's left out.
+            ended = rec.map { ClaudeSession.make(hostId: hostId, raw: $0, now: now) }.filter { !$0.cwd.isEmpty }
         } else {
             ended = (recent[hostId] ?? []).filter { !ids.contains($0.sessionId) }
         }

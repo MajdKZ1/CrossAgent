@@ -7,6 +7,7 @@ enum SessionScripts {
     /// -1 when the head is final}. Prints one JSON object, see `RemoteScan`.
     static let discovery = #"""
 import json, os, re, sys, time, subprocess
+UUID = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
 root = os.path.expanduser(sys.argv[1]); want_recent = sys.argv[2] == '1'; days = float(sys.argv[3])
 known = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
 MAXHEAD = 524288
@@ -106,7 +107,7 @@ if want_recent:
         for f in files:
             if not f.name.endswith('.jsonl') or not f.is_file(): continue
             sid = f.name[:-6]
-            if sid in seen: continue
+            if sid in seen or not UUID.match(sid): continue
             try:
                 if f.stat().st_mtime < cut: continue
             except OSError: continue
