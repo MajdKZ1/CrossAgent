@@ -4,7 +4,9 @@
 
 One window, every workstation. CrossAgent is a native macOS app that puts Claude Code (or a plain shell) on your Mac and on your Linux box side by side, in one grid of terminal panes. Remote panes go over plain `ssh`, and every pane lives in tmux on its own host, so closing the window never kills your work. Open it again and everything reattaches.
 
-It also comes with a viewing station that shows every session on both machines at once, and a Claude Code skill that splits work across the two machines for you.
+Everything starts from a project folder. Around that you get three modes: **Panes** for your terminals, **Station** to see every session on both machines at once, and **Orchestrator**, a live graph of Claude agents working on the project, with a small pixel mascot named Patch keeping an eye on them. A Claude Code skill splits work across the two machines for you, and live sync keeps the project the same on both.
+
+<p align="center"><img src="docs/images/orchestrator.png" width="760" alt="Orchestrator mode: the orchestrator in the middle, agents on the Mac and the PC around it"></p>
 
 ## What you need
 
@@ -32,10 +34,20 @@ On first launch it writes `~/.config/crossagent/hosts.json`:
 
 `target` is anything `ssh` understands, usually a `Host` alias from `~/.ssh/config`. Add more hosts if you have them.
 
-## Using it
+## Projects
+
+CrossAgent opens on a welcome screen: hit **Open a project folder**, pick from your recent projects, or drop a folder on the window. `Cmd+O` and File > Open Recent work from anywhere, and the project name in the top bar is a switcher.
+
+Once a project is open:
+
+- The top bar shows the project and its folder (click to reveal it in Finder). With sync on, it also shows where the project lives on the PC.
+- New panes start in the project folder on both machines: the Mac path locally, the synced path on the PC. If the folder isn't on the PC yet, CrossAgent offers to start sync or to open in your PC home folder instead.
+- Panes, mode, the orchestrator and node positions are saved per project. Switch projects and the other one's tmux sessions keep running, and switching back reattaches them. The last project reopens when you launch the app.
+
+## Panes
 
 - Hit `Cmd+T`, pick a host and Claude or Shell, press Enter. The pane opens right away and goes live once the host answers.
-- Each pane runs in a tmux session named `ca-<host>-<n>` on that host. Close a pane and the session keeps running. Kill it for real with Option+click on the close button, or right click the header and pick Kill Session.
+- Each pane runs in a tmux session named `ca-<project>-<host>-<n>` on that host. Close a pane and the session keeps running. Kill it for real with Option+click on the close button, or right click the header and pick Kill Session.
 - Quit the app and relaunch: every pane comes back attached to the same tmux session, history and all.
 - If a session ends, the pane says so and gives you a Reconnect button.
 - Double click a pane header (or `Cmd+Enter`) to maximize it.
@@ -45,20 +57,67 @@ On first launch it writes `~/.config/crossagent/hosts.json`:
 - **Broadcast** (`Cmd+Shift+B`): what you type in the focused pane goes to every live pane. A thin accent bar at the top tells you it's on.
 - **Relay** (`Cmd+Shift+R`): select text in one pane and send it to another, say a stack trace from a Mac pane into Claude on the PC. It's pasted without hitting Enter, so you can add to it first.
 
-### Viewing station
+## Station
 
-`Cmd+Shift+V` or the Station button in the top bar. It's a wall of every `ca-*` tmux session on every host, live:
+`Cmd+Shift+V` or Station in the top bar's mode switch. It's a wall of every `ca-*` tmux session on every host, live:
 
 - a small live preview of each session's screen
 - host, session name, and how long it's been running
 - status: running, idle, needs input (Claude is waiting on a prompt), or exited
 
-It also picks up `ca-*` sessions you didn't open from this window, like ones the skill started or ones you made by hand. Click any tile (or arrow to it and press Enter) to jump in full size. Esc goes back. Claude Code processes running outside tmux show in a strip at the bottom so you know they exist, but you can't attach to them.
+It also picks up `ca-*` sessions you didn't open from this window, like ones the skill started, ones from other projects, older `ca-<host>-<n>` sessions, or ones you made by hand. Click any tile (or arrow to it and press Enter) to jump in full size. Esc goes back. Claude Code processes running outside tmux show in a strip at the bottom so you know they exist, but you can't attach to them.
+
+## Orchestrator
+
+`Cmd+Shift+O` or Orchestrator in the mode switch. Pick a host (the Mac by default) and hit **Start orchestrator**. That opens a real Claude Code session for this project in tmux (`ca-<project>-<host>-orch`), drawn as the box in the middle of a canvas. Give it work, and every agent it brings in shows up around it:
+
+- **Built-in subagents** that Claude Code launches with its Agent tool.
+- **Workers** the crossagent skill starts with `ca run`, on the Mac or the PC. Each has its own terminal.
+
+New agents pop out of the orchestrator and drift into place along their cable. Each node shows its name, a Mac or PC badge, and one line of what it's doing ("Running swift build", "Editing PaneView.swift"). You can see at a glance which state each one is in:
+
+| State | What you see |
+| --- | --- |
+| thinking | soft pulsing outline |
+| working | the current tool or command |
+| needs input | amber, with an Answer button |
+| sending or receiving | particles running along the cable, which lights up in the host colour |
+| waiting | "Waiting on <names>" |
+| idle | a floating zzz |
+| done | a check mark, then it fades back into the orchestrator. The latest ones stay small and faded until you hit Clear finished |
+| error | red edge, hover for the error line |
+
+Drag empty space (or scroll) to pan, pinch or `Cmd`+scroll to zoom, drag nodes to arrange them, and double click empty space to recenter. Positions are saved per project.
+
+Click a node to open it:
+
+- **The orchestrator and workers** open their live terminal, and you type straight into it.
+- **Built-in subagents** don't have a terminal of their own. You get their prompt, their recent tool calls and output, and a box to write to them. Whatever you write goes to the orchestrator as `@<name> ...`.
+
+Option-drag from one node onto another (or drag the small handle on a node's edge) to send it some text. It's the relay from Panes, so a selection in the source terminal is filled in for you.
+
+### How the hooks work
+
+The canvas is built from Claude Code hooks. When you start the orchestrator, CrossAgent:
+
+- copies one small Python script to `~/.crossagent/bin/crossagent-hook.py` on both machines.
+- adds hooks for that script to the project's `.claude/settings.local.json` (local, not committed). Your own hooks in that file stay as they are. If the PC already has the project folder, its copy gets them too.
+
+The hooks run async, so Claude never waits on them. Each call adds one short JSON line (time, session, event, agent, tool, a one-line summary) to `~/.crossagent/events/<session>.jsonl` on that machine. Workers started with `ca run` add their own start and finish lines. The app follows the Mac files directly and the PC files through one ssh connection over the existing control master. Event files are trimmed as they grow and cleared after 3 days. Only sessions CrossAgent tagged (the orchestrator, its subagents and `ca run` workers) show up. Any other Claude session in the same folder doesn't.
+
+To take the hooks out, use **Orchestrator > Turn Off Orchestrator for This Project**. It removes only CrossAgent's entries, on both machines, and leaves the rest of the file alone.
+
+### Patch
+
+<p align="center"><img src="docs/images/patch.png" width="560" alt="Patch, the CrossAgent mascot, in each of its states"></p>
+
+Patch sits on top of the orchestrator and reacts to the whole graph. It breathes and blinks when things are quiet, looks up with little dots while the orchestrator thinks, types while it works, and bobs along with one agent. With two or more agents running it juggles one orb per agent, coloured by host. It hops and waves with a "!" when something needs your answer, celebrates when an agent finishes, gets dizzy on an error, and falls asleep after a minute of nothing. It's drawn in code from pixel grids, and its frames loop on Core Animation, so it costs next to nothing. Hide it with **Orchestrator > Show Mascot**.
 
 ## Shortcuts
 
 | Keys | What it does |
 | --- | --- |
+| `Cmd+O` | Open a project |
 | `Cmd+T` | New pane (last used host preselected, Enter to open) |
 | `Cmd+W` | Close focused pane (the tmux session keeps running) |
 | `Cmd+Shift+[` / `Cmd+Shift+]` | Previous / next pane |
@@ -66,7 +125,8 @@ It also picks up `ca-*` sessions you didn't open from this window, like ones the
 | `Cmd+Enter` | Maximize / restore |
 | `Cmd+Shift+B` | Broadcast on / off |
 | `Cmd+Shift+R` | Relay selection to another pane |
-| `Cmd+Shift+V` | Viewing station |
+| `Cmd+Shift+V` | Station (again to go back) |
+| `Cmd+Shift+O` | Orchestrator (again to go back to Panes) |
 
 They all work while a terminal has focus.
 
@@ -83,7 +143,7 @@ Then inside any project, ask Claude Code to use it ("use crossagent to run the t
 
 - drop a `CROSSAGENT.md` in the project and point the project's `CLAUDE.md` at it. That file holds the split rules: heavy builds, test suites, long runs, Linux and docker work go to the PC, while UI, Xcode, macOS stuff and quick edits stay on the Mac. Independent pieces run on both at once.
 - map your machines into `~/.config/crossagent/system-map.md` (OS, CPU, RAM, disk, tools, paths, how to reach each, where the project lives on each), keep it in sync on both machines, and put a copy in `.crossagent/` (gitignored) in the project.
-- sync the project to the PC with rsync (the Mac is the source of truth) and run each piece in a tmux session named `ca-<host>-<task>`. They show up in the viewing station on their own.
+- keep the project synced to the PC (live with Mutagen, see Sync below) and run each piece in a tmux session named `ca-<project>-<host>-<task>`. They show up in the station on their own, and as worker nodes in Orchestrator mode.
 
 By default it splits across both machines. Name a machine to keep it on one:
 
