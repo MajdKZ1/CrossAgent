@@ -5,7 +5,9 @@ import AppKit
 /// Send commands with scripts/automation.sh.
 @MainActor
 final class Automation {
-    static let notification = Notification.Name("dev.crossagent.automation")
+    /// CROSSAGENT_AUTOMATION_ID gives an instance its own channel, so parallel test runs don't collide.
+    static let notification = Notification.Name("dev.crossagent.automation"
+        + (ProcessInfo.processInfo.environment["CROSSAGENT_AUTOMATION_ID"].map { ".\($0)" } ?? ""))
     private let app: AppState
     private var observer: NSObjectProtocol?
 
