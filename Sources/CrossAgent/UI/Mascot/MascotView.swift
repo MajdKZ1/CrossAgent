@@ -91,6 +91,9 @@ final class MascotLayerView: NSView {
         setAccessibilityElement(true)
         setAccessibilityRole(.image)
         setAccessibilityLabel("Puff, the CrossAgent mascot")
+        #if DEBUG
+        MascotDemo.views.add(self)
+        #endif
         observers.append(NotificationCenter.default.addObserver(forName: .crossAgentThemeChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.rig.recolor() }
         })
@@ -176,7 +179,10 @@ final class MascotLayerView: NSView {
         moodTimer = nil
         guard let source else { return }
         let now = Date()
-        let mood = source.mood(at: now)
+        var mood = source.mood(at: now)
+        #if DEBUG
+        if let m = MascotDemo.mood { mood = m }
+        #endif
         if rig.mood != mood {
             rig.set(mood, animated: window != nil)
             gestureTimer?.invalidate()
@@ -189,6 +195,19 @@ final class MascotLayerView: NSView {
             }
             RunLoop.main.add(t, forMode: .common)
             moodTimer = t
+        }
+    }
+
+    /// Brings in a forced mood, or drops it again. See MascotDemo.
+    func refreshMood() { refresh() }
+
+    /// A trick like a click on the body: `name` picks one (spin, squish, jelly,
+    /// peekaboo, ricochet), nil a random one.
+    func playTrick(_ name: String? = nil) {
+        if let t = MascotPlay.Trick.allCases.first(where: { "\($0)" == name }) {
+            rig.play(MascotPlay.Move(tricks: [t], intensity: 1), rng: &rng)
+        } else {
+            rig.play(play.click(at: ProcessInfo.processInfo.systemUptime, using: &rng), rng: &rng)
         }
     }
 
