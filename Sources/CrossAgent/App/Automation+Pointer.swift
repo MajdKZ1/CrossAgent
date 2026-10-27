@@ -7,6 +7,12 @@ import AppKit
 ///     {"cmd":"scroll","x":550,"y":375,"dx":0,"dy":-40,"mods":["cmd"]}
 ///     {"cmd":"magnify","x":550,"y":375,"amount":0.25}
 ///     {"cmd":"dblclick","x":100,"y":100}
+///     {"cmd":"tap","node":"w1"}
+///     {"cmd":"drag","node":"w1","dx":-100,"dy":50}
+///     {"cmd":"hittest","node":"w1","out":"/tmp/hit.txt"}
+///
+/// "node" aims at a canvas node's current center instead of x,y; "dx","dy" move from
+/// there (window coordinates, so dy > 0 is up).
 ///
 /// Optional "window": a window title to target; otherwise the window with the
 /// orchestrator canvas, else the key window.
@@ -20,18 +26,37 @@ extension Automation {
 enum PointerAutomation {
     /// Returns false for commands that are not pointer commands.
     static func handle(_ name: String, _ cmd: [String: Any]) -> Bool {
-        guard ["drag", "scroll", "magnify", "dblclick"].contains(name) else { return false }
+        guard ["drag", "scroll", "magnify", "dblclick", "tap", "hittest"].contains(name) else { return false }
         guard let win = window(cmd["window"] as? String) else { return true }
-        let p = NSPoint(x: number(cmd["x"]), y: number(cmd["y"]))
+        var p = NSPoint(x: number(cmd["x"]), y: number(cmd["y"]))
+        var to: NSPoint?
+        if let id = cmd["node"] as? String {
+            guard let stage = stage(in: win.contentView), let at = stage.windowPoint(of: id) else { return true }
+            p = at
+            to = NSPoint(x: at.x + number(cmd["dx"]), y: at.y + number(cmd["dy"]))
+        }
         let mods = flags(cmd["mods"] as? [String] ?? [])
         switch name {
         case "drag":
-            let to = NSPoint(x: number(cmd["toX"], p.x), y: number(cmd["toY"], p.y))
-            drag(in: win, from: p, to: to, steps: max(1, Int(number(cmd["steps"], 10))), mods: mods)
+            let end = to ?? NSPoint(x: number(cmd["toX"], p.x), y: number(cmd["toY"], p.y))
+            // "noUp": true leaves the button down, to test recovering from a lost mouseUp.
+            drag(in: win, from: p, to: end, steps: max(1, Int(number(cmd["steps"], 10))), mods: mods,
+                 up: cmd["noUp"] as? Bool != true)
         case "scroll":
             scroll(in: win, at: p, dx: number(cmd["dx"]), dy: number(cmd["dy"]), mods: mods)
         case "magnify":
             magnify(in: win, at: p, amount: number(cmd["amount"]))
+        case "hittest":
+            // Which view a click at the point would reach, innermost first.
+            if let out = cmd["out"] as? String, let content = win.contentView {
+                var v = content.hitTest(content.convert(p, from: nil))
+                var chain: [String] = []
+                while let view = v, chain.count < 5 { chain.append("\(type(of: view))"); v = view.superview }
+                try? chain.joined(separator: " < ").write(toFile: out, atomically: true, encoding: .utf8)
+            }
+        case "tap":
+            post(.leftMouseDown, in: win, at: p, mods: mods, clicks: 1)
+            post(.leftMouseUp, in: win, at: p, mods: mods, clicks: 1)
         case "dblclick":
             for n in 1...2 {
                 post(.leftMouseDown, in: win, at: p, mods: mods, clicks: n)
@@ -47,7 +72,8 @@ enum PointerAutomation {
 
     /// Events go out about 60 per second like a real mouse; SwiftUI gestures only see
     /// the last of a burst posted all at once.
-    static func drag(in win: NSWindow, from a: NSPoint, to b: NSPoint, steps: Int, mods: NSEvent.ModifierFlags) {
+    static func drag(in win: NSWindow, from a: NSPoint, to b: NSPoint, steps: Int, mods: NSEvent.ModifierFlags,
+                     up: Bool = true) {
         let interval = 1.0 / 60
         post(.leftMouseDown, in: win, at: a, mods: mods, clicks: 1)
         for i in 1...steps {
@@ -57,6 +83,7 @@ enum PointerAutomation {
                 post(.leftMouseDragged, in: win, at: p, mods: mods, clicks: 1)
             }
         }
+        guard up else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + interval * Double(steps + 1)) {
             post(.leftMouseUp, in: win, at: b, mods: mods, clicks: 1)
         }
