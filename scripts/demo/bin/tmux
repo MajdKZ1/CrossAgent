@@ -1,0 +1,9 @@
+#!/bin/sh
+# Demo only: every tmux call goes to the ca-demo server, started with the demo config.
+# Never the default server, so no real session is ever listed or touched.
+conf="$(cd "$(dirname "$0")/.." && pwd)/tmux.conf"
+for t in /opt/homebrew/bin/tmux /usr/local/bin/tmux /usr/bin/tmux; do
+  [ -x "$t" ] && exec "$t" -L ca-demo -f "$conf" "$@"
+done
+echo "tmux: not found" >&2
+exit 127

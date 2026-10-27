@@ -1,0 +1,105 @@
+#!/bin/bash
+# Demo only: a stand-in for Claude Code in demo panes. Looks the part, answers with
+# canned replies, touches nothing. `claude --play` acts out a short session on a loop.
+
+dim=$'\e[2m' bold=$'\e[1m' off=$'\e[0m' orange=$'\e[38;5;173m' green=$'\e[32m' gray=$'\e[90m' red=$'\e[31m'
+W=58
+
+line() { printf '%s' "$1"; printf '─%.0s' $(seq 1 $((W - 2))); printf '%s\n' "$2"; }
+row() { printf '│ %-*s │\n' $((W - 4)) "$1"; }
+
+banner() {
+  printf '%s' "$orange"; line '╭' '╮'
+  printf '│ %s✻%s %-*s%s│\n' "$orange" "$off$bold" $((W - 5)) "Welcome to Claude Code (demo)" "$off$orange"
+  row ""
+  printf '│   %s%-*s%s │\n' "$gray" $((W - 6)) "cwd: ~/Projects/demo" "$off$orange"
+  line '╰' '╯'; printf '%s\n' "$off"
+}
+
+prompt_box() {
+  printf '%s' "$gray"; line '╭' '╮'
+  printf '│%s > %s' "$off" "$1"
+  printf '%*s' $((W - 5 - ${#1})) ''
+  printf '%s│\n' "$gray"
+  line '╰' '╯'
+  printf '  ? for shortcuts%s\n' "$off"
+}
+
+spin() {
+  local word=$1 secs=$2 glyphs=('·' '✢' '✳' '✶' '✻' '✽') i=0 n
+  n=$((secs * 5))
+  while [ $i -lt $n ]; do
+    printf '\r%s%s %s… %s(%ds · esc to interrupt)%s\e[K' "$orange" "${glyphs[i % 6]}" "$word" "$gray" $((i / 5)) "$off"
+    sleep 0.2
+    i=$((i + 1))
+  done
+  printf '\r\e[K'
+}
+
+say() { printf '%s⏺%s %s\n' "$green" "$off" "$1"; }
+tool() { printf '%s⏺%s %s%s%s\n' "$green" "$off" "$bold" "$1" "$off"; sleep 0.5; printf '  %s⎿  %s%s\n' "$gray" "$2" "$off"; sleep 0.6; }
+
+type_out() {
+  local s=$1 i
+  printf '%s> %s' "$gray" "$off"
+  for ((i = 0; i < ${#s}; i++)); do printf '%s' "${s:i:1}"; sleep 0.04; done
+  printf '\n\n'
+}
+
+reply() {
+  case $(( $1 % 3 )) in
+    0)
+      spin Pondering 3
+      tool "Read(src/http/client.ts)" "Read 84 lines"
+      tool "Update(src/http/client.ts)" "Updated with 18 additions and 2 removals"
+      spin Testing 2
+      tool "Bash(npm test -- client)" "${green}12 passed${off}${gray}, 0 failed"
+      say "Added retry with exponential backoff: 3 tries, 200 ms base, jitter."
+      say "Only idempotent requests retry. Tests pass."
+      ;;
+    1)
+      spin Exploring 2
+      tool "Search(\"TODO\", src/)" "Found 4 matches in 3 files"
+      say "Three TODOs are stale, one is real: the cache never expires."
+      say "Want me to add a TTL to it?"
+      ;;
+    2)
+      spin Refactoring 3
+      tool "Update(src/store/cache.ts)" "Updated with 9 additions and 5 removals"
+      tool "Bash(npm run lint)" "${green}No problems${off}"
+      say "Cache entries now expire after 10 minutes. Lint is clean."
+      ;;
+  esac
+  printf '%s✻ Worked for %ds%s\n\n' "$gray" $(( 4 + $1 % 5 )) "$off"
+}
+
+if [ "${1:-}" = "--play" ]; then
+  asks=("add a retry with backoff to the http client" "any TODOs left in src?" "yes, give the cache a 10 minute TTL")
+  while :; do
+    printf '\e[2J\e[H'
+    banner
+    for i in 0 1 2; do
+      sleep 1.5
+      type_out "${asks[i]}"
+      reply "$i"
+    done
+    prompt_box ""
+    sleep 25
+  done
+fi
+
+printf '\e[2J\e[H'
+banner
+n=0
+while :; do
+  prompt_box ""
+  printf '\e[3A\e[4G'
+  IFS= read -r ask || exit 0
+  # Enter left the cursor on the box's bottom edge: clear the box, then echo the ask.
+  printf '\e[2A\r\e[J'
+  [ -z "$ask" ] && continue
+  case "$ask" in /exit|exit|quit) exit 0 ;; esac
+  printf '%s> %s%s\n\n' "$gray" "$off" "$ask"
+  reply "$n"
+  n=$((n + 1))
+done

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Demo only: a generic uname, no real machine name, kernel build or chip id.
+case "$*" in
+  *a*|*v*) echo "Darwin demo 24.0.0 Darwin Kernel Version 24.0.0 arm64" ;;
+  *n*) echo demo ;;
+  *r*) echo 24.0.0 ;;
+  *m*|*p*) echo arm64 ;;
+  *) echo Darwin ;;
+esac

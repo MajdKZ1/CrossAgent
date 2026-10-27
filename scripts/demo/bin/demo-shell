@@ -1,0 +1,4 @@
+#!/bin/sh
+# Demo only: $SHELL for demo commands. A login shell without the login files, so
+# the real prompt and PATH never show up.
+exec /bin/bash --noprofile --norc "$@"

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Demo only: no real account name on screen.
+echo "uid=501(demo) gid=20(staff) groups=20(staff)"

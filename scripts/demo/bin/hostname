@@ -1,0 +1,3 @@
+#!/bin/sh
+# Demo only: no real machine name on screen.
+echo demo
