@@ -542,7 +542,8 @@ if ev == "WorkerStart":
 else:
     e["rc"] = int(extra) if re.fullmatch(r"-?[0-9]+", extra) else -1
 e["sum"] = text
-with open(os.path.join(d, sid + ".jsonl"), "a") as f:
+fd = os.open(os.path.join(d, sid + ".jsonl"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+with os.fdopen(fd, "a") as f:
     f.write(json.dumps(e) + "\n")
 ' "$@" >/dev/null 2>&1 || true
 }
