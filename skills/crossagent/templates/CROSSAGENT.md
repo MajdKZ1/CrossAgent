@@ -34,11 +34,32 @@ the PC while you build or edit on the Mac. Don't split work that has to happen i
 and don't ship tiny jobs to the PC just to use it, each round trip costs a second or two.
 Use your judgment.
 
+## Live sync
+
+When work is split across both machines, the project is mirrored live with Mutagen
+(session `ca-<project>`, two-way-safe) at the same path under home on both machines, so a
+file written on one side shows up on the other in a second or two. `ca init` starts it.
+Single machine work (Mac only or PC only) doesn't sync.
+
+- Split work by file ownership. Two machines never edit the same file in the same task.
+  Give each task its own files or folders and say so in the task prompt.
+- Run `ca sync flush` before handing a task to the other machine and before using its
+  results. `ca run` and `ca wait` already do this for you.
+- On a conflict, stop and report it to the user with `ca sync conflicts`. Never overwrite
+  or delete one side to make it go away unless the user picked which side wins.
+- Build output and dependencies are per machine (`node_modules`, `.build`, `build`, `target`,
+  `dist`, `.venv` and friends never sync). Each side installs and builds its own.
+- Secrets (`.env`, `.env.*`, `*.pem`, `*.key`, `id_*`) don't sync unless the project opts in
+  with `sync_allow=` in `.crossagent/project`.
+- Git only on the Mac. `.git` never syncs, the Mac is the source of truth for commits, and
+  nothing on the PC ever runs `git commit` or `git push` in a synced folder.
+
 ## Rules
 
-- The Mac is the source of truth for code. Edit on the Mac, `ca sync push` (or `ca run pc`,
-  which pushes first) sends it over. If a PC worker changes files, `ca sync pull <paths>`
-  brings them back, then review them on the Mac.
+- The Mac is the source of truth for code. With live sync on, edits on either side cross
+  over by themselves; review anything a PC worker changed on the Mac before committing.
+  Without sync (PC only mode), `ca run pc` pushes the project first and
+  `ca sync pull <paths>` brings files back.
 - Every task runs in a tmux session `ca-<host>-<task>`, which the user can watch in the
   CrossAgent viewing station. Short task names, letters, digits, `-` and `_`.
 - Output goes to `.crossagent/logs/<task>.log` and a short result to
@@ -60,6 +81,9 @@ Write the full path every time (no shell variables, it keeps the permission allo
 ~/.claude/skills/crossagent/scripts/ca logs pc tests 100
 ~/.claude/skills/crossagent/scripts/ca status
 ~/.claude/skills/crossagent/scripts/ca stop pc tests
-~/.claude/skills/crossagent/scripts/ca sync push
+~/.claude/skills/crossagent/scripts/ca sync status                         # live sync state per project
+~/.claude/skills/crossagent/scripts/ca sync flush                          # sync now and wait, fails on conflicts
+~/.claude/skills/crossagent/scripts/ca sync conflicts                      # what clashed, both sides' info
+~/.claude/skills/crossagent/scripts/ca sync push                           # one-off copy when live sync is off
 ~/.claude/skills/crossagent/scripts/ca sync pull path/to/file
 ```
