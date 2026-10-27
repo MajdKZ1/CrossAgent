@@ -9,7 +9,9 @@ struct TopBar: View {
         HStack(spacing: 10) {
             if let project = app.project {
                 ProjectTitle(project: project)
+                // Paths get their room before the host chips and the spacer.
                 ProjectPath(project: project, sync: app.sync)
+                    .layoutPriority(1)
             } else {
                 Text("CrossAgent")
                     .font(.system(size: 12.5, weight: .semibold))
