@@ -84,7 +84,7 @@ private struct DemoRoot: View {
 
     var body: some View {
         ZStack {
-            OrchestratorView(graph: graph, hosts: hosts, positions: $positions, actions: OrchestratorActions(
+            OrchestratorView(graph: ui.swapped ?? graph, hosts: hosts, positions: $positions, actions: OrchestratorActions(
                 expand: { id in
                     DemoDriver.log("expand \(id)")
                     ui.expanded.append(id)
@@ -124,6 +124,8 @@ final class DemoUI: ObservableObject {
     /// Mirror of the positions binding, what the app would save.
     var positions: [String: CGPoint] = [:]
     var expanded: [String] = []
+    /// Shown instead of the demo graph while set, like the app's demo swapping graphs.
+    @Published var swapped: AgentGraph?
 }
 
 private struct DemoDetailText: NSViewRepresentable {
@@ -430,6 +432,87 @@ private final class DemoDriver {
             check("node spawned while covered takes a tap", self.ui.expanded == ["newbie"], "\(self.ui.expanded)")
             self.ui.detail = nil
             stage.applyVisibility(true)
+        }
+
+        // Puff: body and orbs take clicks, the card around it still drags.
+        func puffPoint(_ want: (MascotRig.Hit) -> Bool) -> (NSPoint, MascotRig.Hit)? {
+            guard let puff = stage.mascot?.puff else { return nil }
+            let k = puff.bounds.width / MascotGeometry.size.width
+            for y in stride(from: 2.0, to: MascotGeometry.size.height, by: 2) {
+                for x in stride(from: 2.0, to: MascotGeometry.size.width, by: 2) {
+                    guard let h = puff.rig.hit(CGPoint(x: x, y: y)), want(h) else { continue }
+                    let v = CGPoint(x: x * k, y: puff.isFlipped ? y * k : puff.bounds.height - y * k)
+                    return (puff.convert(v, to: nil), h)
+                }
+            }
+            return nil
+        }
+        func animations(_ l: CALayer) -> Int {
+            (l.animationKeys()?.count ?? 0) + (l.sublayers ?? []).reduce(0) { $0 + animations($1) }
+        }
+        var before = 0
+        step(0.8) {
+            guard let (p, _) = puffPoint({ $0 == .body }), let puff = stage.mascot?.puff else {
+                check("tap on Puff plays a trick", false, "no body point")
+                return
+            }
+            before = animations(puff.rig.canvas)
+            pointer(["cmd": "tap", "x": p.x, "y": p.y])
+        }
+        step(0.15) {
+            let after = stage.mascot.map { animations($0.puff.rig.canvas) } ?? 0
+            check("tap on Puff plays a trick", after > before, "animations \(before) -> \(after)")
+        }
+        step(0.5) {
+            // One busy agent: Puff bobs with a single orb for it.
+            let g = AgentGraph(orchestratorHost: "mac")
+            let now = Date()
+            g.nodes["runner"] = AgentNode(id: "runner", name: "runner", kind: .worker, hostId: "pc", state: .working,
+                                          activity: "make test", startedAt: now, updatedAt: now)
+            self.ui.swapped = g
+        }
+        step(1.2) {
+            guard let (p, hit) = puffPoint({ if case .orb = $0 { return true } else { return false } }),
+                  case .orb(let id) = hit else {
+                check("tap on an orb opens its agent", false, "no orb on Puff (mood \(stage.mascot?.puff.rig.mood?.name ?? "-"))")
+                return
+            }
+            self.ui.expanded = []
+            pointer(["cmd": "tap", "x": p.x, "y": p.y])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                check("tap on an orb opens its agent", self.ui.expanded == [id], "orb \(id) expanded \(self.ui.expanded)")
+                self.ui.detail = nil
+                self.ui.swapped = nil
+            }
+        }
+        step(0.8) {
+            // The orchestrator's top edge, beside Puff: still the card, which pans.
+            guard let at = stage.windowPoint(of: AgentGraph.orchestratorID) else { return }
+            let y = at.y + OrchMetrics.orchestrator.height / 2 - 6
+            pointer(["cmd": "drag", "x": at.x - 90, "y": y, "toX": at.x - 50, "toY": y, "steps": 8])
+        }
+        step(0.8) {
+            check("drag on the card beside Puff still reaches the card", stage.scene.camera.pan.width > 30,
+                  "pan \(stage.scene.camera.pan)")
+            pointer(["cmd": "dblclick", "x": 80, "y": 80])
+        }
+
+        // Puff follows the graph the canvas shows.
+        step(0.8) {
+            let g = AgentGraph(orchestratorHost: "mac")
+            let now = Date()
+            g.nodes["asker"] = AgentNode(id: "asker", name: "asker", kind: .subagent, hostId: "mac",
+                                         state: .needsInput("Ok to deploy?"), activity: "", startedAt: now, updatedAt: now)
+            self.ui.swapped = g
+        }
+        step(0.8) {
+            let m = stage.mascot
+            check("Puff follows a swapped graph", m?.graph === self.ui.swapped && m?.puff.rig.mood == .needsInput,
+                  "mood \(m?.puff.rig.mood?.name ?? "-")")
+            self.ui.swapped = nil
+        }
+        step(0.8) {
+            check("Puff follows back to the first graph", stage.mascot?.graph === self.graph)
             Self.log(failures == 0 ? "regression: all passed" : "regression: \(failures) failed")
         }
     }
