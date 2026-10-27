@@ -264,3 +264,12 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
 - The PC event follower now heartbeats every 2 s. After a quit it exits within a second, where before it could linger up to 10 s.
 - The tab strip measures the window rather than itself. Agent chips drop first when they'd leave less than two tab widths, the tabs scroll, and the selected tab stays in view on resize. Nothing clips at 925, 1000 or 1400 pt with 10 tabs.
 - An agent tab opened before its tmux session exists now attaches once the monitor sees the session. It retries at most every 5 s and also has a Try again button.
+
+## Linked sessions, windows, Crossover Portal and Super-Max (M19 to M24)
+
+- Session linking reads what Claude Code 2.1.311 writes, the same on the Mac and the PC:
+  - `~/.claude/sessions/<pid>.json` is the authority for pid to session id to cwd. It also has `procStart`, which catches a reused pid, and a `status`.
+  - The transcript is `~/.claude/projects/<cwd with / and . as ->/<sessionId>.jsonl`. Built-in subagents get their own `<sessionId>/subagents/agent-<id>.jsonl`, plus a `.meta.json` whose `toolUseId` links back to the parent's Agent call.
+  - We only ever read these files. Nothing writes to them, and the per session messaging socket is left alone.
+- Where a session runs comes from walking its parent processes, for example `claude <- zsh <- login <- Ghostty`. A tmux server ancestor means it's in tmux, and the pane pid maps it to the tmux session.
+- Mac GPU load: `Device Utilization %` from the IOAccelerator's performance statistics is readable without root, so the Mac shows live GPU load too.
