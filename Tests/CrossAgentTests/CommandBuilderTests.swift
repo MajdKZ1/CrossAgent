@@ -18,12 +18,12 @@ final class CommandBuilderTests: XCTestCase {
         let c = CommandBuilder.command(host: mac, mode: .claude, session: "ca-mac-1", localShell: "/bin/zsh")
         XCTAssertEqual(c.executable, "/bin/zsh")
         XCTAssertEqual(c.args[0], "-lc")
-        XCTAssertTrue(c.args[1].hasSuffix("if command -v tmux >/dev/null 2>&1; then exec tmux new -A -s ca-mac-1 claude \\; set -q status off \\; set -q mouse on \\; set -sq focus-events on; else exec claude; fi"))
+        XCTAssertTrue(c.args[1].hasSuffix("if command -v tmux >/dev/null 2>&1; then export CROSSAGENT_CLIENT=1; exec tmux new -A -s ca-mac-1 claude \\; set -q status off \\; set -q mouse on \\; set -sq focus-events on \\; set -q prefix None \\; set -q prefix2 None \\; set -sq set-clipboard on; else exec claude; fi"))
     }
 
     func testLocalShell() {
         let c = CommandBuilder.command(host: mac, mode: .shell, session: "ca-mac-2", localShell: "/bin/zsh")
-        XCTAssertTrue(c.args[1].hasSuffix("if command -v tmux >/dev/null 2>&1; then exec tmux new -A -s ca-mac-2 \\; set -q status off \\; set -q mouse on \\; set -sq focus-events on; else exec \"$SHELL\" -l; fi"))
+        XCTAssertTrue(c.args[1].hasSuffix("if command -v tmux >/dev/null 2>&1; then export CROSSAGENT_CLIENT=1; exec tmux new -A -s ca-mac-2 \\; set -q status off \\; set -q mouse on \\; set -sq focus-events on \\; set -q prefix None \\; set -q prefix2 None \\; set -sq set-clipboard on; else exec \"$SHELL\" -l; fi"))
     }
 
     func testSSHClaude() {
@@ -35,7 +35,7 @@ final class CommandBuilderTests: XCTestCase {
         XCTAssertEqual(c.args[c.args.count - 2], "pc")
         let remote = c.args.last!
         XCTAssertTrue(remote.hasPrefix("exec $SHELL -lc '"))
-        XCTAssertTrue(remote.hasSuffix("then exec tmux new -A -s ca-pc-1 claude \\; set -q status off \\; set -q mouse on \\; set -sq focus-events on; else exec claude; fi'"))
+        XCTAssertTrue(remote.hasSuffix("then export CROSSAGENT_CLIENT=1; exec tmux new -A -s ca-pc-1 claude \\; set -q status off \\; set -q mouse on \\; set -sq focus-events on \\; set -q prefix None \\; set -q prefix2 None \\; set -sq set-clipboard on; else exec claude; fi'"))
     }
 
     func testQuoteRoundTripsThroughSh() throws {
@@ -72,7 +72,7 @@ final class CommandBuilderTests: XCTestCase {
         let c = CommandBuilder.command(host: mac, mode: .claude, session: "ca-app-mac-1", cwd: "/Users/me/my app",
                                        env: ["CROSSAGENT_ROLE": "orchestrator", "CROSSAGENT_PROJECT": "app"],
                                        localShell: "/bin/zsh")
-        XCTAssertTrue(c.args[1].hasSuffix("then exec tmux new -A -s ca-app-mac-1 -c '/Users/me/my app' -e 'CROSSAGENT_PROJECT=app' -e 'CROSSAGENT_ROLE=orchestrator' claude \\; set -q status off \\; set -q mouse on \\; set -sq focus-events on; else cd '/Users/me/my app' 2>/dev/null; export 'CROSSAGENT_PROJECT=app'; export 'CROSSAGENT_ROLE=orchestrator'; exec claude; fi"), c.args[1])
+        XCTAssertTrue(c.args[1].hasSuffix("then export CROSSAGENT_CLIENT=1; exec tmux new -A -s ca-app-mac-1 -c '/Users/me/my app' -e 'CROSSAGENT_PROJECT=app' -e 'CROSSAGENT_ROLE=orchestrator' claude \\; set -q status off \\; set -q mouse on \\; set -sq focus-events on \\; set -q prefix None \\; set -q prefix2 None \\; set -sq set-clipboard on; else cd '/Users/me/my app' 2>/dev/null; export 'CROSSAGENT_PROJECT=app'; export 'CROSSAGENT_ROLE=orchestrator'; exec claude; fi"), c.args[1])
     }
 
     func testSSHShellWithHomeRelativeCwd() {
@@ -91,7 +91,7 @@ final class CommandBuilderTests: XCTestCase {
 
     func testAttachOnly() {
         let s = CommandBuilder.script(mode: .claude, session: "ca-app-pc-tests", cwd: "/x", env: ["A": "b"], attachOnly: true)
-        XCTAssertTrue(s.hasSuffix("then exec tmux attach -t '=ca-app-pc-tests' \\; set -q status off \\; set -q mouse on \\; set -sq focus-events on; else echo 'tmux is not installed here' >&2; exit 1; fi"), s)
+        XCTAssertTrue(s.hasSuffix("then export CROSSAGENT_CLIENT=1; exec tmux attach -t '=ca-app-pc-tests' \\; set -q status off \\; set -q mouse on \\; set -sq focus-events on \\; set -q prefix None \\; set -q prefix2 None \\; set -sq set-clipboard on; else echo 'tmux is not installed here' >&2; exit 1; fi"), s)
         XCTAssertFalse(s.contains("new "))
         XCTAssertFalse(s.contains(" claude"))
     }

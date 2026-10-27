@@ -37,10 +37,19 @@ enum CommandBuilder {
     /// misses them because they are added in .zshrc / .bashrc.
     static let pathPrefix = #"export PATH="$HOME/.local/bin:$HOME/.claude/local:$PATH"; "#
 
+    /// Marks a tmux client as CrossAgent's, see `SessionClients`.
+    static let clientEnvKey = "CROSSAGENT_CLIENT"
+    static let clientEnv = "export \(clientEnvKey)=1; "
+
     /// Spec script plus `set -q status off` for this session only: the pane header
     /// already shows the session, and tmux's bright status bar clashes with the UI.
     /// Also turns on focus-events, which Claude Code asks for, and mouse for this session,
     /// so the wheel scrolls tmux's history (the pane keeps clicks local, see PaneTerminalView).
+    /// No prefix key for this session and clipboard passthrough, the same as the claude
+    /// wrapper's sessions, so a session feels the same wherever it was started.
+    ///
+    /// The tmux client gets `CROSSAGENT_CLIENT=1` in its environment, so discovery can
+    /// tell CrossAgent's own clients from other places viewing the same session.
     ///
     /// `cwd` is where a new session starts (`tmux new -c`, or `cd` without tmux). A
     /// leading `$HOME/` is left for the host's shell to expand, see `shellPath`.
@@ -53,8 +62,9 @@ enum CommandBuilder {
                        attachOnly: Bool = false, program: String? = nil) -> String {
         precondition(attachOnly ? SessionName.isAttachable(session) : SessionName.isValid(session))
         let opts = " \\; set -q status off \\; set -q mouse on \\; set -sq focus-events on"
+            + " \\; set -q prefix None \\; set -q prefix2 None \\; set -sq set-clipboard on"
         if attachOnly {
-            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux attach -t \(shellQuote("=" + session))\(opts); else echo 'tmux is not installed here' >&2; exit 1; fi"
+            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then \(clientEnv)exec tmux attach -t \(shellQuote("=" + session))\(opts); else echo 'tmux is not installed here' >&2; exit 1; fi"
         }
         var newArgs = "-A -s \(session)"
         var fallback = ""
@@ -72,9 +82,9 @@ enum CommandBuilder {
         case .claude:
             let run = program.map(shellQuote) ?? "claude"
             let direct = program.map { "exec sh -c " + shellQuote($0) } ?? "exec claude"
-            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux new \(newArgs) \(run)\(opts); else \(fallback)\(direct); fi"
+            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then \(clientEnv)exec tmux new \(newArgs) \(run)\(opts); else \(fallback)\(direct); fi"
         case .shell:
-            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux new \(newArgs)\(opts); else \(fallback)exec \"$SHELL\" -l; fi"
+            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then \(clientEnv)exec tmux new \(newArgs)\(opts); else \(fallback)exec \"$SHELL\" -l; fi"
         }
     }
 
