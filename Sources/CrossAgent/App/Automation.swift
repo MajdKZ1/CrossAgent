@@ -37,6 +37,7 @@ final class Automation {
         }
         if handlePointer(name, cmd) { return }
         if handleTerminal(name, cmd) { return }
+        if handleTheme(name, cmd) { return }
         switch name {
         case "new" where cmd["check"] as? Bool == true:
             // Same path as the new pane popover, with the folder check on ssh hosts.
