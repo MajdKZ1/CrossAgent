@@ -237,12 +237,17 @@ sync_start() {
 # Waits for a full cycle. Exits non zero on conflicts or errors so nobody hands off stale or clashing files.
 sync_flush() {
   need_mutagen
-  local s row word; s="$(sess)"
+  local s row word i; s="$(sess)"
   sync_exists || die "no Portal for $NAME, run: ca portal start"
   row="$(sync_rows "$s")"
   [ "$(echo "$row" | cut -f3)" = true ] && { sync_note "$s" paused; die "$s is paused, resume it with: mutagen sync resume $s"; }
   mutagen sync flush "$s" >/dev/null 2>&1 || { sync_note "$s" "flush failed"; die "couldn't flush $s, is the PC reachable? (ca portal status)"; }
-  row="$(sync_rows "$s")"; word="$(sync_word "$row")"
+  # Flush can return while Mutagen is still rescanning (say right after a conflict is
+  # resolved). Give transitional states (scanning, staging, reconciling...) up to ~10 s.
+  for i in 1 2 3 4 5 6 7 8 9 10 11; do
+    row="$(sync_rows "$s")"; word="$(sync_word "$row")"
+    case "$word" in syncing*) [ "$i" -lt 11 ] && sleep 1 ;; *) break ;; esac
+  done
   sync_note "$s" "$word"
   case "$word" in
     watching*) say "Portal flushed, $NAME is in sync"; sync_problems "$s" >&2 ;;
