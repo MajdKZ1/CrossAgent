@@ -343,3 +343,28 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
     - **Sessions:** with a PC Live view open, the app uses 0.27% of a core.
     - **Windows:** 3 idle project windows use 0.33%.
     - **Discovery:** nothing polls while no Sessions list or Live view is on screen.
+
+## The claude wrapper and shared sessions
+
+- **Why a shell function:** `claude` is a shell function, not a script on PATH. On both machines `~/.local/bin/claude` is the real binary, a symlink Claude's auto-updater rewrites, so a script with the same name there would collide. Only interactive shells read the rc files, so scripts, pipes and the SDK never see it.
+  - **Where it lives:** the function is in `skills/crossagent/scripts/claude-wrapper.sh`, sourced from `~/.zshrc` and `~/.bashrc` through a marked block that `install.sh --wrapper` adds and `--remove-wrapper` removes.
+  - **Finding the real binary:** `whence -p` in zsh, `type -P` in bash, so it never recurses.
+- **When it runs plain:** it runs the real claude unchanged:
+  - inside tmux, or with `CLAUDE_NO_TMUX=1`;
+  - when stdin or stdout isn't a terminal, or tmux is missing;
+  - with `-p`, `--print`, `--help`, `--version`, `--output-format`, `--bg`, `--background`, `--desktop` or `--tmux`;
+  - when the first argument is a claude subcommand (from `claude --help`).
+- **Sessions:** a new session is `ca-<slug>-<mac|pc>-<n>` with the smallest free n, and the slug matches `ProjectSlug.make`. `--ca-name` picks the name and reattaches if it exists.
+  - **Environment:** the claude process gets `PATH` and the `ANTHROPIC_*` and `CLAUDE_CODE_*` variables passed with `-e`. A new session would otherwise get the tmux server's environment, which may come from another context.
+  - **Variables left out:** a running Claude sets per process markers for its children (`CLAUDE_CODE_CHILD_SESSION`, the messaging socket and token, and the like). Forwarding those would turn transcripts off in the new session, so they are skipped.
+- **tmux options:**
+  - **Per session**, set on the `=NAME:` target, because option targets are pane targets: status off, mouse on, prefix None, prefix2 None, destroy-unattached off. CrossAgent's own sessions now get the same, so Ctrl+B reaches Claude everywhere.
+  - **Server wide**, because they can't be per session, and additive: `set-clipboard on` unless it's off, `focus-events on`, and the `terminal-features` entries `xterm-ghostty:RGB:clipboard:focus` and `xterm-256color:RGB`, each added only once. `default-terminal` is a server option in tmux 3.x and already `tmux-256color`, so it's left alone.
+  - **No config file:** no `~/.tmux.conf` is written.
+  - **Closing a window:** a closed window sends SIGHUP to the tmux client, which detaches it. The session keeps running.
+- **Who else is attached:**
+  - **Discovery:** one `tmux list-clients` per poll per host. Each client is classified by its parent processes, like sessions are.
+  - **CrossAgent's own clients:** they export `CROSSAGENT_CLIENT=1` and are left out. On the PC that's read from `/proc/<pid>/environ`, and on the Mac the CrossAgent app is the parent.
+  - **What you see:** "Also open in Ghostty" is info, not a warning.
+  - **Small leak:** if CrossAgent starts the tmux server, the variable lands in the server's environment. That only matters for a nested tmux client inside a pane.
+- **Not hooked in yet:** auto mode refused to let an agent edit the user's real rc files ("Unauthorized Persistence"). The rc logic was tested against fake home folders, and the wrapper by sourcing it directly. The real hookup is one command for the user to run.
