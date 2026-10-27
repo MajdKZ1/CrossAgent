@@ -4,7 +4,7 @@
 
 One window, every workstation. CrossAgent is a native macOS app that puts Claude Code (or a plain shell) on your Mac and on your Linux box side by side, in one grid of terminal panes. Remote panes go over plain `ssh`, and every pane lives in tmux on its own host, so closing the window never kills your work. Open it again and everything reattaches.
 
-Everything starts from a project folder. Around that you get three modes: **Panes** for your terminals, **Station** to see every session on both machines at once, and **Orchestrator**, a live graph of Claude agents working on the project, with a small pixel mascot named Patch keeping an eye on them. A Claude Code skill splits work across the two machines for you, and live sync keeps the project the same on both.
+Everything starts from a project folder. Everything lives in one window with tabs: **Panes** for your terminals, **Station** to see every session on both machines at once, **Orchestrator**, a live graph of Claude agents working on the project with a little blob named Puff keeping an eye on them, **Activity** for both machines' CPU, memory and temperatures, and a tab for any agent you open. A Claude Code skill splits work across the two machines for you, and live sync keeps the project the same on both.
 
 <p align="center"><img src="docs/images/orchestrator.png" width="760" alt="Orchestrator mode: the orchestrator in the middle, agents on the Mac and the PC around it"></p>
 
@@ -42,7 +42,16 @@ Once a project is open:
 
 - The top bar shows the project and its folder (click to reveal it in Finder). With sync on, it also shows where the project lives on the PC.
 - New panes start in the project folder on both machines: the Mac path locally, the synced path on the PC. If the folder isn't on the PC yet, CrossAgent offers to start sync or to open in your PC home folder instead.
-- Panes, mode, the orchestrator and node positions are saved per project. Switch projects and the other one's tmux sessions keep running, and switching back reattaches them. The last project reopens when you launch the app.
+- Each project has its own tabs, panes, orchestrator and node positions, saved and restored on relaunch. Several projects can be open at once: the switcher (or `Cmd+O`) moves between them, switching back is instant with scrollback intact, and opening a project that's already open just switches to it.
+
+## Tabs
+
+One window, one tab per thing you have open, like a browser: Panes, Station, Orchestrator, Activity, and agent chats. `Cmd+1` to `Cmd+9` jump to a tab, `Cmd+Shift+[` / `]` step through them, `Cmd+W` closes one, drag to reorder, middle click to close. Hidden tabs keep their terminals running, scrollback and all.
+
+Click an agent anywhere it shows up small (a node on the canvas, a station tile, a chip in the tab strip, an orb around Puff, a row in Activity) and its chat opens as a tab, or the existing tab comes forward:
+
+- the orchestrator and `ca run` workers open their live terminal, focused and ready to type.
+- built-in subagents open a card with their prompt, tool calls and result, plus a box that messages them through the orchestrator.
 
 ## Panes
 
@@ -50,7 +59,8 @@ Once a project is open:
 - Each pane runs in a tmux session named `ca-<project>-<host>-<n>` on that host. Close a pane and the session keeps running. Kill it for real with Option+click on the close button, or right click the header and pick Kill Session.
 - Quit the app and relaunch: every pane comes back attached to the same tmux session, history and all.
 - If a session ends, the pane says so and gives you a Reconnect button.
-- Double click a pane header (or `Cmd+Enter`) to maximize it.
+- Double click a pane header (or `Cmd+Enter`) to maximize it. A lone or maximized pane goes edge to edge with no header; its controls fade in when you point at the top.
+- The terminal behaves like a native one: `Cmd+C` / `Cmd+V` / `Cmd+A`, `Cmd+K` to clear (scrollback included), `Cmd+F` to find, Option as Meta, `Cmd`+click on links, trackpad scrolling through history, and right click for the usual menu. Rows use the same line height as Terminal.app and Ghostty.
 
 ### Broadcast and relay
 
@@ -59,7 +69,7 @@ Once a project is open:
 
 ## Station
 
-`Cmd+Shift+V` or Station in the top bar's mode switch. It's a wall of every `ca-*` tmux session on every host, live:
+`Cmd+Shift+V` or the `+` menu in the tab strip. It's a wall of every `ca-*` tmux session on every host, live:
 
 - a small live preview of each session's screen
 - host, session name, and how long it's been running
@@ -69,7 +79,7 @@ It also picks up `ca-*` sessions you didn't open from this window, like ones the
 
 ## Orchestrator
 
-`Cmd+Shift+O` or Orchestrator in the mode switch. Pick a host (the Mac by default) and hit **Start orchestrator**. That opens a real Claude Code session for this project in tmux (`ca-<project>-<host>-orch`), drawn as the box in the middle of a canvas. Give it work, and every agent it brings in shows up around it:
+`Cmd+Shift+O` or the `+` menu in the tab strip. Pick a host (the Mac by default) and hit **Start orchestrator**. That opens a real Claude Code session for this project in tmux (`ca-<project>-<host>-orch`), drawn as the box in the middle of a canvas. Give it work, and every agent it brings in shows up around it:
 
 - **Built-in subagents** that Claude Code launches with its Agent tool.
 - **Workers** the crossagent skill starts with `ca run`, on the Mac or the PC. Each has its own terminal.
@@ -89,7 +99,7 @@ New agents pop out of the orchestrator and drift into place along their cable. E
 
 Drag empty space (or scroll) to pan, pinch or `Cmd`+scroll to zoom, drag nodes to arrange them, and double click empty space to recenter. Positions are saved per project.
 
-Click a node to open it:
+Click a node to open it in a tab:
 
 - **The orchestrator and workers** open their live terminal, and you type straight into it.
 - **Built-in subagents** don't have a terminal of their own. You get their prompt, their recent tool calls and output, and a box to write to them. Whatever you write goes to the orchestrator as `@<name> ...`.
@@ -107,11 +117,59 @@ The hooks run async, so Claude never waits on them. Each call adds one short JSO
 
 To take the hooks out, use **Orchestrator > Turn Off Orchestrator for This Project**. It removes only CrossAgent's entries, on both machines, and leaves the rest of the file alone.
 
-### Patch
+### Puff
 
-<p align="center"><img src="docs/images/patch.png" width="560" alt="Patch, the CrossAgent mascot, in each of its states"></p>
+<p align="center"><img src="docs/images/puff.png" width="480" alt="Puff, the CrossAgent mascot, in each of its moods"></p>
 
-Patch sits on top of the orchestrator and reacts to the whole graph. It breathes and blinks when things are quiet, looks up with little dots while the orchestrator thinks, types while it works, and bobs along with one agent. With two or more agents running it juggles one orb per agent, coloured by host. It hops and waves with a "!" when something needs your answer, celebrates when an agent finishes, gets dizzy on an error, and falls asleep after a minute of nothing. It's drawn in code from pixel grids, and its frames loop on Core Animation, so it costs next to nothing. Hide it with **Orchestrator > Show Mascot**.
+Puff is a soft, chunky, light blue blob with two dark leaning eyes. It sits on top of the orchestrator and reacts to the whole graph: it blinks and glances around when things are quiet, puffs up into a little cloud with a thought bubble while the orchestrator thinks, narrows its eyes and bounces while it works, bobs along with one agent and juggles one orb per agent (in its host colour) when there are more. It goes wide eyed with a little hop when something needs your answer, squishes happily with closed eyes when an agent finishes, wobbles on an error, and nods off with a soft "z z z" after a quiet minute.
+
+Point at it and it watches the pointer. Poke it and it squishes, spins, wobbles or peeks, more wildly the faster you click. Click an orb to open that agent. It's drawn from vector paths that morph between shapes on Core Animation, so it's crisp at any size and costs next to nothing. Hide it with **Orchestrator > Show Mascot**.
+
+## Activity
+
+The Activity tab shows both machines side by side, and a compact readout in the tab strip (`Mac 9% 43°  PC 3% 42°`) opens it:
+
+- CPU in total and per core cluster (performance and efficiency on the Mac, every core on the PC), memory used with pressure, swap, and temperatures (the SoC, SSD and battery on the Mac, Tctl, the NVMe and the GPU on the PC), each with a sparkline of the last few minutes.
+- The `ca-*` sessions using the most CPU on each machine. Click one to open it.
+
+The Mac reads its own counters and sensors (no root needed). The PC streams `/proc`, `/sys/class/hwmon` and, if it's there, `nvidia-smi` through one ssh connection over the existing control master, without installing anything. Sampling only runs while the tab or the readout is on screen.
+
+## Themes
+
+CrossAgent ships with two themes, Default and Mono. Pick one in Settings or under View > Theme. It applies right away, including running terminals.
+
+Your own themes go in `~/.config/crossagent/themes/` as `.json` files. View > Theme > Reveal Themes Folder creates the folder and opens it. Edits show up live, no restart needed. A file that can't be read is skipped, and a toast tells you why.
+
+You only need the colours you want to change. Anything you leave out comes from Default. If `name` is missing, the file name is used. A theme with the same name as a built-in one replaces it.
+
+Colours are hex: `#rrggbb`, or `#rrggbbaa` for see-through ones.
+
+```json
+{
+  "name": "Dusk",
+  "ui": {
+    "window": "#0b0c0f", "surface": "#0f1115", "raised": "#14171c",
+    "border": "#ffffff12", "hairline": "#ffffff0d",
+    "text": "#d7dae0", "muted": "#8a909c", "faint": "#5b616c",
+    "accent": "#6ea8fe", "success": "#5fd39a", "warning": "#f5b041",
+    "danger": "#f07178", "broadcast": "#ff9f6e",
+    "synced": "#8fd694", "chip": "#ffffff0a", "chipHover": "#ffffff14"
+  },
+  "terminal": {
+    "background": "#0f1115", "foreground": "#d7dae0",
+    "cursor": "#9aa4b2", "selection": "#00a6b2", "selectionForeground": "#000000",
+    "ansi": ["#000000", "#c23621", "#25bc24", "#adad27", "#492ee1", "#d338d3", "#33bbc8", "#cbcccd",
+             "#818383", "#fc391f", "#31e722", "#eaec23", "#5833ff", "#f935f8", "#14f0f0", "#e9ebeb"]
+  },
+  "mascot": { "body": "#b3dcff", "eyes": "#0b1218" },
+  "hosts": { "pc": "#5fd39a" }
+}
+```
+
+- `ui`: the window chrome. `surface` is the pane background, `raised` is for popovers and cards. `border` and `hairline` are usually see-through. `synced` falls back to `success`. `chip` and `chipHover` fall back to `text` at low opacity.
+- `terminal`: what the terminals show. `ansi` needs exactly 16 colours: black, red, green, yellow, blue, magenta, cyan, white, then the bright versions in the same order. `selectionForeground` falls back to black.
+- `mascot`: the little guy's body and eyes.
+- `hosts`: optional. Overrides a host's accent colour from `hosts.json`, keyed by host id. Hosts you don't list keep their own colour.
 
 ## Shortcuts
 
@@ -119,14 +177,17 @@ Patch sits on top of the orchestrator and reacts to the whole graph. It breathes
 | --- | --- |
 | `Cmd+O` | Open a project |
 | `Cmd+T` | New pane (last used host preselected, Enter to open) |
-| `Cmd+W` | Close focused pane (the tmux session keeps running) |
-| `Cmd+Shift+[` / `Cmd+Shift+]` | Previous / next pane |
-| `Cmd+1` ... `Cmd+9` | Focus pane by number |
+| `Cmd+W` | Close the tab (in Panes: close the focused pane, its tmux session keeps running) |
+| `Cmd+1` ... `Cmd+9` | Go to tab by number |
+| `Cmd+Shift+[` / `Cmd+Shift+]` | Previous / next tab |
+| `Ctrl+1` ... `Ctrl+9` | Focus pane by number |
+| `Cmd+Option+[` / `Cmd+Option+]` | Previous / next pane |
 | `Cmd+Enter` | Maximize / restore |
 | `Cmd+Shift+B` | Broadcast on / off |
 | `Cmd+Shift+R` | Relay selection to another pane |
-| `Cmd+Shift+V` | Station (again to go back) |
-| `Cmd+Shift+O` | Orchestrator (again to go back to Panes) |
+| `Cmd+Shift+V` | Station |
+| `Cmd+Shift+O` | Orchestrator |
+| `Cmd+K` / `Cmd+F` | Clear / find in the focused terminal |
 
 They all work while a terminal has focus.
 
