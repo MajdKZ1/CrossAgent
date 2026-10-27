@@ -8,11 +8,13 @@ struct ContentView: View {
         VStack(spacing: 0) {
             TopBar()
             TabContent()
-                .padding([.horizontal, .bottom], Palette.gap)
+                // A lone or maximized pane goes edge to edge; it has its own padding.
+                .padding([.horizontal, .bottom], app.mode == .panes && PaneGrid.isSolo(app) ? 0 : Palette.gap)
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: app.selectedTabID)
         }
         .background(Palette.window)
         .modifier(FolderDrop())
+        .onReceive(ThemeStore.shared.$problems) { if let p = $0.first { app.flash(p) } }
         .overlay(alignment: .top) {
             if app.broadcast {
                 Palette.broadcast.frame(height: 2).transition(.opacity)
