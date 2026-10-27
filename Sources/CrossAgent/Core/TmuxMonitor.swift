@@ -24,16 +24,6 @@ struct TmuxSessionInfo: Identifiable, Hashable {
     var runningFor: TimeInterval { Date().timeIntervalSince(createdAt) }
 }
 
-/// A Claude Code process on a host that is not inside a `ca-*` tmux session.
-struct ExternalClaude: Identifiable, Hashable {
-    var hostId: String
-    var pid: Int
-    var elapsed: TimeInterval
-    var cwd: String?
-
-    var id: String { "\(hostId)/\(pid)" }
-}
-
 // MARK: - Poll script and parser (pure)
 
 enum TmuxPoll {
@@ -51,19 +41,10 @@ enum TmuxPoll {
         var command: String
     }
 
-    struct Proc: Equatable {
-        var pid: Int
-        var ppid: Int
-        var elapsed: TimeInterval
-        var comm: String
-    }
-
     struct Output: Equatable {
         var hostNow: TimeInterval?
         var panes: [Pane] = []
         var captures: [String: String] = [:]
-        var procs: [Proc] = []
-        var cwds: [Int: String] = [:]
         /// False when the end marker is missing (output cut off).
         var complete = false
     }
@@ -76,7 +57,7 @@ enum TmuxPoll {
 
     /// One round trip per poll. Works in sh and zsh. `marker` separates sections and must not
     /// appear in pane output, so callers pass a fresh random one.
-    static func script(marker m: String, captures: Bool, processes: Bool) -> String {
+    static func script(marker m: String, captures: Bool) -> String {
         var s = """
         printf '%s now %s\\n' '\(m)' "$(date +%s)"
         printf '%s panes\\n' '\(m)'
@@ -92,32 +73,15 @@ enum TmuxPoll {
 
             """
         }
-        if processes {
-            s += """
-            printf '%s ps\\n' '\(m)'
-            ps -A -o pid=,ppid=,etime=,comm= 2>/dev/null
-            printf '%s cwd\\n' '\(m)'
-            cp=$(ps -A -o pid=,comm= 2>/dev/null | awk '{n=$2; sub(/.*\\//,"",n); if (n=="claude" || n ~ /^[0-9]+\\.[0-9]+\\.[0-9]+$/) print $1}')
-            if [ -n "$cp" ]; then
-              if [ -d /proc/self ]; then
-                printf '%s\\n' "$cp" | while IFS= read -r p; do printf 'p%s\\nn%s\\n' "$p" "$(readlink /proc/$p/cwd 2>/dev/null)"; done
-              else
-                lsof -a -d cwd -Fpn -p "$(printf '%s' "$cp" | tr '\\n' ',')" 2>/dev/null
-              fi
-            fi
-
-            """
-        }
         s += "printf '%s end\\n' '\(m)'\n"
         return s
     }
 
     static func parse(_ text: String, marker: String) -> Output {
         var out = Output()
-        enum Section { case none, panes, cap(String), ps, cwd }
+        enum Section { case none, panes, cap(String) }
         var section = Section.none
         var capLines: [Substring] = []
-        var cwdPid: Int?
 
         func flushCapture() {
             if case .cap(let name) = section {
@@ -136,8 +100,6 @@ enum TmuxPoll {
                 case "now": out.hostNow = parts.count > 1 ? TimeInterval(parts[1].trimmingCharacters(in: .whitespaces)) : nil; section = .none
                 case "panes": section = .panes
                 case "cap": section = .cap(parts.count > 1 ? String(parts[1]) : "")
-                case "ps": section = .ps
-                case "cwd": section = .cwd
                 case "end": out.complete = true; section = .none
                 default: section = .none
                 }
@@ -147,10 +109,6 @@ enum TmuxPoll {
             case .none: break
             case .panes: if let p = parsePane(line) { out.panes.append(p) }
             case .cap: capLines.append(line)
-            case .ps: if let p = parseProc(line) { out.procs.append(p) }
-            case .cwd:
-                if line.hasPrefix("p") { cwdPid = Int(line.dropFirst()) }
-                else if line.hasPrefix("n"), let pid = cwdPid, line.count > 1 { out.cwds[pid] = String(line.dropFirst()) }
             }
         }
         flushCapture()
@@ -165,27 +123,6 @@ enum TmuxPoll {
         return Pane(session: f[0], active: f[1] == "1", pid: pid, dead: f[3] == "1",
                     created: created, activity: activity, attached: Int(f[7]) ?? 0,
                     cols: Int(f[8]) ?? 0, rows: Int(f[9]) ?? 0, command: f[10])
-    }
-
-    static func parseProc(_ line: Substring) -> Proc? {
-        let f = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true)
-        guard f.count == 4, let pid = Int(f[0]), let ppid = Int(f[1]),
-              let et = parseElapsed(String(f[2])) else { return nil }
-        return Proc(pid: pid, ppid: ppid, elapsed: et, comm: String(f[3]).trimmingCharacters(in: .whitespaces))
-    }
-
-    /// `ps` etime: [[dd-]hh:]mm:ss
-    static func parseElapsed(_ s: String) -> TimeInterval? {
-        var days = 0.0
-        var rest = Substring(s)
-        if let dash = rest.firstIndex(of: "-") {
-            guard let d = Double(rest[..<dash]) else { return nil }
-            days = d
-            rest = rest[rest.index(after: dash)...]
-        }
-        let parts = rest.split(separator: ":").map { Double($0) }
-        guard !parts.isEmpty, parts.count <= 3, parts.allSatisfy({ $0 != nil }) else { return nil }
-        return parts.reduce(0.0) { $0 * 60 + $1! } + days * 86400
     }
 
     /// One info per session (the active pane wins). `clockOffset` = local now minus host now,
@@ -213,26 +150,6 @@ enum TmuxPoll {
                                    isClaude: SessionDetector.isClaude(command: p.command, capture: capture))
         }
         .sorted { ($0.createdAt, $0.name) < ($1.createdAt, $1.name) }
-    }
-
-    /// Top level Claude processes that are not descendants of a `ca-*` pane.
-    static func externalClaudes(hostId: String, output: Output) -> [ExternalClaude] {
-        let parent = Dictionary(output.procs.map { ($0.pid, $0.ppid) }, uniquingKeysWith: { a, _ in a })
-        let claudePids = Set(output.procs.filter { SessionDetector.isClaudeCodeProcess($0.comm) }.map(\.pid))
-        let panePids = Set(output.panes.map(\.pid))
-        return output.procs.compactMap { p in
-            guard claudePids.contains(p.pid) else { return nil }
-            var cur = p.ppid
-            var hops = 0
-            while cur > 1, hops < 64 {
-                if panePids.contains(cur) || claudePids.contains(cur) { return nil }
-                cur = parent[cur] ?? 0
-                hops += 1
-            }
-            if panePids.contains(p.pid) { return nil }
-            return ExternalClaude(hostId: hostId, pid: p.pid, elapsed: p.elapsed, cwd: output.cwds[p.pid])
-        }
-        .sorted { $0.pid < $1.pid }
     }
 }
 
@@ -335,7 +252,6 @@ final class TmuxMonitor: ObservableObject {
     @Published private(set) var sessions: [String: [TmuxSessionInfo]] = [:]
     @Published private(set) var reachable: [String: Bool] = [:]
     @Published private(set) var lastError: [String: String] = [:]
-    @Published private(set) var external: [String: [ExternalClaude]] = [:]
     /// Wall time of the last poll per host, for diagnostics.
     @Published private(set) var lastPollDuration: [String: TimeInterval] = [:]
 
@@ -374,7 +290,7 @@ final class TmuxMonitor: ObservableObject {
         loops = [:]
     }
 
-    /// Fast (with captures and external Claude processes) while any window wants it:
+    /// Fast (with screen captures) while any window wants it:
     /// a station tab, or a canvas waiting on a prompt. Shared by every window, so calls
     /// are counted per key and it stays fast until each `true` got its `false`.
     func setActive(_ fast: Bool, for key: AnyHashable = "station") {
@@ -428,12 +344,10 @@ final class TmuxMonitor: ObservableObject {
         if reachable[host.id] != true { reachable[host.id] = true }
         if lastError[host.id] != nil { lastError[host.id] = nil }
         if sessions[host.id] != result.sessions { sessions[host.id] = result.sessions }
-        if fast, external[host.id] != result.external { external[host.id] = result.external }
     }
 
     struct FetchResult {
         var sessions: [TmuxSessionInfo] = []
-        var external: [ExternalClaude] = []
         var error: String?
         var duration: TimeInterval = 0
     }
@@ -442,7 +356,7 @@ final class TmuxMonitor: ObservableObject {
     nonisolated static func fetch(host: Host, fast: Bool, previous: [String: TmuxSessionInfo]) async -> FetchResult {
         let start = Date()
         let marker = "@@ca-" + UUID().uuidString.prefix(8).lowercased()
-        let script = TmuxPoll.script(marker: marker, captures: fast, processes: fast)
+        let script = TmuxPoll.script(marker: marker, captures: fast)
         let r = await Runner.run(CommandBuilder.oneShot(host: host, script: script), timeout: 15)
         return await Task.detached(priority: .utility) {
             var res = FetchResult(duration: Date().timeIntervalSince(start))
@@ -457,7 +371,6 @@ final class TmuxMonitor: ObservableObject {
             let clockOffset = abs(offset) > 3 ? offset : 0
             res.sessions = TmuxPoll.sessions(hostId: host.id, output: out, previous: previous,
                                              clockOffset: clockOffset, withCaptures: fast)
-            if fast { res.external = TmuxPoll.externalClaudes(hostId: host.id, output: out) }
             return res
         }.value
     }

@@ -149,8 +149,6 @@ final class TmuxMonitorTests: XCTestCase {
         XCTAssertEqual(out.panes[0].activity, 1793052690)
         XCTAssertEqual(out.captures["ca-mac-1"], claudeBusy + "\n")
         XCTAssertEqual(out.captures["ca-pc-shell"], "top line 1")
-        XCTAssertEqual(out.cwds[900], "/Users/x/proj with space")
-        XCTAssertEqual(out.procs.first { $0.pid == 1 }?.elapsed, 871384.0) // 10-02:03:04
 
         let sessions = TmuxPoll.sessions(hostId: "mac", output: out, previous: [:], clockOffset: 0, withCaptures: true)
         XCTAssertEqual(sessions.map(\.name), ["ca-pc-shell", "ca-mac-1"])
@@ -164,9 +162,6 @@ final class TmuxMonitorTests: XCTestCase {
         XCTAssertEqual(claude.createdAt, Date(timeIntervalSince1970: 1793052596))
         // Active pane wins for multi pane sessions.
         XCTAssertEqual(sessions[0].currentCommand, "top")
-
-        let ext = TmuxPoll.externalClaudes(hostId: "mac", output: out)
-        XCTAssertEqual(ext, [ExternalClaude(hostId: "mac", pid: 900, elapsed: 3723, cwd: "/Users/x/proj with space")])
     }
 
     func testNoTmuxServerIsEmptyNotError() {
@@ -197,21 +192,16 @@ final class TmuxMonitorTests: XCTestCase {
     }
 
     func testElapsedFormats() {
-        XCTAssertEqual(TmuxPoll.parseElapsed("00:05"), 5)
-        XCTAssertEqual(TmuxPoll.parseElapsed("01:02:03"), 3723)
-        XCTAssertEqual(TmuxPoll.parseElapsed("2-00:00:01"), 172801)
-        XCTAssertNil(TmuxPoll.parseElapsed("abc"))
     }
 
     func testScriptRunsInShWithoutTmuxServer() {
         // Points tmux at an empty socket dir so no server exists.
-        let script = "export TMUX_TMPDIR=$(mktemp -d); " + TmuxPoll.script(marker: m, captures: true, processes: true)
+        let script = "export TMUX_TMPDIR=$(mktemp -d); " + TmuxPoll.script(marker: m, captures: true)
         for shell in ["/bin/sh", "/bin/zsh"] {
             let r = Runner.runSync(SpawnCommand(executable: shell, args: ["-c", script]))
             let out = TmuxPoll.parse(r.stdout, marker: m)
             XCTAssertTrue(out.complete, "\(shell): \(r.stderr)")
             XCTAssertTrue(out.panes.isEmpty)
-            XCTAssertFalse(out.procs.isEmpty)
         }
     }
 
@@ -227,7 +217,6 @@ final class TmuxMonitorTests: XCTestCase {
                     let lastLine = SessionDetector.bottomLines(SessionDetector.stripANSI(s.capture), count: 1).first ?? ""
                     print("  \(s.id) cmd=\(s.currentCommand) claude=\(s.isClaude) status=\(s.status) \(s.cols)x\(s.rows) up=\(Int(s.runningFor))s attached=\(s.attachedClients) capture=\(s.capture.utf8.count)B last=\(lastLine.prefix(60))")
                 }
-                for e in r.external { print("  external pid=\(e.pid) up=\(Int(e.elapsed))s cwd=\(e.cwd ?? "?")") }
                 XCTAssertNil(r.error)
             }
         }
