@@ -691,7 +691,7 @@ final class MascotHost: ScaledView {
 
     /// The View menu's Show Mascot toggle.
     private func applyHidden() {
-        let hide = UserDefaults.standard.bool(forKey: "mascotHidden")
+        let hide = AppDefaults.store.bool(forKey: "mascotHidden")
         if isHidden != hide { isHidden = hide }
     }
 

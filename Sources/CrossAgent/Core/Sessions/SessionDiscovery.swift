@@ -320,7 +320,7 @@ final class SessionDiscovery: ObservableObject {
     /// `localRoot` is ~/.claude on this Mac, `remoteRoot` the same on ssh hosts.
     /// `remoteCommand` replaces the ssh call (host, script argv) for tests.
     init(hosts: [Host] = HostStore.load(), localRoot: String? = nil, remoteRoot: String = "~/.claude",
-         defaults: UserDefaults = .standard, scanner: LocalSessionScanner? = nil,
+         defaults: UserDefaults = AppDefaults.store, scanner: LocalSessionScanner? = nil,
          remoteCommand: ((Host, [String]) -> SpawnCommand)? = nil) {
         self.hosts = hosts
         self.defaults = defaults

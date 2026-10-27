@@ -5,7 +5,7 @@ import SwiftUI
 struct SessionsTab: View {
     @EnvironmentObject private var app: AppState
     @ObservedObject private var discovery = SessionDiscovery.shared
-    @AppStorage("sessions.allProjects") private var allProjects = false
+    @AppStorage("sessions.allProjects", store: AppDefaults.store) private var allProjects = false
     @State private var shownAt = Date()
 
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: Palette.radius, style: .continuous) }

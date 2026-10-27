@@ -10,7 +10,7 @@ struct MascotView: View {
     /// Points per design unit. 0.75 makes the body about 45 pt wide.
     var scale: CGFloat = 0.75
 
-    @AppStorage("mascotHidden") private var hidden = false
+    @AppStorage("mascotHidden", store: AppDefaults.store) private var hidden = false
 
     init(graph: AgentGraph, onOpenAgent: ((String) -> Void)? = nil, scale: CGFloat = 0.75) {
         self.graph = graph
