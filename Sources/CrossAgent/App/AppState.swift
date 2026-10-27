@@ -8,6 +8,8 @@ final class AppState: ObservableObject {
     let hosts: [Host]
     /// Watches ca-* tmux sessions on every host. Feeds the station and free name picking.
     var monitor: TmuxMonitor?
+    /// Mutagen ca-* sync sessions for the top bar. Started by AppDelegate.
+    let sync = SyncMonitor()
 
     @Published private(set) var panes: [PaneSession] = []
     @Published var focusedID: UUID?

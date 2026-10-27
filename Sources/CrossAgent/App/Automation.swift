@@ -136,7 +136,12 @@ final class Automation {
         let obj: [String: Any] = ["panes": panes, "broadcast": app.broadcast,
                                   "maximized": app.panes.firstIndex { $0.id == app.maximizedID } ?? -1,
                                   "station": app.showStation, "toast": app.toast ?? "",
-                                  "newPaneOpen": app.showNewPane, "active": NSApp.isActive,
+                                  "newPaneOpen": app.showNewPane,
+                                  "syncInstalled": app.sync.installed,
+                                  "sync": app.sync.sessions.map { s in
+                                      ["name": s.name ?? "", "status": s.statusWord, "color": s.health.name,
+                                       "conflicts": s.conflictRoots] as [String: Any]
+                                  }, "active": NSApp.isActive,
                                   "windows": NSApp.windows.filter(\.isVisible).map { "\(type(of: $0)) key=\($0.isKeyWindow) fr=\($0.firstResponder.map { "\(type(of: $0))" } ?? "-")" }, "relayPickerOpen": app.showRelayPicker,
                                   "keyWindow": NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "",
                                   "firstResponder": NSApp.keyWindow?.firstResponder.map { String(describing: type(of: $0)) } ?? ""]

@@ -76,11 +76,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let monitor = TmuxMonitor(hosts: app.hosts)
         app.monitor = monitor
         monitor.start()
+        app.sync.start { [weak app] in app?.window }
         app.restoreLayout()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         app.monitor?.stop()
+        app.sync.stop()
         app.saveLayout()
         for pane in app.panes { pane.close() }
     }
