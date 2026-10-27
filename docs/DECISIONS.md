@@ -141,3 +141,12 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   - Clicks were swallowed when the window wasn't key.
   - A dragged node lagged the cursor by the distance before the drag registered.
   - Slot order depended on dictionary order, so the layout changed between launches.
+- Real end to end test (orchestrator on the Mac, three built-in subagents and a PC worker through `ca run`, permission prompts approved by hand):
+  - Nodes, badges, flows, done and finished all behaved.
+  - Typing into a PC worker's card reached its tmux session, and a message to a subagent arrived as `@scout`.
+  - Relaunch reattached the orchestrator, and turning the hooks off left my own hook and permissions intact.
+- Measured, release build, real app, 8 to 14 nodes: idle 0.03% CPU average (0.2% max); `demo` busy 15.5% average (40% max) at 60 fps with dips to 48; back to 0.15% after it settled. The real app costs more than the demo window alone because the hidden pane grid, the monitors and the event followers run too.
+- Accepted as is:
+  - Turning hooks off re-serializes `settings.local.json` (sorted keys, pretty printed). Every value is kept, but the file isn't byte for byte the same.
+  - A message to a built-in subagent reaches it as coming from "user", since Claude Code routes `@name` that way.
+  - Claude's own trust dialog defaults to "No, exit", so answer it with the arrow keys rather than Enter.
