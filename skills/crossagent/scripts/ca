@@ -759,10 +759,10 @@ probe() {
 block() { [ -f "$MAP" ] && awk -v s="<!-- ca:$1 -->" -v e="<!-- /ca:$1 -->" '$0==s{f=1;next} $0==e{f=0} f' "$MAP" || true; }
 
 # projects file: name, path here, host (- for none), path there, Portal session, last
-# Portal status (tab separated). Rows from before there could be several hosts have 5
-# columns and were all for pc.
+# Portal status (tab separated). Rows from before there could be several hosts have 3 to 5
+# columns (name, path, path on pc...) and were all for pc.
 projects_rows() {
-  awk -F'\t' -v OFS='\t' 'NF == 5 { print $1, $2, "pc", $3, $4, $5; next } NF >= 6' "$CONF/projects" 2>/dev/null || true
+  awk -F'\t' -v OFS='\t' 'NF >= 6 { print; next } NF >= 3 { print $1, $2, "pc", $3, $4, $5 }' "$CONF/projects" 2>/dev/null || true
 }
 
 register_project() {  # host|- [session] [status]
@@ -898,7 +898,7 @@ for line in hosts.splitlines():
         reach, color = "", COLORS[k % len(COLORS)]
         k += 1
     else:
-        where = "%s, the machine that set up crossagent here" % hid
+        where = "%s (the machine that set up crossagent here)" % hid
         use = "for work that needs that machine."
         reach = (" %s can not reach %s unless the user sets that up (ca hosts add), so until then ca says so "
                  "and nothing runs." % (here, hid))
