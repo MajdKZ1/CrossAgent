@@ -314,8 +314,8 @@ def follow(root, since):
             del files[gone]
         first = False
         now = time.time()
-        if lines or now - last_beat > 10:
-            # A blank heartbeat line now and then, so a dead reader ends us.
+        if lines or now - last_beat > 2:
+            # A blank heartbeat line every 2 s, so a dead reader (the app quit) ends us quickly.
             out.write(b"".join(l + b"\n" for l in lines) if lines else b"\n")
             out.flush()
             last_beat = now

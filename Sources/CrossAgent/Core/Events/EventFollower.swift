@@ -26,7 +26,7 @@ final class EventFollower: @unchecked Sendable {
 
     static let backoff: [TimeInterval] = [2, 5, 15, 30]
     static let replayOnRestart: TimeInterval = 60
-    /// The follower prints a heartbeat every 10 s. Silence for this long means the link is dead.
+    /// The follower prints a heartbeat every 2 s. Silence for this long means the link is dead.
     static let silenceLimit: TimeInterval = 40
 
     /// `replay` seconds of history are sent on the first start, so a freshly opened
