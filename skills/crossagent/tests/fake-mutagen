@@ -1,0 +1,21 @@
+#!/bin/sh
+# Stand-in for mutagen in the offline tests. FAKE_MUTAGEN picks how it breaks:
+#   down (default)  the daemon never answers, every command fails
+#   create          the daemon answers, but sync create fails
+#   flush           sync create works (the session then exists), sync flush fails
+mode="${FAKE_MUTAGEN:-down}"
+state="${FAKE_MUTAGEN_STATE:-/nonexistent}"
+if [ "$mode" = down ]; then echo "Error: unable to connect to daemon: connection timed out" >&2; exit 1; fi
+case "$1 $2" in
+  "sync list")
+    [ $# -le 2 ] && exit 0
+    case "$3" in --*) exit 0 ;; esac
+    [ -e "$state/$3" ] && exit 0
+    echo "Error: unable to locate requested sessions" >&2; exit 1 ;;
+  "sync create")
+    [ "$mode" = create ] && { echo "Error: unable to create synchronization: unable to connect to beta: ssh failed" >&2; exit 1; }
+    for a; do case "$a" in --name=*) touch "$state/${a#--name=}" ;; esac; done; exit 0 ;;
+  "sync flush") echo "Error: unable to flush session: session is not connected" >&2; exit 1 ;;
+  "sync terminate") rm -f "$state/$3"; exit 0 ;;
+esac
+exit 0

@@ -561,11 +561,19 @@ sync_start() {
   need_mutagen
   [ $# -eq 0 ] || root_from "$1"
   [ "$ROOT" != "$HOME" ] || die "won't open a Portal on your whole home folder, run this in a project"
-  for h in ${PHOSTS:-$(ssh_hosts)}; do sync_start_one "$h" "$force"; done
+  for h in ${PHOSTS:-$(ssh_hosts)}; do
+    sync_start_one "$h" "$force" || { r=$?; [ "$r" != 10 ] || r=1; exit "$r"; }
+  done
 }
 
+# Last non empty line of mutagen's stderr, for messages.
+last_err() { printf '%s\n' "$1" | grep -v '^[[:space:]]*$' | tail -1; }
+
+# Opens (or reuses) the Portal to host $1. Returns 3 on conflicts and 10 when mutagen
+# itself fails (create, terminate or flush), after saying why, so init can fall back to a
+# push. Everything else (a folder there that isn't this project) dies.
 sync_start_one() {
-  local h="$1" force="$2" s pcd hash cur r t
+  local h="$1" force="$2" s pcd hash cur r t err
   s="$(sess "$h")"; pcd="$(host_dir "$h")" || exit 1; t="$(htarget "$h")"
   build_sync_args
   hash="$(printf '%s\n' "${SARGS[@]}" "$ROOT" "$pcd" | shasum | cut -c1-12)"
@@ -573,11 +581,11 @@ sync_start_one() {
     if [ "$cur" = "$hash" ]; then
       mutagen sync resume "$s" >/dev/null 2>&1 || true
       say "Portal $s already open"
-      sync_flush_one "$h"
-      return
+      ( sync_flush_one "$h" ) || { r=$?; [ "$r" = 3 ] && return 3; return 10; }
+      return 0
     fi
     say "Portal rules or paths changed, recreating $s (files stay where they are)"
-    mutagen sync terminate "$s" >/dev/null
+    err="$(mutagen sync terminate "$s" 2>&1 >/dev/null)" || { say "couldn't close $s: $(last_err "$err")"; return 10; }
   fi
   ensure_remote "$h"
   # Make the folder there (mutagen won't create parents) and refuse to merge into a folder
@@ -588,9 +596,12 @@ sync_start_one() {
     die "~/$pcd on $h already has files that aren't this project. Move them, set dir.$h= in .crossagent/project, or run 'ca portal start --force' to merge (conflicts get flagged, nothing is overwritten)"
   fi
   [ "$r" = ok ] || [ -n "$force" ] || die "couldn't prepare ~/$pcd on $h"
-  mutagen sync create --name="$s" --label="ca-cfg=$hash" "${SARGS[@]}" "$ROOT" "$t:~/$pcd" >/dev/null
+  if ! err="$(mutagen sync create --name="$s" --label="ca-cfg=$hash" "${SARGS[@]}" "$ROOT" "$t:~/$pcd" 2>&1 >/dev/null)"; then
+    say "couldn't open the Portal $s: $(last_err "$err")"
+    return 10
+  fi
   say "Crossover Portal open: $(tilde "$ROOT") <-> $h:~/$pcd ($s)"
-  sync_flush_one "$h"
+  ( sync_flush_one "$h" ) || { r=$?; [ "$r" = 3 ] && return 3; return 10; }
 }
 
 # ca portal flush [--host <id>]: every open Portal of this project, or the named ones.
@@ -616,11 +627,11 @@ flush_active() {
 
 # Waits for a full cycle. Exits non zero on conflicts or errors so nobody hands off stale or clashing files.
 sync_flush_one() {
-  local h="$1" s row word i; s="$(sess "$1")"
+  local h="$1" s row word i err; s="$(sess "$1")"
   sync_exists "$h" || die "no Portal for $NAME to $h, run: ca portal start --host $h"
   row="$(sync_rows "$s")"
   [ "$(echo "$row" | cut -f3)" = true ] && { sync_note "$h" paused; die "$s is paused, resume it with: mutagen sync resume $s"; }
-  mutagen sync flush "$s" >/dev/null 2>&1 || { sync_note "$h" "flush failed"; die "couldn't flush $s, is $h reachable? (ca portal status)"; }
+  err="$(mutagen sync flush "$s" 2>&1 >/dev/null)" || { sync_note "$h" "flush failed"; die "couldn't flush $s: $(last_err "$err") (is $h reachable? ca portal status)"; }
   # Flush can return while Mutagen is still rescanning (say right after a conflict is
   # resolved). Give transitional states (scanning, staging, reconciling...) up to ~10 s.
   for i in 1 2 3 4 5 6 7 8 9 10 11; do
@@ -1000,7 +1011,7 @@ else:
 init() {
   # Where the work goes: all hosts (default, Portal to every ssh host), this machine only (no
   # Portal), or one ssh host only (one-off push, no Portal).
-  local mode=all hs h
+  local mode=all hs h r
   if [ $# -gt 0 ]; then mode="$(resolve "$*")" || exit 1; fi
   [ "$mode" = all ] || mode="$(host_arg "$mode")" || exit 1
   mkdir -p "$ROOT/.crossagent"
@@ -1045,7 +1056,16 @@ init() {
   if [ -z "$(ssh_hosts)" ]; then say "no ssh hosts set up, so everything runs here on $HERE (add one with: ca hosts add <id> <ssh-target>)"
   elif [ -z "$hs" ]; then say "$HERE only: no Portal"
   elif [ "$mode" != all ]; then push "$mode"
-  elif have_mutagen && mutagen_up; then for h in $hs; do sync_start_one "$h" ""; done
+  elif have_mutagen && mutagen_up; then
+    for h in $hs; do
+      r=0; sync_start_one "$h" "" || r=$?
+      case "$r" in
+        0) ;;
+        3) exit 3 ;;
+        10) say "so no Portal to $h for now, falling back to a one-off push. Fix mutagen, then run: ca portal start"; push "$h" ;;
+        *) exit "$r" ;;
+      esac
+    done
   elif have_mutagen; then
     say "the Portal couldn't open, mutagen isn't working (${MUTAGEN_ERR:-no answer from its daemon}). Falling back to a one-off push"
     for h in $hs; do push "$h"; done

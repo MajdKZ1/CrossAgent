@@ -170,6 +170,18 @@ t "init with a broken mutagen still finishes" sh -c "[ $rc = 0 ] && grep -q '^re
 t "and says why, with mutagen's error" grep -qF "the Portal couldn't open, mutagen isn't working (Error: unable to connect to daemon: connection timed out). Falling back to a one-off push" "$T/enod"
 t "and pushed instead" cmp -s "$M/n.txt" "$FAKE_REMOTE/work/nodaemon/n.txt"
 dies "ca portal start says what's wrong" "mutagen isn't working: Error: unable to connect to daemon" sh -c "cd '$M' && '$CA' portal start"
+M2="$HOME/work/nocreate"; mkdir -p "$M2"; echo c > "$M2/c.txt"
+(cd "$M2" && FAKE_MUTAGEN=create "$CA" init) > "$T/ecre" 2>&1; rc=$?
+t "init when sync create fails still finishes" sh -c "[ $rc = 0 ] && grep -q '^ready: nocreate ' '$T/ecre' && cmp -s '$M2/c.txt' '$FAKE_REMOTE/work/nocreate/c.txt'"
+t "with mutagen's error and a note" sh -c "grep -qF \"couldn't open the Portal ca-nocreate: Error: unable to create synchronization: unable to connect to beta: ssh failed\" '$T/ecre' && grep -qF 'falling back to a one-off push. Fix mutagen, then run: ca portal start' '$T/ecre'"
+(cd "$M2" && FAKE_MUTAGEN=create "$CA" portal start) > "$T/ecre2" 2>&1; rc=$?
+t "ca portal start fails loudly on it" sh -c "[ $rc = 1 ] && grep -q \"couldn't open the Portal ca-nocreate: Error: unable to create\" '$T/ecre2'"
+M3="$HOME/work/noflush"; mkdir -p "$M3"; echo f > "$M3/f.txt"
+(cd "$M3" && FAKE_MUTAGEN=flush "$CA" init) > "$T/eflu" 2>&1; rc=$?
+t "init when the first flush fails still finishes" sh -c "[ $rc = 0 ] && grep -q '^ready: noflush ' '$T/eflu' && cmp -s '$M3/f.txt' '$FAKE_REMOTE/work/noflush/f.txt'"
+t "with mutagen's flush error" grep -qF "couldn't flush ca-noflush: Error: unable to flush session: session is not connected" "$T/eflu"
+(cd "$M3" && FAKE_MUTAGEN=flush "$CA" portal start) > /dev/null 2>&1; rc=$?
+t "ca portal start fails loudly on a flush error" test "$rc" = 1
 D="$HOME/work/-dash proj"; mkdir -p "$D"; echo d > "$D/d.txt"
 (cd "$D" && "$CA" init pc) > "$T/edash" 2>&1; rc=$?
 t "a folder starting with - works" sh -c "[ $rc = 0 ] && cmp -s '$D/d.txt' '$FAKE_REMOTE/work/-dash proj/d.txt'"

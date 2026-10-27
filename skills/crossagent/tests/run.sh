@@ -26,8 +26,9 @@ export PATH="$HOME/.local/bin:$PATH"
 cd "$T" || exit 1
 cp "$TESTS/fake-claude.py" "$HOME/.local/bin/claude"; chmod +x "$HOME/.local/bin/claude"
 cp "$TESTS/fake-ssh" "$HOME/.local/bin/ssh"; chmod +x "$HOME/.local/bin/ssh"
-# A mutagen whose daemon never answers, like one under a home path too long for its socket.
-printf '#!/bin/sh\necho "Error: unable to connect to daemon: connection timed out" >&2\nexit 1\n' > "$HOME/.local/bin/mutagen"; chmod +x "$HOME/.local/bin/mutagen"
+# By default a mutagen whose daemon never answers, like one under a home path too long for its socket.
+cp "$TESTS/fake-mutagen" "$HOME/.local/bin/mutagen"; chmod +x "$HOME/.local/bin/mutagen"
+export FAKE_MUTAGEN_STATE="$T/mutagen"; mkdir -p "$FAKE_MUTAGEN_STATE"
 ln -s "$BASH" "$HOME/.local/bin/bash"
 EV="$HOME/.crossagent/events"
 AP="$HOME/.crossagent/approvals"
