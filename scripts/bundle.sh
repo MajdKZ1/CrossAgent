@@ -15,6 +15,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/CrossAgent"
 # SwiftPM resource bundles (if any dependency ships one) sit next to the binary.
 for b in "$BIN_DIR"/*.bundle; do
+    case "$b" in *Tests.bundle) continue ;; esac
     [ -e "$b" ] && cp -R "$b" "$APP/Contents/Resources/"
 done
 # Static asset, never generated here. To update: iconutil -c icns assets/icon/CrossAgent.iconset -o assets/AppIcon.icns
