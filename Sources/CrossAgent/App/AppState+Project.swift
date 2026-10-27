@@ -159,7 +159,9 @@ extension AppState {
         return await Runner.run(CommandBuilder.oneShot(host: host, script: script), timeout: 30).status == 0
     }
 
-    /// Runs `ca sync start` for the project on this Mac. Output is stdout and stderr.
+    /// Opens the project's Crossover Portal with `ca sync start`, the command's old name.
+    /// It stays a permanent alias, so skills installed before the rename work too.
+    /// Output is stdout and stderr.
     /// The first connect to a fresh PC uploads Mutagen's agent, so it can take a minute.
     func startSync() async -> (ok: Bool, output: String) {
         guard let project else { return (false, "No project open") }

@@ -93,7 +93,7 @@ extension AppState {
     }
 
     /// Like `newPane`, but first makes sure the project folder exists on an ssh host.
-    /// If it does not, `folderPrompt` asks whether to start sync or use the home folder.
+    /// If it does not, `folderPrompt` asks whether to open a portal or use the home folder.
     func requestPane(hostID: String, mode: PaneMode, session: String?) {
         guard let project, let host = host(hostID), !host.isLocal else {
             newPane(hostID: hostID, mode: mode, session: session)
@@ -133,7 +133,7 @@ extension AppState {
                 self.folderPrompt = nil
                 self.newPane(hostID: prompt.host.id, mode: prompt.mode, session: prompt.session)
             } else {
-                prompt.phase = .failed(r.output.isEmpty ? "ca sync start failed" : r.output)
+                prompt.phase = .failed(r.output.isEmpty ? "ca portal start failed" : r.output)
                 self.folderPrompt = prompt
             }
         }
