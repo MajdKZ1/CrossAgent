@@ -4,7 +4,7 @@
 
 One window, every workstation. CrossAgent is a native macOS app that puts Claude Code (or a plain shell) on your Mac and on your Linux box side by side, in one grid of terminal panes. Remote panes go over plain `ssh`, and every pane lives in tmux on its own host, so closing the window never kills your work. Open it again and everything reattaches.
 
-Everything starts from a project folder. Everything lives in one window with tabs: **Panes** for your terminals, **Station** to see every session on both machines at once, **Orchestrator**, a live graph of Claude agents working on the project with a little blob named Puff keeping an eye on them, **Activity** for both machines' CPU, memory and temperatures, and a tab for any agent you open. A Claude Code skill splits work across the two machines for you, and the Crossover Portal keeps the project the same on both.
+Everything starts from a project folder, and each project gets its own window with tabs: **Panes** for your terminals, **Station** to see every session on both machines at once, **Orchestrator**, a live graph of Claude agents working on the project with a little blob named Puff keeping an eye on them, **Sessions** for every Claude Code session on both machines (even ones you started in Ghostty or over plain ssh), **Activity** with both machines added up as one Super-Max Computer, and a tab for any agent you open. A Claude Code skill splits work across the two machines for you, and the Crossover Portal keeps the project the same on both.
 
 <p align="center"><img src="docs/images/orchestrator.png" width="760" alt="Orchestrator mode: the orchestrator in the middle, agents on the Mac and the PC around it"></p>
 
@@ -36,17 +36,20 @@ On first launch it writes `~/.config/crossagent/hosts.json`:
 
 ## Projects
 
-CrossAgent opens on a welcome screen: hit **Open a project folder**, pick from your recent projects, or drop a folder on the window. `Cmd+O` and File > Open Recent work from anywhere, and the project name in the top bar is a switcher.
+CrossAgent opens on a welcome screen: hit **Open a project folder**, pick from your recent projects, or drop a folder on the window. `Cmd+O` and File > Open Recent work from anywhere, and so do the recents under the project name in the top bar.
 
 Once a project is open:
 
 - The top bar shows the project and its folder (click to reveal it in Finder). With the Portal open, it also shows where the project lives on the PC.
 - New panes start in the project folder on both machines: the Mac path locally, the mirrored path on the PC. If the folder isn't on the PC yet, CrossAgent offers to open the Portal or to open in your PC home folder instead.
-- Each project has its own tabs, panes, orchestrator and node positions, saved and restored on relaunch. Several projects can be open at once: the switcher (or `Cmd+O`) moves between them, switching back is instant with scrollback intact, and opening a project that's already open just switches to it.
+- Each project opens in its own window, like Xcode, with its own tabs, panes, orchestrator and node positions. Opening a project that's already open brings its window forward instead of making a second one, and the welcome window makes way for the first project.
+- The Window menu lists your project windows and ``Cmd+` `` cycles through them. Merge them into one window with Window > Merge All Windows if you like native tabs.
+- Quit and relaunch: every project that was open comes back in its own window, with its tabs, layout and window frame. Closing one window of several closes just that project (its tmux sessions keep running). Closing the last one quits, and it reopens next time.
+- The things that watch your machines (activity sampling, tmux status, session discovery, the Portal) are shared by all windows, so three windows don't cost three times as much.
 
 ## Tabs
 
-One window, one tab per thing you have open, like a browser: Panes, Station, Orchestrator, Activity, and agent chats. `Cmd+1` to `Cmd+9` jump to a tab, `Cmd+Shift+[` / `]` step through them, `Cmd+W` closes one, drag to reorder, middle click to close. Hidden tabs keep their terminals running, scrollback and all.
+Each project window has one tab per thing you have open, like a browser: Panes, Station, Orchestrator, Sessions, Activity, and agent chats. `Cmd+1` to `Cmd+9` jump to a tab, `Cmd+Shift+[` / `]` step through them, `Cmd+W` closes one, drag to reorder, middle click to close. Hidden tabs keep their terminals running, scrollback and all.
 
 Click an agent anywhere it shows up small (a node on the canvas, a station tile, a chip in the tab strip, an orb around Puff, a row in Activity) and its chat opens as a tab, or the existing tab comes forward:
 
@@ -75,7 +78,7 @@ Click an agent anywhere it shows up small (a node on the canvas, a station tile,
 - host, session name, and how long it's been running
 - status: running, idle, needs input (Claude is waiting on a prompt), or exited
 
-It also picks up `ca-*` sessions you didn't open from this window, like ones the skill started, ones from other projects, older `ca-<host>-<n>` sessions, or ones you made by hand. Click any tile (or arrow to it and press Enter) to jump in full size. Esc goes back. Claude Code processes running outside tmux show in a strip at the bottom so you know they exist, but you can't attach to them.
+It also picks up `ca-*` sessions you didn't open from this window, like ones the skill started, ones from other projects, older `ca-<host>-<n>` sessions, or ones you made by hand. Click any tile (or arrow to it and press Enter) to jump in full size. Esc goes back. Other Claude Code sessions in this project, the ones CrossAgent didn't start, show in a strip at the bottom. Click one to attach it (if it's in tmux) or watch it (see Sessions).
 
 ## Orchestrator
 
@@ -125,9 +128,27 @@ Puff is a soft, chunky, light blue blob with two dark leaning eyes. It sits on t
 
 Point at it and it watches the pointer. Poke it and it squishes, spins, wobbles or peeks, more wildly the faster you click. Click an orb to open that agent. It's drawn from vector paths that morph between shapes on Core Animation, so it's crisp at any size and costs next to nothing. Hide it with **Orchestrator > Show Mascot**.
 
+## Sessions
+
+The Sessions tab (View > Sessions) lists every Claude Code session on both machines, wherever it was started: a CrossAgent pane, a plain tmux session, Ghostty, Terminal, VS Code, or a plain ssh login on the PC. Recent ones that already ended are there too (the last 7 days). Each row shows the host, project, title or first prompt, status (running, waiting for input, idle, ended), how long it's been going, how many subagents it has and where it runs. By default you see the sessions for this window's project; flip **All projects** to see everything, grouped by project.
+
+Click one and it opens in a tab:
+
+- **In tmux** (any tmux session, not only `ca-*`): its terminal attaches right there.
+- **Running in another terminal**: a read only **Live view**. It follows the conversation as it happens (your prompts, Claude's replies, tool calls and results, with subagent work tagged), and the Agents toggle shows its subagents on the canvas, spawning, working and finishing just like the orchestrator's. The header says where it's really running, like "Watching, running in Ghostty". Another app owns that terminal, so you can't type into it from here.
+- **Ended**: the transcript, read only.
+
+**Continue here** resumes that exact conversation in a CrossAgent tmux pane on the same machine (`claude --resume <id>` in the same folder), so it survives from then on. If the original is still open, the button stays off and tells you to close it there first, so two copies don't write to the same conversation. CrossAgent never kills it for you. Once it's closed, the button wakes up by itself, or you can say you've closed it.
+
+The Orchestrator tab can show any of these sessions too: pick one at the top and its subagents become the nodes.
+
+How it works: Claude Code keeps a small file per running session (`~/.claude/sessions/<pid>.json`, with its session id, folder and status) and a transcript per session (`~/.claude/projects/<folder>/<id>.jsonl`, plus one file per subagent). CrossAgent only reads them. Where a session runs comes from walking its parent processes. The PC is scanned with one ssh command per poll, a Live view tails the files from where it left off (one ssh stream on the PC, not one per file), and nothing polls unless a Sessions list or Live view is on screen. Limits: it reads what this Claude Code version writes, so a future format change may need an update, and live status on ssh hosts needs Linux.
+
 ## Activity
 
-The Activity tab shows both machines side by side, and a compact Super-Max readout in the top bar (`16c/24t 23% · 30/64 GB`, both machines added up as one computer) opens it:
+The Activity tab opens with the **Super-Max Computer**: one card that adds both machines up as one, with a Mac half and a PC half linked by the portal ring. Cores and threads across both, combined CPU load (weighted by thread count), memory used of the combined total, each GPU with its load (the Mac's GPU with its unified memory, the PC's GeForce with its VRAM), storage free across both main drives, and the hottest spot with which machine it's on. It's honest about it: "Two machines working as one through CrossAgent". Specs are read on each machine at runtime, not hardcoded. A machine that drops off leaves the totals and stays dimmed with its last known specs.
+
+Below it, both machines side by side, and a compact Super-Max readout in the top bar (`16c/24t 23% · 30/64 GB`, both machines added up as one computer) opens it:
 
 - CPU in total and per core cluster (performance and efficiency on the Mac, every core on the PC), memory used with pressure, swap, and temperatures (the SoC, SSD and battery on the Mac, Tctl, the NVMe and the GPU on the PC), each with a sparkline of the last few minutes.
 - The `ca-*` sessions using the most CPU on each machine. Click one to open it.
@@ -175,7 +196,9 @@ Colours are hex: `#rrggbb`, or `#rrggbbaa` for see-through ones.
 
 | Keys | What it does |
 | --- | --- |
-| `Cmd+O` | Open a project |
+| `Cmd+O` | Open a project (or bring its window forward) |
+| ``Cmd+` `` | Next project window |
+| `Cmd+Shift+W` | Close the window (and its project) |
 | `Cmd+T` | New pane (last used host preselected, Enter to open) |
 | `Cmd+W` | Close the tab (in Panes: close the focused pane, its tmux session keeps running) |
 | `Cmd+1` ... `Cmd+9` | Go to tab by number |
@@ -267,7 +290,7 @@ the project has no Portal. Click it for the details and any other open Portals.
 
 ## How it works
 
-- SwiftUI app, one window. Terminals are [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) `LocalProcessTerminalView`s, each running a real PTY.
+- SwiftUI and AppKit app, one window per project. Terminals are [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) `LocalProcessTerminalView`s, each running a real PTY.
 - Local panes run `$SHELL -lc '<script>'`. Remote panes run `/usr/bin/ssh -tt <target> 'exec $SHELL -lc <script>'`, so your ssh config, keys and agent just work.
 - The script is `tmux new -A -s <session> claude` (or a shell), falling back to plain `claude` if tmux is missing.
 - ssh connections share one master per host (`ControlMaster`), so new panes skip the handshake.
