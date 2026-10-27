@@ -39,6 +39,31 @@ _ca_wrap_slug() {
   unset _ca_s
 }
 
+# This machine's host id, same rule as ca: CA_HERE, else the local entry in
+# ~/.config/crossagent/hosts.json, else mac on macOS and the hostname elsewhere.
+_ca_wrap_here() {
+  python3 -I -c '
+import json, os, re, sys
+ID = re.compile(r"[A-Za-z0-9_-]{1,40}\Z")
+h = os.environ.get("CA_HERE", "")
+if not ID.match(h):
+    h = ""
+    try:
+        with open(os.path.expanduser("~/.config/crossagent/hosts.json")) as f:
+            for e in json.load(f).get("hosts", []):
+                if isinstance(e, dict) and e.get("type") == "local" and ID.match(str(e.get("id", ""))):
+                    h = e["id"]
+                    break
+    except Exception:
+        pass
+if not h:
+    if sys.platform == "darwin":
+        h = "mac"
+    else:
+        h = re.sub(r"[^a-z0-9_]+", "-", os.uname().nodename.split(".")[0].lower()).strip("-")[:40] or "host"
+print(h)' 2>/dev/null || echo host
+}
+
 claude() {
   [ -n "${ZSH_VERSION:-}" ] && emulate -L sh
   local bin a name="" plain="" n i v val
@@ -89,8 +114,7 @@ claude() {
     return
   fi
   if [ -z "$name" ]; then
-    case "$(uname -s)" in Darwin) v=mac ;; *) v=pc ;; esac
-    v="ca-$(_ca_wrap_slug "$(basename "$PWD")")-${CA_HERE:-$v}-"
+    v="ca-$(_ca_wrap_slug "$(basename "$PWD")")-$(_ca_wrap_here)-"
     i=1
     while tmux ls -F '#S' 2>/dev/null | grep -qxF "$v$i"; do i=$((i + 1)); done
     name="$v$i"
@@ -98,10 +122,15 @@ claude() {
 
   # New sessions get the tmux server's environment, so hand over this shell's. Skip the
   # markers a running Claude Code sets for its own children, the new session is its own.
-  set -- -- "$bin" "$@"
+  # env runs claude directly: one command word alone would go through the shell.
+  set -- -- env "$bin" "$@"
   for v in $(env | sed -n 's/^\(ANTHROPIC_[A-Za-z0-9_]*\)=.*/\1/p; s/^\(CLAUDE_CODE_[A-Za-z0-9_]*\)=.*/\1/p' \
     | grep -vE '^CLAUDE_CODE_(ENTRYPOINT|EXECPATH|CHILD_SESSION|SESSION_|MESSAGING_|BRIDGE_|SSE_PORT)'); do
-    eval "val=\${$v-}"
+    # eval only ever sees a plain variable name that is really set (a line of a multi line
+    # value can look like NAME=... too).
+    case "$v" in ""|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_]*) continue ;; esac
+    eval "[ -n \"\${$v+x}\" ]" || continue
+    eval "val=\${$v}"
     set -- -e "$v=$val" "$@"
   done
   tmux new-session -d -s "$name" -c "$PWD" -e "PATH=$PATH" "$@" || return
