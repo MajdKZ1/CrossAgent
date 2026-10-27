@@ -20,7 +20,8 @@ struct NodeCardModel: Equatable {
 protocol CardEvents: AnyObject {
     func cardTapped(_ id: String)
     func cardAnswer(_ id: String)
-    func cardDragChanged(_ id: String)
+    /// `start` is where the press began, in the card's own coordinates.
+    func cardDragChanged(_ id: String, start: CGPoint)
     func cardDragEnded(_ id: String)
     func handleDragChanged(_ id: String)
     func handleDragEnded(_ id: String)
@@ -61,7 +62,7 @@ struct CardRoot: View {
             .onHover { hovering = $0 }
             .onTapGesture { events?.cardTapped(id) }
             .gesture(DragGesture(minimumDistance: 3)
-                .onChanged { _ in events?.cardDragChanged(id) }
+                .onChanged { v in events?.cardDragChanged(id, start: v.startLocation) }
                 .onEnded { _ in events?.cardDragEnded(id) })
             .frame(width: size.width, height: size.height)
     }

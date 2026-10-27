@@ -124,7 +124,10 @@ final class OrchestratorScene {
         let now = Date()
         var moved = false
         finishedIDs = Set(finished)
-        for node in nodes.values where node.kind != .orchestrator {
+        // Oldest first, so new nodes take the free slots in the order they spawned.
+        let incoming = nodes.values.filter { $0.kind != .orchestrator }
+            .sorted { ($0.startedAt, $0.id) < ($1.startedAt, $1.id) }
+        for node in incoming {
             if var item = items[node.id] {
                 if item.leave != nil {
                     // Came back before it was gone: put it back where it is now.

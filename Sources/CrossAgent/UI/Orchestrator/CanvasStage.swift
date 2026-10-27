@@ -349,24 +349,40 @@ final class CanvasStage: NSView, CardEvents {
 
     // MARK: - Card events
 
+    /// The pointer from the event being handled, so synthetic events work too; the
+    /// live cursor only as a fallback.
     private var mouse: CGPoint {
-        convert(window?.mouseLocationOutsideOfEventStream ?? .zero, from: nil)
+        if let e = NSApp.currentEvent, e.window === window, Self.mouseTypes.contains(e.type) {
+            return convert(e.locationInWindow, from: nil)
+        }
+        return convert(window?.mouseLocationOutsideOfEventStream ?? .zero, from: nil)
     }
+
+    private var optionHeld: Bool {
+        (NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags).contains(.option)
+    }
+
+    private static let mouseTypes: Set<NSEvent.EventType> = [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
 
     func cardTapped(_ id: String) { actions.expand(id) }
     func cardAnswer(_ id: String) { actions.answer(id) }
 
-    func cardDragChanged(_ id: String) {
+    func cardDragChanged(_ id: String, start: CGPoint) {
         let m = mouse
         if case .none = drag {
-            if NSEvent.modifierFlags.contains(.option) {
+            // Start from where the press began, not where the gesture kicked in, so
+            // nothing lags the cursor. `start` is relative to the card, which sits
+            // inside its hosting view's margin.
+            let local = CGPoint(x: start.x + OrchMetrics.margin.width, y: start.y + OrchMetrics.margin.height)
+            let pressed = cards[id].map { $0.convert(local, to: self) } ?? m
+            if optionHeld {
                 drag = .relay(id)
             } else if id == AgentGraph.orchestratorID {
                 // The orchestrator stays at the center; dragging it pans.
-                drag = .pan(m)
+                drag = .pan(pressed)
             } else {
-                let at = scene.position(of: id) ?? canvas(m)
-                let c = canvas(m)
+                let c = canvas(pressed)
+                let at = scene.position(of: id) ?? c
                 drag = .move(id, CGSize(width: at.x - c.x, height: at.y - c.y))
             }
         }
@@ -435,9 +451,18 @@ final class CanvasStage: NSView, CardEvents {
     }
 
     override func magnify(with e: NSEvent) {
-        scene.zoom(by: 1 + e.magnification, anchor: convert(e.locationInWindow, from: nil), viewSize: bounds.size)
+        zoom(by: 1 + e.magnification, at: convert(e.locationInWindow, from: nil))
+    }
+
+    /// Zooms keeping `point` (view coordinates) still. Pinch lands here, and so does
+    /// automation, since gesture events can't be synthesized.
+    func zoom(by factor: CGFloat, at point: CGPoint) {
+        scene.zoom(by: factor, anchor: point, viewSize: bounds.size)
         render(step: false)
     }
+
+    /// Clicks reach the canvas even when its window is not key.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 /// Wrapper whose bounds stay at its content's natural size while its frame follows
@@ -479,11 +504,11 @@ class ScaledView: NSView {
 
 /// One card. Its SwiftUI content is only replaced when the card's model changes.
 final class CardHost: ScaledView {
-    private let hosting: NSHostingView<CardRoot>
+    private let hosting: CardHostingView
     private var model: NodeCardModel?
 
     init(size: CGSize) {
-        hosting = NSHostingView(rootView: CardRoot(model: NodeCardModel(
+        hosting = CardHostingView(rootView: CardRoot(model: NodeCardModel(
             node: AgentNode(id: "", name: "", kind: .subagent, hostId: "", state: .idle, activity: "",
                             startedAt: .distantPast, updatedAt: .distantPast),
             hostLabel: "", accent: .clear, style: .live, target: false, relaying: false)))
@@ -500,6 +525,11 @@ final class CardHost: ScaledView {
         model = m
         hosting.rootView = CardRoot(model: m, events: events, orchestrator: orchestrator)
     }
+}
+
+/// Cards act on the first click even when their window is not key, like the canvas.
+final class CardHostingView: NSHostingView<CardRoot> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 /// The mascot in its own small hosting view, so its animation frames only update

@@ -8,6 +8,9 @@ import SwiftUI
 /// - CROSSAGENT_ORCH_DEMO_NODES=<n>: n nodes at once with data flowing all the time.
 /// - CROSSAGENT_ORCH_DEMO_SNAPSHOT=<path>: writes a PNG of the window every 3 s.
 ///   A `%d` in the path is replaced by a counter. The window opens behind others.
+/// - CROSSAGENT_ORCH_DEMO_POINTER=<path>: JSON array of pointer automation commands,
+///   each with an optional "wait" in seconds before it. {"log":"label"} prints the
+///   camera and node positions; {"snapshot":"path"} writes a PNG.
 enum OrchestratorDemo {
     private static var window: NSWindow?
     private static var driver: DemoDriver?
@@ -26,7 +29,8 @@ enum OrchestratorDemo {
         w.contentView = NSHostingView(rootView: root)
         w.center()
         let snapshot = env["CROSSAGENT_ORCH_DEMO_SNAPSHOT"]
-        if snapshot != nil { w.orderBack(nil) } else { w.makeKeyAndOrderFront(nil) }
+        // Automated runs stay behind other windows.
+        if snapshot != nil || env["CROSSAGENT_ORCH_DEMO_POINTER"] != nil { w.orderBack(nil) } else { w.makeKeyAndOrderFront(nil) }
         window = w
         self.driver = driver
 
@@ -38,6 +42,7 @@ enum OrchestratorDemo {
             driver.startScript()
         }
         if let snapshot { driver.startSnapshots(of: w, to: snapshot) }
+        if let pointer = env["CROSSAGENT_ORCH_DEMO_POINTER"] { driver.runPointerScript(pointer, in: w) }
     }
 }
 
@@ -57,6 +62,7 @@ private struct DemoRoot: View {
                 graph.nodes[id]?.activity = "Back at it"
             }))
             .frame(minWidth: 500, minHeight: 360)
+            .onChange(of: positions) { DemoDriver.log("positions \(DemoDriver.describe(positions))") }
     }
 }
 
@@ -164,6 +170,47 @@ private final class DemoDriver {
         let live = graph.others.filter { $0.state != .done }
         guard let node = live.randomElement() else { return }
         flow(node.id, Bool.random() ? .toNode : .toOrchestrator)
+    }
+
+    // MARK: - Pointer script
+
+    func runPointerScript(_ path: String, in window: NSWindow) {
+        guard let data = FileManager.default.contents(atPath: path),
+              let steps = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            Self.log("pointer script unreadable: \(path)")
+            return
+        }
+        Self.log("pointer script: \(steps.count) steps")
+        var at: TimeInterval = 0
+        for step in steps {
+            at += (step["wait"] as? NSNumber)?.doubleValue ?? 0.5
+            DispatchQueue.main.asyncAfter(deadline: .now() + at) {
+                if let label = step["log"] as? String {
+                    Self.logState(label, window)
+                } else if let out = step["snapshot"] as? String {
+                    Self.snapshot(window, to: out)
+                } else if let name = step["cmd"] as? String {
+                    Self.log("pointer \(name)")
+                    _ = PointerAutomation.handle(name, step)
+                }
+            }
+        }
+    }
+
+    private static func logState(_ label: String, _ window: NSWindow) {
+        guard let stage = PointerAutomation.stage(in: window.contentView) else {
+            log("state \(label): no canvas in window")
+            return
+        }
+        let cam = stage.scene.camera
+        let nodes = Dictionary(stage.scene.lastFrame.map { ($0.id, $0.position) }, uniquingKeysWith: { a, _ in a })
+        log(String(format: "state %@ pan=(%.1f, %.1f) zoom=%.3f nodes %@", label, cam.pan.width, cam.pan.height,
+                   cam.zoom, describe(nodes)))
+    }
+
+    static func describe(_ points: [String: CGPoint]) -> String {
+        points.keys.sorted().map { String(format: "%@=(%.0f, %.0f)", $0, points[$0]!.x, points[$0]!.y) }
+            .joined(separator: " ")
     }
 
     // MARK: - Snapshots
