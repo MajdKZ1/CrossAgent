@@ -8,7 +8,7 @@ struct OrchestratorModeView: View {
     var body: some View {
         Group {
             if let o = app.orch, let pane = app.orchestratorPane {
-                OrchestratorCanvas(orch: o, graph: o.graph, pane: pane)
+                ShownGraph(orch: o, pane: pane)
             } else {
                 StartCard(orch: app.orch)
             }
@@ -74,6 +74,16 @@ private struct StartCard: View {
 
 // MARK: - Canvas
 
+/// Follows `demoGraph`, so the demo swaps in and out of the canvas.
+private struct ShownGraph: View {
+    @ObservedObject var orch: ProjectOrchestrator
+    var pane: PaneSession
+
+    var body: some View {
+        OrchestratorCanvas(orch: orch, graph: orch.shown, pane: pane)
+    }
+}
+
 private struct OrchestratorCanvas: View {
     @EnvironmentObject private var app: AppState
     @ObservedObject var orch: ProjectOrchestrator
@@ -90,7 +100,8 @@ private struct OrchestratorCanvas: View {
                 expand: { app.expandNode($0) },
                 relay: { app.openNodeRelay(from: $0, to: $1) },
                 clearFinished: { app.clearFinishedAgents() },
-                answer: { app.answerNode($0) }))
+                answer: { app.answerNode($0) }),
+                showsClearFinished: orch.detail == nil && orch.relay == nil)
             if let id = orch.detail, let node = graph.nodes[id] {
                 Backdrop { app.closeDetail() }
                 NodeDetailCard(orch: orch, node: node)
@@ -282,7 +293,7 @@ private struct SubagentDetail: View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    section("Doing") {
+                    section(activityTitle) {
                         Text(activity)
                             .font(.system(size: 12))
                             .foregroundStyle(Palette.text.opacity(0.9))
@@ -334,6 +345,14 @@ private struct SubagentDetail: View {
         }
         .background(Palette.pane)
         .onAppear { focused = true }
+    }
+
+    private var activityTitle: String {
+        switch node.state {
+        case .done: return "Result"
+        case .error: return "Error"
+        default: return "Doing"
+        }
     }
 
     private var activity: String {

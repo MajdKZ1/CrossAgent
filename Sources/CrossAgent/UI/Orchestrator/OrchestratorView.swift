@@ -18,6 +18,8 @@ struct OrchestratorView: View {
     /// Where the user dragged nodes, canvas coordinates with the orchestrator at (0,0).
     @Binding var positions: [String: CGPoint]
     var actions = OrchestratorActions()
+    /// Off while the host shows a card over the canvas.
+    var showsClearFinished = true
 
     var body: some View {
         CanvasStageView(graph: graph, hosts: hosts, positions: $positions, actions: actions)
@@ -27,7 +29,7 @@ struct OrchestratorView: View {
     }
 
     @ViewBuilder private var clearButton: some View {
-        if !graph.finished.isEmpty {
+        if showsClearFinished && !graph.finished.isEmpty {
             Button {
                 actions.clearFinished()
             } label: {
