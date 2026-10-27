@@ -300,3 +300,15 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   - **More than two machines:** the card works for N machines, with a portal on each seam.
   - **CPU cost:** release build, 45 s runs. The Activity tab with Super-Max uses 2.4 to 2.6% of a core, against 2.2 to 2.4% for the Panes tab.
 - Concurrent test instances shared the bare binary's defaults domain and reopened each other's throwaway projects. Agents now test with a renamed copy of the binary, so each gets its own defaults domain.
+- Crossover Portal (M22), app part:
+  - **Ring states:**
+    - **Red:** a conflict or problem.
+    - **Amber:** paused, connecting, or scanning without moving files.
+    - **Soft pulse:** files crossing, either Mutagen staging or applying changes, or a sync cycle completed in the last 5 s. It's worked out on the existing 3 s poll, so there's no new timer.
+    - **Accent:** watching, in sync.
+    - **Dim:** no portal for this project.
+    - The pulse runs in the render server, and a steady ring costs nothing.
+  - **Indicator and popover:** a project window shows that project's portal. The welcome window shows the worst state across all portals. The popover names states in words ("In sync", "Files crossing", "Conflict in 1 file"), not Mutagen's raw status.
+  - **Narrow windows:** below 1100 pt the indicator drops its "Portal" label and keeps the ring.
+  - **Top bar readout:** the Super-Max readout replaces the old activity readout.
+  - **What stayed:** the app still calls `ca sync start`, the permanent alias, so older installs of the skill keep working. The `synced` theme token and the automation keys keep their names.
