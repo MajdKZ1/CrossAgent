@@ -95,9 +95,7 @@ enum CommandBuilder {
         case .local:
             return SpawnCommand(executable: localShell, args: ["-lc", s])
         case .ssh:
-            let remote = "exec $SHELL -lc " + shellQuote(s)
-            return SpawnCommand(executable: "/usr/bin/ssh",
-                                args: ["-tt"] + SSH.baseOptions + [host.target ?? host.id, remote])
+            return SSH.command(["-tt"] + SSH.baseOptions, host: host, remote: "exec $SHELL -lc " + shellQuote(s))
         }
     }
 
@@ -130,8 +128,8 @@ enum CommandBuilder {
         case .local:
             return SpawnCommand(executable: localShell, args: ["-lc", s])
         case .ssh:
-            return SpawnCommand(executable: "/usr/bin/ssh",
-                                args: ["-T", "-o", "BatchMode=yes"] + SSH.baseOptions + [host.target ?? host.id, "exec $SHELL -lc " + shellQuote(s)])
+            return SSH.command(["-T", "-o", "BatchMode=yes"] + SSH.baseOptions, host: host,
+                               remote: "exec $SHELL -lc " + shellQuote(s))
         }
     }
 
@@ -152,6 +150,19 @@ enum LocalShell {
 }
 
 enum SSH {
+    /// `/usr/bin/ssh <options> -- <target> <remote>`. The `--` ends option parsing, so a
+    /// target can never be read as an option, and a target `HostStore.isValidTarget`
+    /// refuses (hosts built in code skip `load`) never reaches ssh at all: the command
+    /// just fails with a message, like an unreachable host would.
+    static func command(_ options: [String], host: Host, remote: String) -> SpawnCommand {
+        let target = host.target ?? host.id
+        guard HostStore.isValidTarget(target) else {
+            return SpawnCommand(executable: "/bin/sh",
+                                args: ["-c", "echo \"ssh target for $1 isn't valid\" >&2; exit 255", "sh", host.id])
+        }
+        return SpawnCommand(executable: "/usr/bin/ssh", args: options + ["--", target, remote])
+    }
+
     /// Keepalive per spec, plus client side connection sharing. A fresh connect through
     /// a tunnel can take seconds; reusing a master takes well under one.
     static var baseOptions: [String] { options(controlPath: controlPath) }

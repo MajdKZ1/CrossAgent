@@ -110,4 +110,27 @@ final class HostsTests: XCTestCase {
         XCTAssertFalse(down.reachable)
         XCTAssertEqual(down.error, "ssh: connect to host box port 22: Connection refused")
     }
+
+    /// Hosts built in code skip `load`, so the command builder checks the target itself.
+    func testSSHCommandsEndOptionsAndRefuseBadTargets() {
+        let good = CrossAgent.Host(id: "box", name: "Box", type: .ssh, target: "me@box", accent: "")
+        for c in [CommandBuilder.command(host: good, mode: .shell, session: "ca-box-1"),
+                  CommandBuilder.oneShot(host: good, script: "true")] {
+            XCTAssertEqual(c.executable, "/usr/bin/ssh")
+            XCTAssertEqual(c.args[c.args.count - 3], "--")
+            XCTAssertEqual(c.args[c.args.count - 2], "me@box")
+        }
+        let evil = CrossAgent.Host(id: "evil", name: "Evil", type: .ssh, target: "-oProxyCommand=touch x", accent: "")
+        for c in [CommandBuilder.command(host: evil, mode: .shell, session: "ca-evil-1"),
+                  CommandBuilder.oneShot(host: evil, script: "true"),
+                  CommandBuilder.killCommand(host: evil, session: "ca-evil-1")] {
+            XCTAssertNotEqual(c.executable, "/usr/bin/ssh")
+            XCTAssertFalse(c.args.contains { $0.contains("ProxyCommand") })
+            let r = Runner.runSync(c, timeout: 5)
+            XCTAssertEqual(r.status, 255)
+            XCTAssertTrue(r.stderr.contains("isn't valid"), r.stderr)
+        }
+        let probe = HostProbe.command(target: "me@box")
+        XCTAssertEqual(probe.args[probe.args.count - 3], "--")
+    }
 }

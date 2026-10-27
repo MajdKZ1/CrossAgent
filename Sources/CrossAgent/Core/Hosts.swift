@@ -182,7 +182,7 @@ enum HostProbe {
         let script = CommandBuilder.pathPrefix + "command -v tmux; command -v claude; true"
         return SpawnCommand(executable: "/usr/bin/ssh",
                             args: ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"] + SSH.baseOptions
-                                + [target, "exec $SHELL -lc " + CommandBuilder.shellQuote(script)])
+                                + ["--", target, "exec $SHELL -lc " + CommandBuilder.shellQuote(script)])
     }
 
     static func parse(status: Int32, stdout: String, stderr: String) -> Result {
