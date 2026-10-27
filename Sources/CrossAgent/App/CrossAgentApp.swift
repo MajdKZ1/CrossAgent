@@ -137,6 +137,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.appearance = NSAppearance(named: .darkAqua)
         // CROSSAGENT_NO_ACTIVATE=1 keeps a test launch from stealing focus.
         if ProcessInfo.processInfo.environment["CROSSAGENT_NO_ACTIVATE"] != "1" { NSApp.activate(ignoringOtherApps: true) }
+        // Private dirs and the ssh socket dir, before anything runs ssh.
+        PrivateFiles.prepareAtLaunch()
         let windows = ProjectWindows.shared
         // Debug builds only: release builds carry no remote control channel at all.
         #if DEBUG
@@ -163,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         ProjectWindows.shared.monitor.stop()
         SyncMonitor.shared.stop()
-        // Synchronous, so no ssh sampler is left running on the PC after quit.
+        // Synchronous, so no ssh sampler is left running on a remote host after quit.
         ActivityMonitor.shared.shutdown()
         EventFollower.shutdownAll()
         SessionFeed.shutdownAll()

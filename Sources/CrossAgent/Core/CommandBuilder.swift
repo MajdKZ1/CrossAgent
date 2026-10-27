@@ -152,13 +152,66 @@ enum LocalShell {
 }
 
 enum SSH {
-    /// Keepalive per spec, plus client side connection sharing. The tunnel to the
-    /// PC costs about 5 s per fresh connect and under 1 s once a master exists.
-    static let baseOptions: [String] = [
-        "-o", "ServerAliveInterval=15",
-        "-o", "ServerAliveCountMax=3",
-        "-o", "ControlMaster=auto",
-        "-o", "ControlPath=/tmp/crossagent-%C",
-        "-o", "ControlPersist=10m",
-    ]
+    /// Keepalive per spec, plus client side connection sharing. A fresh connect through
+    /// a tunnel can take seconds; reusing a master takes well under one.
+    static var baseOptions: [String] { options(controlPath: controlPath) }
+
+    static func options(controlPath: String?) -> [String] {
+        var o = ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"]
+        if let controlPath {
+            o += ["-o", "ControlMaster=auto", "-o", "ControlPath=" + controlPath, "-o", "ControlPersist=10m"]
+        }
+        return o
+    }
+
+    /// Master sockets live in ~/.crossagent/ssh (0700), the same place the skill's
+    /// `ca` script uses, so both share one master per host. Written with `~` so ssh
+    /// expands it itself and a home dir with spaces still parses.
+    static let controlPathTemplate = "~/.crossagent/ssh/%C"
+
+    /// `%C` is a 40 char hash, and while it sets up a master ssh binds to the path plus
+    /// a 17 char random suffix. A Unix socket path holds 103 bytes, so the expanded
+    /// path must stay at or under 86.
+    static let maxControlPath = 103 - 17
+    static let hashLength = 40
+
+    /// The ControlPath for a home dir, or nil to go without connection sharing when even
+    /// the shortest choice would not fit (a very long home dir).
+    static func fittingControlPath(home: String) -> String? {
+        let expanded = home + "/.crossagent/ssh/" + String(repeating: "x", count: hashLength)
+        return expanded.utf8.count <= maxControlPath ? controlPathTemplate : nil
+    }
+
+    /// Worked out at launch: nil if the home dir is too long or the socket dir is not
+    /// private (`prepare`). ssh expands `~` from the passwd entry, not $HOME.
+    private(set) static var controlPath: String? = fittingControlPath(home: passwdHome ?? NSHomeDirectory())
+
+    static var passwdHome: String? {
+        guard let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir else { return nil }
+        return String(cString: dir)
+    }
+
+    /// The socket dir, made 0700 before any ssh runs.
+    static var socketDir: URL {
+        URL(fileURLWithPath: passwdHome ?? NSHomeDirectory(), isDirectory: true)
+            .appendingPathComponent(".crossagent/ssh", isDirectory: true)
+    }
+
+    /// Makes ~/.crossagent and ~/.crossagent/ssh private (0700, ours, not symlinks).
+    /// Called at launch, before any ssh runs. Without a private dir there is no sharing.
+    static func prepare() {
+        let root = socketDir.deletingLastPathComponent()
+        if controlPath == nil {
+            NSLog("CrossAgent: home dir is too long for an ssh control socket, connecting without sharing")
+            PrivateFiles.ensureDir(root)
+            return
+        }
+        for dir in [root, socketDir] {
+            if let p = PrivateFiles.ensureDir(dir) {
+                NSLog("CrossAgent: %@ is not private (%@), connecting without sharing", dir.path, "\(p)")
+                controlPath = nil
+                return
+            }
+        }
+    }
 }
