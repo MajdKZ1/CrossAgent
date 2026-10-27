@@ -186,3 +186,31 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   | PC NVMe | 36.85 °C | 36.9 °C |
   | PC GPU | nvidia-smi 42 °C | 42 °C |
   | Session test (a busy loop in a ca-* session) | about 100% | 99.9% on the Mac, 100% on the PC |
+- Tabs:
+  - One `Window` scene, so there's no File > New Window. The tab strip carries the traffic lights, the project switcher, the tabs, up to 5 agent chips (then a "+n" menu), Sync, the activity readout, broadcast, and a "+" menu.
+  - The old host chips and mode switch are gone. The cwd and PC path moved to the top of the switcher popover and the project name tooltip.
+  - Panes and Welcome can't be closed, so a project always has a tab. Cmd+W on Panes still closes the focused pane.
+  - Cmd+1..9 switch tabs. Pane focus moved to Ctrl+1..9, and pane cycling to Cmd+Option+[ / ].
+  - Only tabs with terminals (the pane grid and agent tabs) stay alive while hidden, so no terminal is ever recreated. Station, the canvas, Activity and Welcome are built only while selected, so they don't poll or animate in the background. The canvas camera resets when you leave its tab.
+  - Agent tabs dedupe by one canonical ref. A worker node becomes its tmux session. The orchestrator's session becomes the orchestrator node, which follows whatever host it runs on.
+  - A station tile whose session is already a pane in the grid maximizes that pane instead of opening a tab, to avoid two clients on one session in one window.
+  - Switching projects parks the current one with its panes, orchestrator, graph and followers still running, so switching back is instant and keeps scrollback. Broadcast turns off on a switch. Closing a project brings the most recent other open project forward.
+  - Relaunch reopens the last active project and its tabs, and the others go back to recents.
+  - Tabs open and close without animation, because a removal animation left a gap in the strip while the window was covered. Content fades in for 0.12 s, or not at all with Reduce Motion.
+  - The orchestrator demo and the mascot gallery are now dev only tabs and are never saved. No code opens an NSWindow or NSPanel any more, and the automation `windows` count stayed at 1 through a full dev run.
+- Native panes, compared by measurement with Terminal.app and Ghostty (screen capture wasn't allowed while you were using the screen):
+  - **Line height:** SwiftTerm makes a row ceil(ascent + descent + leading) tall, which is 16 pt for Menlo 13, where Terminal.app and Ghostty use 15. `TerminalAppearance` sets line spacing so rows land on the native height (Menlo 15, JetBrains Mono 13 gets 17 like Ghostty). Cell width already snapped to whole pixels.
+  - **Font:** the font list used "SFMono-Regular", which NSFont doesn't resolve, so every pane had silently fallen back to Menlo. Panes now use the system monospaced font (SF Mono) unless JetBrains Mono is installed.
+  - **Scrolling:** with tmux on the alternate screen and mouse off, the wheel became arrow keys, which in Claude Code cycled prompt history instead of scrolling. Each `ca-*` session now gets tmux `mouse on` (scoped per session, like `status off`). The pane forwards only wheel events, at 1/5 sensitivity because tmux scrolls 5 lines a step, so a trackpad tracks about 1:1. Clicks and drags stay local, so native selection works.
+  - **Typing after scrolling back:** this used to land in tmux copy mode. Now the next key first leaves copy mode, only when tmux's `[n/m]` marker is on the top row and a wheel up happened, so a stray `q` never reaches the app.
+  - **Cmd+K:** clears local scrollback and sends Ctrl+L so the app redraws. `tmux clear-history` runs 300 ms later, because tmux pushes the cleared screen into history.
+  - **Key equivalents:** Cmd+C/V/A/K/F/G/Shift+G are handled by the focused terminal's container and its key monitor, never by the global Shortcuts monitor. SwiftTerm's own handlers aren't open to subclass.
+  - **Find bar:** Cmd+F opens it. It searches the screen; in a tmux pane the history lives in tmux. Direction follows iTerm and Ghostty: typing finds the newest match, and Enter / Cmd+G go older.
+  - **Links and menus:** Cmd hover over a URL now shows the pointing hand (SwiftTerm already opened URLs and OSC 8 links). Right click has Copy, Paste, Select All, Find and Clear.
+  - **Pane chrome:** in a grid, a 24 pt header whose text sits at 55% until hovered or focused, buttons on hover only, and a 1 pt focus border. A solo or maximized pane has no header row and no border, sits edge to edge with 12 to 14 pt padding, and shows a small capsule at the top right on hover or exit. Reduce Motion makes the fades instant. The pane background is now the terminal's own background, which removed a band of a different colour around the terminal.
+  - **Not changed:** synchronized output (mode 2026). SwiftTerm supports it, but tmux 3.5 doesn't pass it to xterm style outer terminals, and the fix is a server wide tmux option.
+- Themes:
+  - Built in themes ship as JSON in the app bundle. User themes in `~/.config/crossagent/themes/*.json` are watched and apply as soon as you save. A broken file is skipped with a toast.
+  - `Palette` keeps its names, computed from the current theme. The window root re-renders on a change. Terminals are registered weakly and re-coloured and redrawn in place, including running Claude Code. Canvas cables and the sleep zzz re-colour on the theme notification.
+  - Optional per theme host colours override `hosts.json`.
+  - Default reproduces the earlier colours exactly.
