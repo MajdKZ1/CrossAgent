@@ -76,3 +76,19 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
 - Recovery: killing the transport's tunnel process got it back to watching on its own in 11 s. Turning Wi-Fi off for 30 s: Mutagen noticed after 10 s (ssh keepalive), reconnected about 20 s after Wi-Fi came back, and a file written while offline crossed in that first cycle.
 - After verification: the indicator now also starts polling when AppState gets its window. A launch without focus fires none of the occlusion, key or active notifications, so the Sync button never showed up. Read only PC calls (`__probe`, `__status`) no longer `mkdir` the project folder, so `ca init mac` leaves nothing on the PC.
 - Ignore patterns without a slash match at any depth (Mutagen works like gitignore), so `build`, `dist`, `target` and `id_*` also skip nested folders and files like `src/id_utils.py`. That's the safe side of the requested list. Use `sync_allow=` to let one back in.
+
+## Projects, Orchestrator mode and the mascot (M6 to M11)
+- Shared contracts first (`Core/Contracts.swift`): project slug, session names, the event line format and the agent graph. That let the project layer, the event pipeline, the canvas and the mascot be built in parallel without touching each other's files.
+- Session names are now `ca-<slug>-<host>-<task>`. The slug is the project folder name, lowercased, with a-z 0-9 and single dashes, cut to 16 chars, so names stay under tmux-friendly lengths. The orchestrator is `ca-<slug>-<host>-orch`. Old `ca-<host>-<task>` names are still parsed (`CASessionName.parse`), and the station lists any `ca-*` session as before.
+- Hooks were checked against the installed Claude Code 2.1.311 instead of the docs. The event list was taken from the binary, and real payloads were captured with a catch-all hook during a `claude -p` run that launched a subagent. What matters:
+  - Built-in subagents run in the background. The Agent tool's PostToolUse comes back in milliseconds with `agentId`. SubagentStart and SubagentStop carry `agent_id` and `agent_type`, and every tool call inside a subagent carries its `agent_id`.
+  - The subagent's name comes from the Agent tool input (`name`), not from SubagentStart.
+  - `Stop` lists still running subagents in `background_tasks`, which is where "Waiting on <names>" comes from.
+  - A finished subagent shows up in the parent as a `<task-notification>` UserPromptSubmit.
+- Project layer:
+  - The last open project reopens on launch. With none, the welcome screen shows. The old global `layout.v1` is no longer read, and its old sessions still show in the station.
+  - Per project state is a JSON file in `~/Library/Application Support/CrossAgent/projects/<slug>-<hash>.json`. It holds panes, mode, orchestrator host and session, node positions and finished nodes.
+  - Panes start in the project folder via `tmux new -c` (the PC gets `"$HOME/<rel>"` so its shell expands it) and carry `CROSSAGENT_PROJECT` (plus `CROSSAGENT_ROLE=orchestrator` for the orchestrator) via `-e`. cwd and env only apply when a session is created; reattaching keeps the old ones.
+  - The PC path uses the same rule as the skill's `pc_dir()`, and a unit test runs both against the real script.
+- tmux targets are now exact (`-t '=name'`, quoted because zsh expands `=word`). Before this, killing `ca-pc-1` after it had ended could hit `ca-pc-10` by prefix match.
+- Typing into a worker from the canvas attaches with `tmux attach -t '=name'` and never creates a session, so a stale node can't spawn an empty one.
