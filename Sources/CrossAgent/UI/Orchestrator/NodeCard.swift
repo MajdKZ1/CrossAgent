@@ -1,18 +1,77 @@
 import AppKit
 import SwiftUI
 
-/// What a card needs to draw. Equatable so moving a card each frame skips its body.
+/// What a card draws. The stage only hands a card a new root view when this changes,
+/// so moving cards around never touches SwiftUI.
 struct NodeCardModel: Equatable {
     var node: AgentNode
     var hostLabel: String
     var accent: Color
     var style: NodeStyle
+    /// A relay cable is hovering over this card.
     var target: Bool
-    var hovered: Bool
+    /// A relay cable is being dragged out of this card.
+    var relaying: Bool
+}
+
+/// What a card tells the stage. Locations come from the window, not the gesture, since
+/// the card itself moves while it is dragged.
+@MainActor
+protocol CardEvents: AnyObject {
+    func cardTapped(_ id: String)
+    func cardAnswer(_ id: String)
+    func cardDragChanged(_ id: String)
+    func cardDragEnded(_ id: String)
+    func handleDragChanged(_ id: String)
+    func handleDragEnded(_ id: String)
+}
+
+/// Root of a card's hosting view: the card centered in a slightly bigger box, with
+/// room for its name, the relay handle and the zzz.
+struct CardRoot: View {
+    var model: NodeCardModel
+    weak var events: CardEvents?
+    var orchestrator: Bool
+    @State private var hovering = false
+
+    init(model: NodeCardModel, events: CardEvents? = nil, orchestrator: Bool = false) {
+        self.model = model
+        self.events = events
+        self.orchestrator = orchestrator
+    }
+
+    static func size(orchestrator: Bool) -> CGSize {
+        let card = orchestrator ? OrchMetrics.orchestrator : OrchMetrics.card
+        return CGSize(width: card.width + 2 * OrchMetrics.margin.width, height: card.height + 2 * OrchMetrics.margin.height)
+    }
+
+    var body: some View {
+        let id = model.node.id
+        let size = Self.size(orchestrator: orchestrator)
+        NodeCard(model: model, onAnswer: { events?.cardAnswer(id) })
+            .overlay(alignment: .trailing) {
+                if (hovering || model.relaying) && model.style == .live {
+                    RelayHandle(accent: model.accent)
+                        .offset(x: 9.5)
+                        .gesture(DragGesture(minimumDistance: 1)
+                            .onChanged { _ in events?.handleDragChanged(id) }
+                            .onEnded { _ in events?.handleDragEnded(id) })
+                }
+            }
+            .onHover { hovering = $0 }
+            .onTapGesture { events?.cardTapped(id) }
+            .gesture(DragGesture(minimumDistance: 3)
+                .onChanged { _ in events?.cardDragChanged(id) }
+                .onEnded { _ in events?.cardDragEnded(id) })
+            .frame(width: size.width, height: size.height)
+    }
 }
 
 struct NodeCard: View, Equatable {
     var model: NodeCardModel
+    var onAnswer: () -> Void
+
+    static func == (a: NodeCard, b: NodeCard) -> Bool { a.model == b.model }
 
     private var node: AgentNode { model.node }
     private var isOrchestrator: Bool { node.kind == .orchestrator }
@@ -35,7 +94,7 @@ struct NodeCard: View, Equatable {
                     marker
                 }
             }
-            ActivityLine(node: node, accent: model.accent, large: isOrchestrator)
+            ActivityLine(node: node, large: isOrchestrator, onAnswer: onAnswer)
         }
         .padding(.horizontal, 11)
         .frame(width: size.width, height: size.height)
@@ -87,7 +146,7 @@ struct NodeCard: View, Equatable {
         case .needsInput: return (Palette.connecting.opacity(0.8), 1.5)
         case .error: return (Palette.danger.opacity(0.85), 1.5)
         case .working where model.style == .live: return (model.accent.opacity(0.4), 1)
-        default: return (model.hovered ? Color.white.opacity(0.16) : Palette.border, 1)
+        default: return (Palette.border, 1)
         }
     }
 
@@ -121,10 +180,9 @@ struct HostBadge: View {
 
 /// The one line under the badge: what the node is doing, or what it needs.
 private struct ActivityLine: View {
-    @Environment(\.answerAction) private var answer
     var node: AgentNode
-    var accent: Color
     var large: Bool
+    var onAnswer: () -> Void
 
     var body: some View {
         Group {
@@ -136,7 +194,7 @@ private struct ActivityLine: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Spacer(minLength: 0)
-                    Button("Answer") { answer(node.id) }
+                    Button("Answer", action: onAnswer)
                         .buttonStyle(AnswerButtonStyle())
                 }
             case .waiting(let names):
@@ -169,17 +227,6 @@ private struct AnswerButtonStyle: ButtonStyle {
     }
 }
 
-private struct AnswerActionKey: EnvironmentKey {
-    static let defaultValue: (String) -> Void = { _ in }
-}
-
-extension EnvironmentValues {
-    var answerAction: (String) -> Void {
-        get { self[AnswerActionKey.self] }
-        set { self[AnswerActionKey.self] = newValue }
-    }
-}
-
 /// Small dot on a card's edge: drag it onto another node to relay.
 struct RelayHandle: View {
     var accent: Color
@@ -208,6 +255,10 @@ struct PulseOutline: NSViewRepresentable {
 
     func updateNSView(_ v: PulseOutlineView, context: Context) {
         v.color = NSColor(color).cgColor
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: PulseOutlineView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions()
     }
 }
 
@@ -254,6 +305,10 @@ final class PulseOutlineView: NSView {
 struct SleepZ: NSViewRepresentable {
     func makeNSView(context: Context) -> SleepZView { SleepZView() }
     func updateNSView(_ v: SleepZView, context: Context) {}
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: SleepZView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions()
+    }
 }
 
 final class SleepZView: NSView {

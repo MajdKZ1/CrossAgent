@@ -124,13 +124,13 @@ final class ForceLayoutTests: XCTestCase {
         XCTAssertEqual(ForceLayout.edge(s, CGVector(dx: d, dy: d)), 50 / d, accuracy: 0.001)
     }
 
-    @MainActor func testCableSags() {
-        let c = CableRenderer.cable(from: .zero, CGSize(width: 100, height: 50), to: CGPoint(x: 400, y: 0),
+    func testCableSags() {
+        let c = CableGeometry.cable(from: .zero, CGSize(width: 100, height: 50), to: CGPoint(x: 400, y: 0),
                                     CGSize(width: 100, height: 50))!
         XCTAssertEqual(c.a.x, 50, accuracy: 0.001)
         XCTAssertEqual(c.b.x, 350, accuracy: 0.001)
         XCTAssertGreaterThan(c.point(at: 0.5).y, 0, "middle hangs below the ends")
-        XCTAssertNil(CableRenderer.cable(from: .zero, CGSize(width: 100, height: 50), to: CGPoint(x: 60, y: 0),
+        XCTAssertNil(CableGeometry.cable(from: .zero, CGSize(width: 100, height: 50), to: CGPoint(x: 60, y: 0),
                                          CGSize(width: 100, height: 50)), "overlapping boxes get no cable")
     }
 }

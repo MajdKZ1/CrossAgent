@@ -8,6 +8,8 @@ enum OrchMetrics {
     /// Room above a card for its name, and above the orchestrator for the mascot.
     static let label: CGFloat = 20
     static let mascot: CGFloat = 40
+    /// Extra room around a card's hosting view for the relay handle and the zzz.
+    static let margin = CGSize(width: 14, height: 30)
     static let finishedScale: CGFloat = 0.72
     static let finishedOpacity: CGFloat = 0.45
     /// How long a done node shows its check mark before it shrinks or leaves.
@@ -50,26 +52,31 @@ struct NodeVisual: Identifiable {
     var opacity: CGFloat
     var style: NodeStyle
     var leaving: Bool
-    /// 0...1, how brightly the cable glows from recent data.
-    var lit: CGFloat
 }
 
 struct SceneFrame {
-    var now: Date
     var camera: Camera
     var nodes: [NodeVisual]
-    var relay: (from: String, to: CGPoint)?
-    var dropTarget: String?
+    /// True while something still moves and another frame is needed.
+    var busy: Bool
+}
+
+/// Data started moving on a node's cable at `at`.
+struct FlowFlash {
+    var id: String
+    var flow: CableFlow
+    var at: Date
 }
 
 /// Everything that moves on the orchestrator canvas: the layout, spawn and leave
-/// animations, cable glow and the camera. The view asks for a frame on every tick of
-/// its TimelineView; `running` pauses that timeline whenever nothing is in flight.
+/// animations and the camera. The stage asks for a frame on each display refresh
+/// while `busy`, and not at all otherwise. Cable glow is not in here: the stage hands
+/// it to Core Animation, so data flowing on a still graph costs no frames.
 @MainActor
-final class OrchestratorScene: ObservableObject {
-    @Published private(set) var running = false
-    @Published private(set) var visible = true
-    @Published var camera = Camera()
+final class OrchestratorScene {
+    var camera = Camera()
+    /// Called when something starts moving and frames are needed again.
+    var onWake: (() -> Void)?
 
     private struct Leave {
         var at: Date
@@ -96,33 +103,26 @@ final class OrchestratorScene: ObservableObject {
     private var finishedIDs: Set<String> = []
     private var layout = ForceLayout(center: OrchMetrics.orchestratorFootprint)
     private var seeded = false
-    private var flowUntil = Date.distantPast
     private var lastTick: Date?
-    private var layoutMoving = false
     /// When the layout last had a reason to move. It freezes a while after that, so a
     /// slow creep can never keep the canvas awake.
     private var layoutKick = Date()
-    private var busy = false
-    private var settlePending = false
     private var wakeItem: DispatchWorkItem?
     private var cameraAnim: (from: Camera, to: Camera, at: Date)?
+    private var seenFlow: [String: Date] = [:]
+    private var flashes: [FlowFlash] = []
 
     private(set) var dragging: String?
-    /// Size of the canvas view, for turning gesture locations into canvas points.
-    private(set) var viewSize: CGSize = .zero
-    private var relay: (from: String, to: CGPoint)?
-    private var lastFrame: [NodeVisual] = []
-
-    private let logFPS = ProcessInfo.processInfo.environment["CROSSAGENT_ORCH_FPS"] == "1"
-    private var fpsFrames = 0
-    private var fpsStart = Date()
+    private(set) var lastFrame: [NodeVisual] = []
 
     // MARK: - Graph in
 
     /// Brings the scene in line with the graph. New nodes spawn from the orchestrator,
-    /// removed ones shrink back into it.
+    /// removed ones shrink back into it. Only wakes the frame loop when something has
+    /// to move; plain data changes just redraw the cards.
     func sync(nodes: [String: AgentNode], finished: [String], positions: [String: CGPoint]) {
         let now = Date()
+        var moved = false
         finishedIDs = Set(finished)
         for node in nodes.values where node.kind != .orchestrator {
             if var item = items[node.id] {
@@ -130,22 +130,30 @@ final class OrchestratorScene: ObservableObject {
                     // Came back before it was gone: put it back where it is now.
                     item.leave = nil
                     layout.add(id: node.id, size: OrchMetrics.footprint, pinnedAt: positions[node.id])
+                    moved = true
                 }
                 item.node = node
                 items[node.id] = item
             } else {
                 items[node.id] = Item(node: node, bornAt: seeded ? now : nil)
                 layout.add(id: node.id, size: OrchMetrics.footprint, pinnedAt: positions[node.id])
+                moved = true
             }
             if let p = positions[node.id], layout.body(node.id)?.position != p, dragging != node.id {
                 layout.pin(node.id, at: p)
+                moved = true
             }
-            if node.flow != .none, let at = node.flowAt {
-                flowUntil = max(flowUntil, at.addingTimeInterval(OrchMetrics.flowGlow))
+            if node.flow != .none, let at = node.flowAt, at != seenFlow[node.id] {
+                seenFlow[node.id] = at
+                if now.timeIntervalSince(at) < OrchMetrics.flowGlow {
+                    flashes.append(FlowFlash(id: node.id, flow: node.flow, at: at))
+                }
             }
         }
         for (id, item) in items where nodes[id] == nil && item.leave == nil {
             startLeaving(id, now: now)
+            seenFlow[id] = nil
+            moved = true
         }
         if !seeded {
             // Nodes that were already there when the canvas opened skip their entrance.
@@ -160,10 +168,18 @@ final class OrchestratorScene: ObservableObject {
                 if style == .finished { layout.setSize(id, OrchMetrics.finishedFootprint) }
             }
         }
-        updateStyles(now)
+        if updateStyles(now) { moved = true }
         scheduleStyleWake(now)
-        layoutKick = now
-        wake()
+        if moved {
+            layoutKick = now
+            wake()
+        }
+    }
+
+    /// Cable flashes since the last call, for the stage to animate.
+    func takeFlashes() -> [FlowFlash] {
+        defer { flashes = [] }
+        return flashes
     }
 
     private func targetStyle(_ node: AgentNode, now: Date) -> NodeStyle? {
@@ -206,9 +222,8 @@ final class OrchestratorScene: ObservableObject {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             let now = Date()
-            self.updateStyles(now)
+            if self.updateStyles(now) { self.wake() }
             self.scheduleStyleWake(now)
-            self.wake()
         }
         wakeItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + due.timeIntervalSince(now) + 0.02, execute: work)
@@ -230,31 +245,23 @@ final class OrchestratorScene: ObservableObject {
         style == .finished ? (OrchMetrics.finishedScale, OrchMetrics.finishedOpacity) : (1, 1)
     }
 
-    // MARK: - Running
+    // MARK: - Frames
 
-    func setVisible(_ v: Bool) {
-        guard v != visible else { return }
-        visible = v
-        if v { wake() }
-    }
-
-    /// Starts the timeline. It stops itself once everything has come to rest.
     func wake() {
-        busy = true
-        guard !running else { return }
         lastTick = nil
-        running = true
+        onWake?()
     }
 
-    /// Called from the view body on each tick. Steps the layout and builds the frame.
-    func frame(now: Date, size: CGSize) -> SceneFrame {
-        viewSize = size
-        let dt = lastTick.map { CGFloat(now.timeIntervalSince($0)) } ?? 1.0 / 60
-        lastTick = now
-        if running {
+    /// Steps the layout and builds the frame. `step` is false for a redraw that should
+    /// not advance the simulation (a pan while everything rests).
+    func frame(now: Date, step: Bool = true) -> SceneFrame {
+        var layoutMoving = false
+        if step {
+            let dt = lastTick.map { CGFloat(now.timeIntervalSince($0)) } ?? 1.0 / 60
+            lastTick = now
             layoutMoving = now.timeIntervalSince(layoutKick) < 8 && layout.step(dt)
+            if updateStyles(now) { scheduleStyleWake(now) }
         }
-        if updateStyles(now) { scheduleStyleWake(now) }
 
         var animating = false
         var visuals: [NodeVisual] = []
@@ -269,7 +276,7 @@ final class OrchestratorScene: ObservableObject {
                 visuals.append(NodeVisual(id: id, node: item.node,
                                           position: CGPoint(x: leave.from.x * (1 - e), y: leave.from.y * (1 - e)),
                                           scale: leave.scale + (0.2 - leave.scale) * e,
-                                          opacity: leave.opacity * (1 - e), style: item.style, leaving: true, lit: 0))
+                                          opacity: leave.opacity * (1 - e), style: item.style, leaving: true))
                 continue
             }
             guard let body = layout.body(id) else { continue }
@@ -300,7 +307,7 @@ final class OrchestratorScene: ObservableObject {
                 }
             }
             visuals.append(NodeVisual(id: id, node: item.node, position: p, scale: scale, opacity: opacity,
-                                      style: item.style, leaving: false, lit: Self.glow(item.node, now: now)))
+                                      style: item.style, leaving: false))
         }
 
         // Faded finished nodes underneath, then oldest to newest.
@@ -311,57 +318,21 @@ final class OrchestratorScene: ObservableObject {
         }
         lastFrame = visuals
 
-        var cam = camera
         if let anim = cameraAnim {
             let t = CGFloat(now.timeIntervalSince(anim.at) / 0.3)
             if t >= 1 {
                 cameraAnim = nil
-                cam = anim.to
-                DispatchQueue.main.async { [weak self] in self?.camera = anim.to }
+                camera = anim.to
             } else {
                 animating = true
                 let e = Ease.out(max(0, t))
-                cam = Camera(pan: CGSize(width: anim.from.pan.width + (anim.to.pan.width - anim.from.pan.width) * e,
-                                         height: anim.from.pan.height + (anim.to.pan.height - anim.from.pan.height) * e),
-                             zoom: anim.from.zoom + (anim.to.zoom - anim.from.zoom) * e)
+                camera = Camera(pan: CGSize(width: anim.from.pan.width + (anim.to.pan.width - anim.from.pan.width) * e,
+                                            height: anim.from.pan.height + (anim.to.pan.height - anim.from.pan.height) * e),
+                                zoom: anim.from.zoom + (anim.to.zoom - anim.from.zoom) * e)
             }
         }
 
-        busy = layoutMoving || animating || now < flowUntil || dragging != nil || relay != nil
-        if running && !busy && !settlePending {
-            settlePending = true
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.settlePending = false
-                if !self.busy {
-                    self.running = false
-                    if self.logFPS { FileHandle.standardError.write(Data("orch fps paused\n".utf8)) }
-                }
-            }
-        }
-        if logFPS && running { countFrame(now) }
-
-        let target = relay.flatMap { r in node(at: r.to).flatMap { $0 == r.from ? nil : $0 } }
-        return SceneFrame(now: now, camera: cam, nodes: visuals, relay: relay, dropTarget: target)
-    }
-
-    private func countFrame(_ now: Date) {
-        fpsFrames += 1
-        let span = now.timeIntervalSince(fpsStart)
-        if span >= 1 {
-            let line = String(format: "orch fps %.0f nodes %d\n", Double(fpsFrames) / span, items.count)
-            FileHandle.standardError.write(Data(line.utf8))
-            fpsFrames = 0
-            fpsStart = now
-        }
-    }
-
-    static func glow(_ node: AgentNode, now: Date) -> CGFloat {
-        guard node.flow != .none, let at = node.flowAt else { return 0 }
-        let age = now.timeIntervalSince(at)
-        guard age >= 0, age < OrchMetrics.flowGlow else { return 0 }
-        let t = CGFloat(age / OrchMetrics.flowGlow)
-        return 1 - t * t
+        return SceneFrame(camera: camera, nodes: visuals, busy: layoutMoving || animating || dragging != nil)
     }
 
     // MARK: - Interaction
@@ -384,26 +355,15 @@ final class OrchestratorScene: ObservableObject {
 
     func drag(_ id: String, to p: CGPoint) {
         guard items[id]?.leave == nil else { return }
+        let start = dragging == nil
         dragging = id
         layout.pin(id, at: p)
         layoutKick = Date()
-        wake()
+        if start { wake() }
     }
 
     func endDrag() {
         dragging = nil
-    }
-
-    func relayDrag(from id: String, to p: CGPoint) {
-        relay = (id, p)
-        wake()
-    }
-
-    /// Ends a relay drag and returns the node it was dropped on, if any.
-    func endRelay() -> (from: String, to: String)? {
-        defer { relay = nil }
-        guard let r = relay, let to = node(at: r.to), to != r.from else { return nil }
-        return (r.from, to)
     }
 
     func recenter() {
@@ -419,6 +379,12 @@ final class OrchestratorScene: ObservableObject {
         let ax = anchor.x - viewSize.width / 2, ay = anchor.y - viewSize.height / 2
         camera = Camera(pan: CGSize(width: ax - (ax - camera.pan.width) * k, height: ay - (ay - camera.pan.height) * k),
                         zoom: z)
+    }
+
+    func pan(by d: CGSize) {
+        cameraAnim = nil
+        camera.pan.width += d.width
+        camera.pan.height += d.height
     }
 }
 
