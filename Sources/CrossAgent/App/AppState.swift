@@ -145,6 +145,7 @@ final class AppState: ObservableObject {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.tabbingMode = .disallowed
+        sync.updateLoop()
         // Clicks into a terminal make it first responder; follow that to move pane focus.
         responderObservation = window.observe(\.firstResponder, options: [.new]) { [weak self] win, _ in
             DispatchQueue.main.async { self?.noteFirstResponder(win.firstResponder) }

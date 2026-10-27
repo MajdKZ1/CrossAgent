@@ -193,7 +193,9 @@ final class SyncMonitor: ObservableObject {
         return w.isVisible && w.occlusionState.contains(.visible)
     }
 
-    private func updateLoop() {
+    /// Also called when AppState gets its window, since a launch without focus
+    /// fires none of the notifications above.
+    func updateLoop() {
         if windowVisible {
             guard loop == nil else { return }
             loop = Task { [weak self] in
