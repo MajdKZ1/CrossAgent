@@ -78,6 +78,8 @@ def tool_summary(tool, inp):
         to = inp.get("to") or inp.get("recipient") or "someone"
         what = inp.get("summary") or inp.get("message") or ""
         return "Messaging " + str(to) + (": " + str(what) if what else "")
+    if tool == "SubagentHandback":
+        return "Reporting back"
     if tool in ("TodoWrite", "TaskCreate", "TaskUpdate"):
         return "Updating the todo list"
     if tool.startswith("mcp__"):
@@ -138,6 +140,10 @@ def make_event(d):
             put("prompt", clip_lines(inp.get("command"), 300))
         elif tool == "SendMessage":
             put("to", clip(inp.get("to") or inp.get("recipient"), 60))
+            put("prompt", clip_lines(inp.get("message"), 300))
+        elif tool == "SubagentHandback":
+            # A teammate style subagent's final report; its Stop message can be empty.
+            put("prompt", clip_lines(inp.get("message"), 300))
 
     if ev == "UserPromptSubmit":
         p = str(d.get("prompt") or "")
