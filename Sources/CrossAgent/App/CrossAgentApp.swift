@@ -79,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         app.monitor = monitor
         monitor.start()
         app.sync.start { [weak app] in app?.window }
-        app.restoreLayout()
+        app.restoreLastProject()
     }
 
     func applicationWillTerminate(_ notification: Notification) {

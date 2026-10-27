@@ -2,6 +2,8 @@ import AppKit
 import Combine
 import SwiftUI
 
+enum AppMode: String, Codable { case panes, station, orchestrator }
+
 /// Everything the window shows: panes, focus, broadcast, layout persistence.
 @MainActor
 final class AppState: ObservableObject {
@@ -15,7 +17,26 @@ final class AppState: ObservableObject {
     @Published var focusedID: UUID?
     @Published var maximizedID: UUID?
     @Published private(set) var broadcast = false
-    @Published var showStation = false
+    /// The open project. Set it through `openProject` / `closeProject`.
+    @Published var project: Project?
+    /// Which view the window shows. Saved with the project.
+    @Published var mode: AppMode = .panes {
+        didSet {
+            if mode == .station, oldValue != .station { modeBeforeStation = oldValue }
+            if mode != oldValue { saveLayout() }
+        }
+    }
+    var modeBeforeStation: AppMode = .panes
+    /// The project's orchestrator Claude. Not in `panes`, the canvas shows it.
+    @Published var orchestratorPane: PaneSession?
+    /// Last orchestrator host and session, kept when it is stopped so the project remembers.
+    var orchestratorInfo: OrchestratorState?
+    /// Canvas node positions and finished nodes, saved with the project. Not published;
+    /// the canvas owns them and calls `saveLayout()` when they change.
+    var nodePositions: [String: CGPoint] = [:]
+    var finishedNodes: [AgentNode] = []
+    /// True while a project's state is loading, so partial state is not saved.
+    var isRestoring = false
     @Published var lastHostID: String
     /// Short lived message shown at the bottom of the window.
     @Published var toast: String?
@@ -28,15 +49,25 @@ final class AppState: ObservableObject {
     @Published private(set) var paneStateVersion = 0
     private var stateWatchers: [UUID: AnyCancellable] = [:]
 
-    private static let layoutKey = "layout.v1"
     private static let lastHostKey = "lastHostID"
 
-    init(hosts: [Host] = HostStore.load()) {
+    let store: ProjectStore
+
+    init(hosts: [Host] = HostStore.load(), store: ProjectStore = ProjectStore()) {
+        self.store = store
         self.hosts = hosts
         lastHostID = UserDefaults.standard.string(forKey: Self.lastHostKey) ?? hosts.first?.id ?? "mac"
     }
 
     func host(_ id: String) -> Host? { hosts.first { $0.id == id } }
+
+    /// The station is one of the modes. Turning it off goes back to the mode before it.
+    var showStation: Bool {
+        get { mode == .station }
+        set {
+            if newValue { mode = .station } else if mode == .station { mode = modeBeforeStation == .station ? .panes : modeBeforeStation }
+        }
+    }
 
     var focused: PaneSession? { panes.first { $0.id == focusedID } }
 
@@ -52,20 +83,25 @@ final class AppState: ObservableObject {
 
     // MARK: Panes
 
-    /// Opens a pane. A nil or empty session name picks the next free `ca-<host>-<n>`.
+    /// Opens a pane in the open project's folder. A nil or empty session name picks the
+    /// next free `ca-<slug>-<host>-<n>`. Nil when no project is open.
     @discardableResult
     func newPane(hostID: String? = nil, mode: PaneMode = .claude, session: String? = nil, taken: Set<String> = []) -> PaneSession? {
+        guard let project else {
+            flash("Open a project first")
+            return nil
+        }
         guard let host = host(hostID ?? lastHostID) ?? hosts.first else { return nil }
         let name: String
         if let s = session?.trimmingCharacters(in: .whitespaces), !s.isEmpty {
             guard SessionName.isValid(s) else {
-                flash("Session names are letters, digits, - and _ (max 40)")
+                flash("Session names are letters, digits, - and _ (max 64)")
                 return nil
             }
             name = s
         } else {
             // Before the monitor has heard from this host we don't know its sessions,
-            // and `tmux new -A` would silently attach to an existing ca-<host>-1. Ask first.
+            // and `tmux new -A` would silently attach to an existing session. Ask first.
             if let monitor, !monitor.hasPolled(host: host) {
                 Task { [weak self] in
                     let r = await Runner.run(CommandBuilder.oneShot(host: host, script: "tmux ls -F '#{session_name}' 2>/dev/null || true"))
@@ -80,26 +116,42 @@ final class AppState: ObservableObject {
             focus(existing.id)
             return existing
         }
-        let pane = PaneSession(host: host, mode: mode, session: name)
-        wire(pane)
-        track(pane)
-        panes.append(pane)
+        let pane = PaneSession(host: host, mode: mode, session: name, cwd: project.cwd(for: host),
+                               env: projectEnv(project))
+        adopt(pane)
         lastHostID = host.id
         UserDefaults.standard.set(host.id, forKey: Self.lastHostKey)
-        pane.start()
         focus(pane.id)
         saveLayout()
         monitor?.refreshNow()
         return pane
     }
 
+    /// Next free `ca-<slug>-<host>-<n>`, or "" with no project open.
     func nextSessionName(host: Host, taken: Set<String> = []) -> String {
-        let used = Set(panes.filter { $0.host.id == host.id }.map(\.session))
+        guard let project else { return "" }
+        var used = Set(panes.filter { $0.host.id == host.id }.map(\.session))
             .union(taken)
             .union(monitor?.sessionNames(host: host) ?? [])
-        var n = 1
-        while used.contains("ca-\(host.id)-\(n)") { n += 1 }
-        return "ca-\(host.id)-\(n)"
+        if let o = orchestratorPane, o.host.id == host.id { used.insert(o.session) }
+        return SessionName.nextFree(slug: project.slug, host: host.id, used: used)
+    }
+
+    /// Adds a pane to the grid and starts it. Does not focus or save.
+    func adopt(_ pane: PaneSession) {
+        wire(pane)
+        track(pane)
+        panes.append(pane)
+        pane.start()
+    }
+
+    /// Closes every pane's client and empties the grid. tmux sessions keep running.
+    func closeAllPanes() {
+        for pane in panes { pane.close() }
+        panes = []
+        stateWatchers = [:]
+        focusedID = nil
+        maximizedID = nil
     }
 
     /// Closes the pane's client. Its tmux session keeps running.
@@ -264,36 +316,6 @@ final class AppState: ObservableObject {
             try? await Task.sleep(for: .seconds(2.2))
             if !Task.isCancelled { self?.toast = nil }
         }
-    }
-
-    // MARK: Layout persistence
-
-    struct SavedPane: Codable, Equatable {
-        var hostId: String
-        var mode: PaneMode
-        var session: String
-    }
-
-    func saveLayout() {
-        let saved = panes.map { SavedPane(hostId: $0.host.id, mode: $0.mode, session: $0.session) }
-        if let data = try? JSONEncoder().encode(saved) {
-            UserDefaults.standard.set(data, forKey: Self.layoutKey)
-        }
-    }
-
-    /// Reopens the saved panes, which reattaches their tmux sessions.
-    func restoreLayout() {
-        guard panes.isEmpty,
-              let data = UserDefaults.standard.data(forKey: Self.layoutKey),
-              let saved = try? JSONDecoder().decode([SavedPane].self, from: data) else { return }
-        for s in saved where host(s.hostId) != nil && SessionName.isValid(s.session) {
-            let pane = PaneSession(host: host(s.hostId)!, mode: s.mode, session: s.session)
-            wire(pane)
-            track(pane)
-            panes.append(pane)
-            pane.start()
-        }
-        if let first = panes.first { focus(first.id) }
     }
 
     /// Opens an ssh master per remote host in the background so the first pane opens fast.
