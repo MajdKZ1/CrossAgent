@@ -1,16 +1,22 @@
 import SwiftUI
 
-/// Both machines side by side: CPU, memory, temperatures and the busiest sessions.
+/// The Super-Max card on top, then both machines side by side: CPU, memory,
+/// temperatures and the busiest sessions.
 struct ActivityTab: View {
     @EnvironmentObject private var app: AppState
     @ObservedObject private var monitor = ActivityMonitor.shared
 
     var body: some View {
         ScrollView {
-            HStack(alignment: .top, spacing: 14) {
-                ForEach(monitor.hosts) { h in
-                    HostColumn(host: h) { name in app.openAgent(.session(host: h.hostId, name: name)) }.equatable()
-                        .frame(minWidth: 300, maxWidth: .infinity)
+            VStack(spacing: 14) {
+                if monitor.hosts.count > 1 {
+                    SuperMaxCard(model: SuperMax(hosts: monitor.hosts)).equatable()
+                }
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(monitor.hosts) { h in
+                        HostColumn(host: h) { name in app.openAgent(.session(host: h.hostId, name: name)) }.equatable()
+                            .frame(minWidth: 300, maxWidth: .infinity)
+                    }
                 }
             }
             .padding(18)
