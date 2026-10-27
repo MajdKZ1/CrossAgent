@@ -4,6 +4,7 @@ import SwiftUI
 struct StationView: View {
     @ObservedObject var monitor: TmuxMonitor
     @EnvironmentObject var app: AppState
+    @ObservedObject private var discovery = SessionDiscovery.shared
 
     @State private var hoveredID: String?
     @State private var selectedID: String?
@@ -27,7 +28,7 @@ struct StationView: View {
                 .onAppear { columns = Self.columnCount(geo.size.width) }
                 .onChange(of: geo.size.width) { _, w in columns = Self.columnCount(w) }
             }
-            externalStrip
+            sessionsStrip
         }
         .background(Palette.window)
         .focusable()
@@ -45,6 +46,7 @@ struct StationView: View {
             DispatchQueue.main.async { focused = true }
         }
         .onDisappear { monitor.setActive(false) }
+        .modifier(DiscoveryViewer())
     }
 
     // MARK: Items
@@ -121,43 +123,35 @@ struct StationView: View {
         .padding(.vertical, 60)
     }
 
-    @ViewBuilder private var externalStrip: some View {
-        let ext = app.hosts.flatMap { monitor.external[$0.id] ?? [] }
-        if !ext.isEmpty {
-            HStack(spacing: Palette.gap) {
-                Text("Outside tmux")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Palette.faint)
-                    .padding(.leading, 4)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: Palette.gap) {
-                        ForEach(ext) { e in externalChip(e) }
+    /// Live Claude sessions in this project that aren't CrossAgent tiles already
+    /// (Ghostty, Terminal, plain tmux, ssh ...). Same click as in the Sessions tab.
+    @ViewBuilder private var sessionsStrip: some View {
+        let live = discovery.sessions.filter { $0.isRunning && $0.launcher != .crossAgent && app.sessionInProject($0) }
+        if !live.isEmpty {
+            let shown = live.prefix(Self.stripMax)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 7) {
+                    Text("Other Claude sessions here")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Palette.faint)
+                    Spacer()
+                    Button(live.count > shown.count ? "All \(live.count)" : "Sessions") { app.open(.sessions) }
+                        .buttonStyle(ChromeButtonStyle())
+                }
+                .padding(.horizontal, 4)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: Palette.gap)], spacing: 0) {
+                    ForEach(Array(shown)) { s in
+                        ClaudeSessionRow(session: s, host: app.host(s.hostId), now: Date(), compact: true) { app.openClaudeSession(s) }
+                            .contextMenu { SessionMenu(session: s) }
                     }
                 }
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Palette.pane))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Palette.border, lineWidth: 1))
             }
-            .frame(height: 30)
         }
     }
 
-    private func externalChip(_ e: ExternalClaude) -> some View {
-        let host = app.host(e.hostId)
-        return HStack(spacing: 6) {
-            Dot(color: host.map(Palette.accent) ?? Palette.muted, size: 6)
-            Text(host?.name ?? e.hostId).foregroundStyle(Palette.muted)
-            Text(verbatim: "pid \(e.pid)").foregroundStyle(Palette.text)
-            if let cwd = e.cwd {
-                Text(Self.abbreviate(cwd)).foregroundStyle(Palette.muted).lineLimit(1).truncationMode(.head)
-                    .frame(maxWidth: 220, alignment: .leading)
-            }
-            Text(StationTile.format(e.elapsed)).foregroundStyle(Palette.faint)
-        }
-        .font(.system(size: 11))
-        .padding(.horizontal, 9)
-        .frame(height: 24)
-        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Palette.pane))
-        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Palette.border, lineWidth: 1))
-        .help("Claude Code not running in a ca-* tmux session, so it cannot be attached")
-    }
+    private static let stripMax = 4
 
     // MARK: Actions
 
@@ -192,9 +186,5 @@ struct StationView: View {
     private static func shortError(_ s: String?) -> String {
         let line = (s ?? "no response").split(separator: "\n").last.map(String.init) ?? "no response"
         return line.count > 120 ? String(line.prefix(120)) + "..." : line
-    }
-
-    private static func abbreviate(_ path: String) -> String {
-        path.replacingOccurrences(of: #"^/(Users|home)/[^/]+"#, with: "~", options: .regularExpression)
     }
 }

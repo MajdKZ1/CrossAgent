@@ -7,14 +7,106 @@ struct OrchestratorModeView: View {
 
     var body: some View {
         Group {
-            if let o = app.orch, let pane = app.orchestratorPane {
+            if let pick = app.orchestratorSessionPick, let ref = SessionPick(pick) {
+                SessionCanvas(hostId: ref.host, sessionId: ref.sessionId).id(pick)
+            } else if let o = app.orch, let pane = app.orchestratorPane {
                 ShownGraph(orch: o, pane: pane)
             } else {
                 StartCard(orch: app.orch)
             }
         }
+        .overlay(alignment: .topLeading) { GraphPicker() }
         .background(Palette.window)
         .clipShape(RoundedRectangle(cornerRadius: Palette.radius, style: .continuous))
+        .modifier(DiscoveryViewer())
+    }
+}
+
+// MARK: - Session picker
+
+/// "host:sessionId" split up.
+private struct SessionPick {
+    var host: String
+    var sessionId: String
+
+    init?(_ id: String) {
+        guard let i = id.firstIndex(of: ":") else { return nil }
+        host = String(id[..<i])
+        sessionId = String(id[id.index(after: i)...])
+    }
+}
+
+/// Swaps the canvas between the project's orchestrator and any live Claude session in
+/// this project. Only there when there's something to pick.
+private struct GraphPicker: View {
+    @EnvironmentObject private var app: AppState
+    @ObservedObject private var discovery = SessionDiscovery.shared
+
+    var body: some View {
+        let live = discovery.sessions.filter { $0.isRunning && app.sessionInProject($0) }
+        let pick = app.orchestratorSessionPick
+        if !live.isEmpty || pick != nil {
+            Menu {
+                Button("This project's orchestrator") { app.orchestratorSessionPick = nil }
+                if !live.isEmpty { Divider() }
+                ForEach(live) { s in
+                    Button("\(AppState.shortTitle(s.title))  (\(app.host(s.hostId)?.name ?? s.hostId))") {
+                        app.orchestratorSessionPick = s.id
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 10))
+                    Text(label(pick)).lineLimit(1)
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.visible)
+            .fixedSize()
+            .buttonStyle(ChromeButtonStyle())
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(Palette.text.opacity(0.85))
+            .padding(.horizontal, 9)
+            .frame(height: 24)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Palette.raised))
+            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Palette.border, lineWidth: 1))
+            .padding(10)
+        }
+    }
+
+    private func label(_ pick: String?) -> String {
+        guard let pick else { return "This project's orchestrator" }
+        return discovery.sessions.first { $0.id == pick }.map { AppState.shortTitle($0.title) } ?? "Session"
+    }
+}
+
+/// Any session's agents on the same canvas, from its transcript feed.
+private struct SessionCanvas: View {
+    @EnvironmentObject private var app: AppState
+    @StateObject private var feed: SessionFeed
+    @State private var positions: [String: CGPoint] = [:]
+    let hostId: String
+    let sessionId: String
+
+    init(hostId: String, sessionId: String) {
+        self.hostId = hostId
+        self.sessionId = sessionId
+        _feed = StateObject(wrappedValue: SessionFeed.feed(host: hostId, sessionId: sessionId))
+    }
+
+    var body: some View {
+        OrchestratorView(graph: feed.graph, hosts: app.hosts, positions: $positions, actions: OrchestratorActions(
+            expand: { id in
+                let s = SessionDiscovery.shared.session(host: hostId, sessionId: sessionId)
+                if id == AgentGraph.orchestratorID, let s {
+                    app.openClaudeSession(s)
+                } else {
+                    app.openClaudeLive(host: hostId, sessionId: sessionId, title: s?.title)
+                }
+            },
+            clearFinished: { feed.graph.clearFinished() }))
+            .onAppear { feed.retain() }
+            .onDisappear { feed.release() }
     }
 }
 
