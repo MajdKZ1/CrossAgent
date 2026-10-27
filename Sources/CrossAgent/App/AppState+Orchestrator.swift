@@ -38,6 +38,9 @@ final class ProjectOrchestrator: ObservableObject {
     var shown: AgentGraph { demoGraph ?? graph }
     /// Where the demo's nodes were dragged. Thrown away with the demo.
     var demoPositions: [String: CGPoint] = [:]
+    /// The DemoMode story playing in `demoGraph`, if any. Unlike the dev demo it stays
+    /// up while other tabs show, so its agents' cards can be opened.
+    var story: String?
 
     var watchers: Set<AnyCancellable> = []
     var saveTask: Task<Void, Never>?
@@ -285,6 +288,12 @@ extension AppState {
     /// the Mac and on every host that has the project folder, then follows events.
     func enableOrchestrator() async {
         guard let o = orch, let project else { return }
+        if DemoMode.isOn {
+            // Nothing to install and no host to ask: the controller only flips on.
+            _ = await o.controller.enable()
+            o.enabled = true
+            return
+        }
         o.busy = true
         defer { o.busy = false }
         var skip: Set<String> = []
@@ -342,7 +351,7 @@ extension AppState {
         }
         if old == .orchestrator {
             o.relay = nil
-            stopDemo()
+            if o.story == nil { stopDemo() }
         }
         // Once the new tab has landed.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.checkNeedsInput() }
@@ -549,8 +558,127 @@ extension AppState {
         guard let o = orch, o.demoGraph != nil else { return }
         o.demoTimer?.invalidate()
         o.demoTimer = nil
+        o.story = nil
         if let r = o.relay, o.graph.nodes[r.to] == nil { o.relay = nil }
         o.demoGraph = nil
+    }
+
+    // MARK: Demo stories
+
+    /// Plays a `DemoStory` on the Orchestrator tab, in a throwaway graph like the dev
+    /// demo. DemoMode only. `loop` replays the hero story, clearing back to the lone
+    /// orchestrator in between. Without `autoAllow` the approval waits for a click.
+    func playStory(_ name: String, loop: Bool = false, autoAllow: Bool = true) {
+        guard DemoMode.isOn, let o = orch else { return }
+        if name == "reset" {
+            resetStory()
+            return
+        }
+        guard DemoStory.names.contains(name) else { return }
+        stopDemo()
+        o.demoPositions = [:]
+        o.permissionSends = [:]
+        o.relay = nil
+        let real = o.graph.orchestrator
+        let graph = AgentGraph(orchestratorHost: real?.hostId ?? localHostID, session: real?.tmuxSession, hosts: hosts)
+        o.demoGraph = graph
+        o.story = name
+        runStory(name, in: graph, loop: loop, autoAllow: autoAllow)
+    }
+
+    /// Back to the lone orchestrator, its agents shrinking home. Stays on the demo graph.
+    func resetStory() {
+        guard DemoMode.isOn, let o = orch else { return }
+        o.demoTimer?.invalidate()
+        o.demoTimer = nil
+        guard let graph = o.demoGraph else {
+            playStory("hero")
+            resetStory()
+            return
+        }
+        clearStory(graph)
+    }
+
+    private func runStory(_ name: String, in graph: AgentGraph, loop: Bool, autoAllow: Bool) {
+        guard let o = orch, let project else { return }
+        let start = Date()
+        let pc = hosts.first { !$0.isLocal }?.id ?? "pc"
+        var steps = (DemoStory.steps(name, slug: project.slug, mac: graph.orchestratorHost, pc: pc, start: start) ?? [])[...]
+        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] t in
+            MainActor.assumeIsolated {
+                guard let self, let o = self.orch, o.demoGraph === graph else { t.invalidate(); return }
+                let elapsed = Date().timeIntervalSince(start)
+                while let s = steps.first, s.at <= elapsed {
+                    steps.removeFirst()
+                    self.storyCue(s.cue, in: graph, autoAllow: autoAllow)
+                }
+                guard steps.isEmpty else { return }
+                if !loop || name != "hero" {
+                    t.invalidate()
+                    return
+                }
+                guard elapsed >= DemoStory.heroLength else { return }
+                t.invalidate()
+                self.clearStory(graph)
+                DispatchQueue.main.asyncAfter(deadline: .now() + DemoStory.loopGap) { [weak self] in
+                    guard let self, let o = self.orch, o.demoGraph === graph, o.story == name else { return }
+                    self.runStory(name, in: graph, loop: loop, autoAllow: autoAllow)
+                }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        o.demoTimer = timer
+    }
+
+    private func storyCue(_ cue: DemoStory.Cue, in graph: AgentGraph, autoAllow: Bool) {
+        switch cue {
+        case .event(let e):
+            graph.apply(e)
+        case .allow(let id):
+            if autoAllow { answerPermission(nodeID: id, allow: true) }
+        case .doze(let id, let activity):
+            graph.update(id, at: Date()) {
+                $0.state = .idle
+                $0.activity = activity
+                AgentGraph.push(activity, into: &$0.recent)
+            }
+        case .clear:
+            clearStory(graph)
+        }
+    }
+
+    private func clearStory(_ graph: AgentGraph) {
+        let now = Date()
+        var lone = graph.orchestrator
+        lone?.state = .idle
+        lone?.activity = "Ready"
+        lone?.recent = []
+        lone?.updatedAt = now
+        lone?.flow = .none
+        graph.remoteTable = RemoteTable()
+        graph.finished = []
+        graph.nodes = lone.map { [AgentGraph.orchestratorID: $0] } ?? [:]
+        orch?.permissionSends = [:]
+        orch?.demoPositions = [:]
+    }
+
+    /// DemoMode's answer to an approval: nothing written, no ssh. The card goes through
+    /// sending and sent like a real answer, then the PermissionAnswer comes in locally.
+    func demoAnswerPermission(nodeID: String, allow: Bool) {
+        guard let o = orch, let r = o.shown.nodes[nodeID]?.remote, let ask = r.permission,
+              o.permissionSends[ask.id] == nil else { return }
+        let graph = o.shown
+        o.permissionSends[ask.id] = .sending
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            guard o.shown === graph else { return }
+            o.permissionSends[ask.id] = .sent(allow: allow)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                guard o.shown === graph else { return }
+                graph.apply(DemoStory.permissionAnswer(host: r.host, role: r.role, tmux: r.tmuxSession, req: ask.id,
+                                                       allow: allow))
+                o.permissionSends[ask.id] = nil
+            }
+        }
     }
 
     /// Applies events through the project filter, like the followers do.

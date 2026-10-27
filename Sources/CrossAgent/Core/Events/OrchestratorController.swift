@@ -43,6 +43,12 @@ final class OrchestratorController: ObservableObject {
     /// (their project folder does not exist yet, and this must not create it).
     @discardableResult
     func enable(skipSettings: Set<String> = []) async -> [String] {
+        // Demo: no hook script, no settings, nothing followed. Stories feed the graph.
+        if DemoMode.isOn {
+            isEnabled = true
+            start()
+            return []
+        }
         var failed: [String] = []
         await withTaskGroup(of: (String, Bool).self) { group in
             for h in hosts {
@@ -67,6 +73,10 @@ final class OrchestratorController: ObservableObject {
     /// Removes only our hooks (on every host) and stops following.
     func disable() async {
         stop()
+        if DemoMode.isOn {
+            isEnabled = false
+            return
+        }
         try? HookInstaller.removeHooks(projectPath: macPath)
         let rel = pcRelativePath
         if !rel.isEmpty {
@@ -83,6 +93,7 @@ final class OrchestratorController: ObservableObject {
     func start() {
         guard !isRunning else { return }
         isRunning = true
+        if DemoMode.isOn { return }
         let slug = slug
         let paths = projectPaths
         RemoteEventLog.register(project: slug, projectPaths: paths)
@@ -107,7 +118,7 @@ final class OrchestratorController: ObservableObject {
         let old = hosts
         hosts = new
         graph.hosts = new
-        guard isRunning else { return }
+        guard isRunning, !DemoMode.isOn else { return }
         let ids = Set(new.map(\.id))
         followers.removeAll { f in
             let gone = !ids.contains(f.host.id) || new.first(where: { $0.id == f.host.id }) != f.host
