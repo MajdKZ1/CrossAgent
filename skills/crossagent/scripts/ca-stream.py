@@ -345,4 +345,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # Worker state and events are for this user only.
+    os.umask(0o077)
     sys.exit(main())
