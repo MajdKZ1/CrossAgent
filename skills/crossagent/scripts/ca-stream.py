@@ -179,10 +179,11 @@ def section_line(text, heading):
     return None
 
 
-def first_line(text):
+def first_line(text, skip_headings=False):
     for line in (text or "").splitlines():
-        if line.strip():
-            return line.strip()
+        s = line.strip()
+        if s and not (skip_headings and s.startswith("#")):
+            return s
     return None
 
 
@@ -276,7 +277,7 @@ def run(a):
                     out()
                     out("\n".join(sub + l for l in text.splitlines()))
                     out()
-                    ev.activity(None, first_line(text))
+                    ev.activity(None, first_line(text, True) or first_line(text))
         elif t == "user":
             content = (m.get("message") or {}).get("content")
             for c in content if isinstance(content, list) else []:
