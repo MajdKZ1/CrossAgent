@@ -121,3 +121,23 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   - Cmd+Shift+V toggles the station back to the previous mode, and Cmd+Shift+O toggles Orchestrator back to Panes.
   - Host chips hide under 1000 pt and the mode switch goes icon only under 760 pt, to keep the top bar uncluttered.
   - Dev only: `CROSSAGENT_NO_ACTIVATE=1` launches without stealing focus, and `CROSSAGENT_AUTOMATION_ID` gives each test instance its own automation channel. Before that, parallel test runs received each other's commands.
+- Orchestrator wiring:
+  - Each open project has one graph and one controller. Hooks go in when you hit Start, or when you enter the mode with an orchestrator already running, never just from looking at the start card.
+  - Start waits for the hooks before launching Claude, so the first session already reports.
+  - When a project with the orchestrator on reopens, the followers start right away and hook setup quietly re-runs. That refreshes the script and picks up a PC folder that has appeared since.
+  - Enabling never creates the project folder on the PC. If the folder isn't there, the PC copy of the hooks is skipped until it is.
+  - Esc inside a node's terminal goes to the terminal, because Claude uses Esc to interrupt. Otherwise Esc, Cmd+W or a click outside closes the card.
+  - Messages to built-in subagents are pasted into the orchestrator as `@name text`, with Enter sent 150 ms later so Claude doesn't treat it as part of the paste.
+  - Worker terminals attach only while their card is open. A relay with no card open attaches, pastes and detaches again.
+- Canvas performance pass:
+  - Cards are separate hosting views that re-render only when their node changes, and they move by frame origin.
+  - Cables, glow and particles are Core Animation layers and animations, so data moving on a still graph costs the app nothing.
+  - A display link runs only while something is moving.
+  - One hidden cost was the root hosting view re-measuring the whole canvas through Auto Layout on every update. An explicit size fixed it.
+  - Measured in the demo, release build, canvas only: idle 0.1%, busy 3.6% average (8.9% peak in 60 fps bursts), 14 nodes with constant flows 2.0%. Before: 0.4%, about 25% and about 22%, with frames running nonstop.
+  - Patch then moved to pre-rendered frames looped by a CAKeyframeAnimation. It went from 5 to 7% while animating to the app's baseline (about 0.3%).
+- Canvas gestures were tested with synthetic in-app events (`drag`, `scroll`, `magnify`, `dblclick` automation) that never touch the real cursor, checked against camera and node positions read back. This found four real bugs:
+  - Card drags read the live cursor instead of the event.
+  - Clicks were swallowed when the window wasn't key.
+  - A dragged node lagged the cursor by the distance before the drag registered.
+  - Slot order depended on dictionary order, so the layout changed between launches.
