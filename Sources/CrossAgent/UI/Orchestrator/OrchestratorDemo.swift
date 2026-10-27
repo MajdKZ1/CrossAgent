@@ -256,6 +256,12 @@ private final class DemoDriver {
                 } else if let name = step["spawn"] as? String {
                     self.add(name, .subagent, "mac", .working, "Spawned mid gesture")
                     Self.log("spawned \(name)")
+                } else if let id = step["probe"] as? String,
+                          let stage = PointerAutomation.stage(in: window.contentView) {
+                    // Where the canvas thinks the node is, and whether it can be hit.
+                    let v = stage.scene.lastFrame.first { $0.id == id }
+                    Self.log(String(format: "probe %@ at (%.0f, %.0f) scale %.2f opacity %.2f", id,
+                                    v?.position.x ?? .nan, v?.position.y ?? .nan, v?.scale ?? 0, v?.opacity ?? 0))
                 } else if let open = step["detail"] {
                     // Opens or closes the stand in detail card without a click, like the
                     // app's expand and closeDetail automation commands.
@@ -383,6 +389,26 @@ private final class DemoDriver {
             check("cmd scroll zooms around the pointer",
                   abs(cam.zoom - 1.492) < 0.01 && abs(cam.pan.width + 123) < 1 && abs(cam.pan.height - 61.5) < 1,
                   "pan \(cam.pan) zoom \(cam.zoom)")
+            pointer(["cmd": "dblclick", "x": 80, "y": 80])
+        }
+        step(0.8) {
+            // No frames run while the window is covered; a node spawned then must still
+            // land fully in place and take clicks.
+            stage.applyVisibility(false)
+            self.add("newbie", .subagent, "mac", .working, "Spawned while covered")
+        }
+        step(1.2) {
+            let v = stage.scene.lastFrame.first { $0.id == "newbie" }
+            check("node spawned while covered lands in place",
+                  v.map { $0.scale == 1 && $0.opacity == 1 && hypot($0.position.x, $0.position.y) > 150 } ?? false,
+                  v.map { String(format: "at (%.0f, %.0f) scale %.2f opacity %.2f", $0.position.x, $0.position.y, $0.scale, $0.opacity) } ?? "missing")
+            self.ui.expanded = []
+            pointer(["cmd": "tap", "node": "newbie"])
+        }
+        step(0.6) {
+            check("node spawned while covered takes a tap", self.ui.expanded == ["newbie"], "\(self.ui.expanded)")
+            self.ui.detail = nil
+            stage.applyVisibility(true)
             Self.log(failures == 0 ? "regression: all passed" : "regression: \(failures) failed")
         }
     }
