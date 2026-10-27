@@ -248,6 +248,7 @@ final class ActivityTests: XCTestCase {
                 }
                 seen[h.hostId] = s.time
                 FileHandle.standardError.write(Data((Self.describe(h, s) + "\n").utf8))
+                FileHandle.standardError.write(Data((Self.describe(SuperMax(hosts: monitor.hosts)) + "\n").utf8))
             }
         }
         monitor.stop(detail: true)
@@ -284,6 +285,21 @@ final class ActivityTests: XCTestCase {
         XCTAssertNotEqual(Self.processes(matching: "python3 -I -u -c", ownChildren: true), "", "sampler should be running")
         monitor.shutdown()
         XCTAssertEqual(Self.processes(matching: "python3 -I -u -c", ownChildren: true), "", "shutdown returns after ssh is gone")
+    }
+
+    static func describe(_ m: SuperMax) -> String {
+        var parts = ["  super-max \(m.online)/\(m.machines.count) online"]
+        parts.append(SuperMaxFormat.coresThreads(m.cores, m.threads))
+        parts.append("cpu " + (m.cpu.map { String(format: "%.1f%%", $0 * 100) } ?? "--"))
+        parts.append(String(format: "mem %.2f/%.2f GiB", Double(m.memUsed) / 1_073_741_824, Double(m.memTotal) / 1_073_741_824))
+        parts.append("vram " + (m.vramUsed.map { String($0 / 1_048_576) } ?? "--") + "/\(m.vramTotal / 1_048_576) MiB, unified \(m.unifiedTotal / 1_048_576) MiB, \(m.gpuCount) gpus")
+        parts.append("disk \(m.diskFree)/\(m.diskTotal) B free")
+        parts.append("peak " + (m.peak.map { "\(String(format: "%.1f", $0.celsius)) \($0.machine) \($0.temp.label)" } ?? "--"))
+        for x in m.machines {
+            let gpus = x.gpus.map { g in "\(g.name)\(g.cores.map { " \($0)-core" } ?? "") util \(g.util.map { String(format: "%.0f%%", $0 * 100) } ?? "--") mem \(g.memUsed.map { String($0 / 1_048_576) } ?? "--")/\(g.memTotal.map { String($0 / 1_048_576) } ?? "--") MiB" }
+            parts.append("\(x.name): \(x.specs.map { "\($0.cpuModel) \($0.cores)c/\($0.threads)t \($0.memInstalled) B" } ?? "no specs"); \(gpus.joined(separator: ", "))")
+        }
+        return parts.joined(separator: " | ")
     }
 
     static func describe(_ h: HostActivity, _ s: ActivitySample) -> String {
