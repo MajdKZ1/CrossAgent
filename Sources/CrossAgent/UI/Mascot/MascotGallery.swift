@@ -90,10 +90,10 @@ private struct GalleryView: View {
 
     @ViewBuilder private func sprite(_ mood: MascotMood, scale: CGFloat) -> some View {
         if live {
-            MascotSprite(source: .fixed(mood), scale: scale)
+            MascotLayer(source: .fixed(mood), scale: scale)
         } else {
             let s = MascotSource.fixed(mood).state(at: date)
-            MascotCanvas(mood: s.mood, frame: s.frame, scale: scale)
+            MascotStill(mood: s.mood, frame: s.frame, scale: scale)
         }
     }
 }
@@ -106,7 +106,7 @@ private struct FrameSheet: View {
                 HStack(spacing: 4) {
                     Text(s.name).font(.system(size: 10)).foregroundStyle(Palette.muted).frame(width: 70, alignment: .leading)
                     ForEach(0..<min(MascotArt.script(s.mood).frames.count, 15), id: \.self) { i in
-                        MascotCanvas(mood: s.mood, frame: i, scale: 4)
+                        MascotStill(mood: s.mood, frame: i, scale: 4)
                             .background(Palette.pane)
                     }
                 }

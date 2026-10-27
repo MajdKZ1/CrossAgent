@@ -1,5 +1,4 @@
 import AppKit
-import SwiftUI
 
 // Patch, the CrossAgent mascot. A little terminal with a white case, a dark screen
 // for a face and a blue to purple cable arching over its head, like the app icon.
@@ -82,7 +81,7 @@ enum MascotArt {
     ]
 
     static let index: [Character: UInt8] = Dictionary(uniqueKeysWithValues: palette.enumerated().map { ($1.0, UInt8($0 + 1)) })
-    static let colors: [Color] = palette.map { Color(nsColor: NSColor(hex: $0.1)) }
+    static let colors: [CGColor] = palette.map { NSColor(hex: $0.1).cgColor }
     static let orbBase: UInt8 = 200
 
     /// Arch color for a canvas column: four steps from blue to purple.
@@ -91,7 +90,7 @@ enum MascotArt {
         return index[Character(String(step + 1))]!
     }
 
-    static func color(_ i: UInt8, orbs: [String]) -> Color {
+    static func color(_ i: UInt8, orbs: [String]) -> CGColor {
         if i >= orbBase {
             let n = Int(i - orbBase)
             return n < orbs.count ? hostColor(orbs[n]) : colors[Int(index["4"]!) - 1]
@@ -100,11 +99,11 @@ enum MascotArt {
     }
 
     /// Host accents from hosts.json, read once.
-    private static let hostAccents: [String: Color] = Dictionary(
-        HostStore.load().map { ($0.id, Color(nsColor: NSColor(hex: $0.accent))) }, uniquingKeysWith: { a, _ in a })
+    private static let hostAccents: [String: CGColor] = Dictionary(
+        HostStore.load().map { ($0.id, NSColor(hex: $0.accent).cgColor) }, uniquingKeysWith: { a, _ in a })
 
     /// Orb color for a host. Unknown hosts get the arch purple.
-    static func hostColor(_ id: String) -> Color { hostAccents[id] ?? colors[Int(index["4"]!) - 1] }
+    static func hostColor(_ id: String) -> CGColor { hostAccents[id] ?? colors[Int(index["4"]!) - 1] }
 
     // MARK: Sprites
 
@@ -235,6 +234,13 @@ enum MascotArt {
 
         var total: Double { frames.reduce(0, +) }
 
+        /// Start of each frame as a fraction of the loop, then 1. One more than frames,
+        /// as Core Animation wants for discrete keyframes.
+        var keyTimes: [Double] {
+            var t = 0.0
+            return [0] + frames.map { t += $0; return t / total }
+        }
+
         static func fps(_ fps: Double, _ count: Int) -> Script { Script(frames: Array(repeating: 1 / fps, count: count)) }
 
         /// Frame shown `t` seconds into the loop, and seconds until the next frame.
@@ -270,20 +276,38 @@ enum MascotArt {
 
     private struct Key: Hashable {
         var mood: MascotMood
-        var index: Int
+        /// Device pixels per sprite pixel.
+        var px: Int
     }
 
-    @MainActor private static var drawn: [Key: [MascotPixels.Run]] = [:]
+    @MainActor private static var images: [Key: [CGImage]] = [:]
 
-    /// A frame as runs, ready for the canvas. Frames are pure, so each one is drawn
-    /// once and kept. A few hundred at most, so the cache only resets as a safety net.
-    @MainActor static func runs(_ mood: MascotMood, _ i: Int) -> [MascotPixels.Run] {
-        let key = Key(mood: mood, index: i)
-        if let hit = drawn[key] { return hit }
-        if drawn.count > 1000 { drawn = [:] }
-        let r = frame(mood, i).runs()
-        drawn[key] = r
-        return r
+    /// Every frame of a mood as images, `px` device pixels per sprite pixel. Drawn once
+    /// and kept; there are only a few dozen moods and scales, so the cache only resets
+    /// as a safety net. Orb colors are fixed per host, so the mood is the whole key.
+    @MainActor static func images(_ mood: MascotMood, px: Int) -> [CGImage] {
+        let key = Key(mood: mood, px: max(1, px))
+        if let hit = images[key] { return hit }
+        if images.count > 200 { images = [:] }
+        let made = (0..<script(mood).frames.count).compactMap { image(frame(mood, $0), orbs: orbs(mood), px: key.px) }
+        images[key] = made
+        return made
+    }
+
+    /// One frame as a bitmap with hard pixel edges.
+    static func image(_ pixels: MascotPixels, orbs: [String], px: Int) -> CGImage? {
+        let side = MascotPixels.size * px
+        guard let ctx = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setShouldAntialias(false)
+        let p = CGFloat(px)
+        for r in pixels.runs() {
+            ctx.setFillColor(color(r.color, orbs: orbs))
+            // Bitmap rows count up from the bottom.
+            ctx.fill(CGRect(x: CGFloat(r.x) * p, y: CGFloat(MascotPixels.size - 1 - r.y) * p, width: CGFloat(r.w) * p, height: p))
+        }
+        return ctx.makeImage()
     }
 
     /// Orb host ids for a mood, in palette order from `orbBase`.

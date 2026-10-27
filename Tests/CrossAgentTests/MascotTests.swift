@@ -89,29 +89,61 @@ final class MascotTests: XCTestCase {
         XCTAssertEqual(s.frame(at: -0.5).index, 2)
     }
 
-    func testIdleRedrawsRarely() {
-        let schedule = MascotSchedule(source: .fixed(.idle))
-        let dates = Array(schedule.entries(from: now, mode: .normal).prefix(40))
-        let span = dates.last!.timeIntervalSince(dates.first!)
-        // Breathing plus a blink: about one redraw a second, never a busy loop.
-        XCTAssertGreaterThan(span / Double(dates.count - 1), 0.8)
-        // Every tick shows a different picture than the last.
-        let frames = dates.map { MascotSource.fixed(.idle).state(at: $0).frame }
-        for (a, b) in zip(frames, frames.dropFirst()) { XCTAssertNotEqual(MascotArt.frame(.idle, a), MascotArt.frame(.idle, b)) }
+    func testEveryMoodMoves() {
+        // Some frames are deliberate holds (top of a hop), but each loop has to move,
+        // and idle's blink has to actually differ from its neighbours.
+        for s in MascotGallery.samples {
+            let n = MascotArt.script(s.mood).frames.count
+            let distinct = Set((0..<n).map { MascotArt.frame(s.mood, $0).px })
+            XCTAssertGreaterThanOrEqual(distinct.count, s.mood == .idle ? 3 : n / 2, s.name)
+        }
+        for i in 0..<8 { XCTAssertNotEqual(MascotArt.frame(.idle, i), MascotArt.frame(.idle, (i + 1) % 8)) }
     }
 
-    func testPausedTicksOnce() {
-        let schedule = MascotSchedule(source: .fixed(.juggling(orbs: ["mac", "pc"])), paused: true)
-        XCTAssertEqual(Array(schedule.entries(from: now, mode: .normal).prefix(5)), [now])
+    func testKeyTimes() {
+        let k = MascotArt.Script(frames: [1, 0.5, 2.5]).keyTimes
+        XCTAssertEqual(k.count, 4)
+        XCTAssertEqual(k[0], 0)
+        XCTAssertEqual(k[1], 0.25, accuracy: 1e-9)
+        XCTAssertEqual(k[2], 0.375, accuracy: 1e-9)
+        XCTAssertEqual(k[3], 1, accuracy: 1e-9)
+        // Idle is slow: about one picture change a second.
+        let idle = MascotArt.script(.idle)
+        XCTAssertGreaterThan(idle.total / Double(idle.frames.count), 0.8)
     }
 
-    func testScheduleStopsAtMoodChange() {
-        // Asleep at +58 s: the schedule should land on that moment, not skip past it.
-        let o = orch(.idle, updated: -2)
-        let source = MascotSource.graph(orchestrator: o, others: [])
-        let dates = Array(MascotSchedule(source: source).entries(from: now, mode: .normal).prefix(200))
-        XCTAssertTrue(dates.contains(now.addingTimeInterval(58)))
+    func testSourceChangesOverTime() {
+        let source = MascotSource.graph(orchestrator: orch(.idle, updated: -2), others: [])
+        XCTAssertEqual(source.nextChange(after: now), now.addingTimeInterval(58))
+        XCTAssertEqual(source.mood(at: now.addingTimeInterval(57.9)), .idle)
         XCTAssertEqual(source.mood(at: now.addingTimeInterval(58)), .sleeping)
+        XCTAssertNil(MascotSource.fixed(.idle).nextChange(after: now))
+    }
+
+    @MainActor func testLayerLoopsFrames() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.borderless],
+                              backing: .buffered, defer: true)
+        let view = MascotLayerView(frame: NSRect(x: 0, y: 0, width: 56, height: 56))
+        window.contentView = view
+        view.update(source: .fixed(.juggling(orbs: ["mac", "pc"])), scale: 2)
+        let a = try XCTUnwrap(view.sprite.animation(forKey: "frames") as? CAKeyframeAnimation)
+        XCTAssertEqual(a.values?.count, 24)
+        XCTAssertEqual(a.keyTimes?.count, 25)
+        XCTAssertEqual(a.duration, 2, accuracy: 1e-9)
+        XCTAssertEqual(a.calculationMode, .discrete)
+        XCTAssertEqual(view.sprite.magnificationFilter, .nearest)
+        view.update(source: .fixed(.error), scale: 2)
+        XCTAssertEqual((view.sprite.animation(forKey: "frames") as? CAKeyframeAnimation)?.values?.count, 8)
+    }
+
+    @MainActor func testImagesPerMood() {
+        let mood = MascotMood.juggling(orbs: ["mac", "pc"])
+        let images = MascotArt.images(mood, px: 4)
+        XCTAssertEqual(images.count, MascotArt.script(mood).frames.count)
+        XCTAssertEqual(images.first?.width, MascotPixels.size * 4)
+        XCTAssertEqual(images.first?.height, MascotPixels.size * 4)
+        // Cached: same objects the second time.
+        XCTAssertTrue(MascotArt.images(mood, px: 4).first === images.first)
     }
 
     func testEveryFrameDraws() {

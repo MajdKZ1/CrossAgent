@@ -11,7 +11,7 @@ struct MascotView: View {
 
     var body: some View {
         if !hidden {
-            MascotSprite(source: .graph(orchestrator: graph.orchestrator, others: graph.others), scale: scale)
+            MascotLayer(source: .graph(orchestrator: graph.orchestrator, others: graph.others), scale: scale)
         }
     }
 }
@@ -42,132 +42,146 @@ enum MascotSource: Equatable {
         return nil
     }
 
-    /// Mood and frame to show at a moment, and when the picture next changes.
-    func state(at date: Date) -> (mood: MascotMood, frame: Int, next: Date) {
+    /// Mood and loop frame at a moment. Used for stills; live views animate on a layer.
+    func state(at date: Date) -> (mood: MascotMood, frame: Int) {
         let mood = mood(at: date)
-        let (i, remaining) = MascotArt.script(mood).frame(at: date.timeIntervalSince(anchor(for: mood)))
-        var next = date.addingTimeInterval(remaining)
-        if let change = nextChange(after: date), change < next { next = change }
-        return (mood, i, next)
+        return (mood, MascotArt.script(mood).frame(at: date.timeIntervalSince(anchor(for: mood))).index)
     }
 }
 
-/// Ticks only when the frame changes, and not at all while paused.
-struct MascotSchedule: TimelineSchedule {
-    var source: MascotSource
-    var paused = false
-
-    func entries(from startDate: Date, mode: TimelineScheduleMode) -> Entries {
-        Entries(source: source, upcoming: startDate, paused: paused, slow: mode == .lowFrequency)
-    }
-
-    struct Entries: Sequence, IteratorProtocol {
-        let source: MascotSource
-        var upcoming: Date?
-        let paused: Bool
-        let slow: Bool
-
-        mutating func next() -> Date? {
-            guard let now = upcoming else { return nil }
-            if paused {
-                upcoming = nil
-            } else {
-                var after = source.state(at: now).next
-                if slow { after = Swift.max(after, now.addingTimeInterval(1)) }
-                // Never stall on a zero length step.
-                upcoming = Swift.max(after, now.addingTimeInterval(0.01))
-            }
-            return now
-        }
-    }
-}
-
-/// The animated sprite. Pauses when its window is hidden, minimised or covered.
-struct MascotSprite: View {
+/// The live sprite. Frames are pre-rendered images looped by Core Animation, so the
+/// app does no work per frame: only when the mood changes.
+struct MascotLayer: NSViewRepresentable {
     var source: MascotSource
     var scale: CGFloat = 2
 
-    @State private var visible = true
+    func makeNSView(context: Context) -> MascotLayerView { MascotLayerView() }
 
-    var body: some View {
-        TimelineView(MascotSchedule(source: source, paused: !visible)) { context in
-            let s = source.state(at: context.date)
-            MascotCanvas(mood: s.mood, frame: s.frame, scale: scale)
-        }
-        .background(WindowVisibility { visible = $0 })
-        .onDisappear { visible = false }
-        .onAppear { visible = true }
-        .accessibilityLabel("Patch, the CrossAgent mascot")
+    func updateNSView(_ view: MascotLayerView, context: Context) {
+        view.update(source: source, scale: scale)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: MascotLayerView, context: Context) -> CGSize? {
+        CGSize(width: CGFloat(MascotPixels.size) * scale, height: CGFloat(MascotPixels.size) * scale)
     }
 }
 
-/// One frame, drawn as crisp integer scaled pixels.
-struct MascotCanvas: View {
+final class MascotLayerView: NSView {
+    let sprite = CALayer()
+    private var source: MascotSource?
+    private var scale: CGFloat = 2
+    /// What is on the layer now, so unrelated graph updates do nothing.
+    private var shown: (mood: MascotMood, px: Int)?
+    /// Fires once when the mood would change by time alone (done ends, error fades, sleep).
+    private var timer: Timer?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        sprite.magnificationFilter = .nearest
+        sprite.minificationFilter = .nearest
+        sprite.contentsGravity = .resize
+        layer?.addSublayer(sprite)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.image)
+        setAccessibilityLabel("Patch, the CrossAgent mascot")
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override var isFlipped: Bool { true }
+
+    func update(source: MascotSource, scale: CGFloat) {
+        guard source != self.source || scale != self.scale else { return }
+        self.source = source
+        self.scale = scale
+        refresh()
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        sprite.frame = bounds
+        CATransaction.commit()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refresh()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        refresh()
+    }
+
+    private func refresh() {
+        timer?.invalidate()
+        timer = nil
+        guard let source, let window else { return }
+        let now = Date()
+        let mood = source.mood(at: now)
+        let backing = window.backingScaleFactor
+        let px = max(1, Int((scale * backing).rounded()))
+        if shown?.mood != mood || shown?.px != px {
+            show(mood, px: px, backing: backing, phase: now.timeIntervalSince(source.anchor(for: mood)))
+        }
+        if let next = source.nextChange(after: now) {
+            let t = Timer(fire: next.addingTimeInterval(0.01), interval: 0, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refresh() }
+            }
+            RunLoop.main.add(t, forMode: .common)
+            timer = t
+        }
+    }
+
+    private func show(_ mood: MascotMood, px: Int, backing: CGFloat, phase: TimeInterval) {
+        shown = (mood, px)
+        let frames = MascotArt.images(mood, px: px)
+        let script = MascotArt.script(mood)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        sprite.removeAnimation(forKey: "frames")
+        sprite.contentsScale = backing
+        sprite.contents = frames.first
+        if frames.count > 1 {
+            let a = CAKeyframeAnimation(keyPath: "contents")
+            a.values = frames
+            a.keyTimes = script.keyTimes.map { NSNumber(value: $0) }
+            a.calculationMode = .discrete
+            a.duration = script.total
+            a.repeatCount = .infinity
+            a.isRemovedOnCompletion = false
+            // Start partway in, so loops stay in step with the anchor (the done jump
+            // begins when the node finished).
+            var offset = phase.truncatingRemainder(dividingBy: script.total)
+            if offset < 0 { offset += script.total }
+            a.beginTime = sprite.convertTime(CACurrentMediaTime(), from: nil) - offset
+            sprite.add(a, forKey: "frames")
+        }
+        CATransaction.commit()
+    }
+
+    deinit { timer?.invalidate() }
+}
+
+/// One still frame, for the snapshot tool.
+struct MascotStill: View {
     var mood: MascotMood
     var frame: Int
     var scale: CGFloat
 
     var body: some View {
         let side = CGFloat(MascotPixels.size) * scale
-        let runs = MascotArt.runs(mood, frame)
-        let orbs = MascotArt.orbs(mood)
-        Canvas { ctx, _ in
-            var paths: [UInt8: Path] = [:]
-            for r in runs {
-                paths[r.color, default: Path()].addRect(
-                    CGRect(x: CGFloat(r.x) * scale, y: CGFloat(r.y) * scale, width: CGFloat(r.w) * scale, height: scale))
-            }
-            for (c, path) in paths {
-                ctx.fill(path, with: .color(MascotArt.color(c, orbs: orbs)), style: FillStyle(antialiased: false))
+        let images = MascotArt.images(mood, px: Int(scale))
+        Group {
+            if frame < images.count {
+                Image(decorative: images[frame], scale: 1).interpolation(.none).resizable()
+            } else {
+                Color.clear
             }
         }
         .frame(width: side, height: side)
-    }
-}
-
-/// Reports whether the hosting window is on screen and not fully covered.
-private struct WindowVisibility: NSViewRepresentable {
-    var onChange: (Bool) -> Void
-
-    func makeNSView(context: Context) -> Probe {
-        let v = Probe()
-        v.onChange = onChange
-        return v
-    }
-
-    func updateNSView(_ nsView: Probe, context: Context) { nsView.onChange = onChange }
-
-    final class Probe: NSView {
-        var onChange: ((Bool) -> Void)?
-        private var observer: NSObjectProtocol?
-        private var last: Bool?
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            if let observer { NotificationCenter.default.removeObserver(observer) }
-            observer = nil
-            guard let window else { report(false); return }
-            observer = NotificationCenter.default.addObserver(
-                forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.check() }
-            }
-            check()
-        }
-
-        private func check() {
-            report(window?.occlusionState.contains(.visible) ?? false)
-        }
-
-        private func report(_ v: Bool) {
-            guard v != last else { return }
-            last = v
-            // Not during a view update.
-            DispatchQueue.main.async { [onChange] in onChange?(v) }
-        }
-
-        deinit {
-            if let observer { NotificationCenter.default.removeObserver(observer) }
-        }
     }
 }
