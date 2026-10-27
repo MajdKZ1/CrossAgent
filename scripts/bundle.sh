@@ -17,6 +17,7 @@ cp "$BIN" "$APP/Contents/MacOS/CrossAgent"
 for b in "$BIN_DIR"/*.bundle; do
     [ -e "$b" ] && cp -R "$b" "$APP/Contents/Resources/"
 done
+# Static asset, never generated here. To update: iconutil -c icns assets/icon/CrossAgent.iconset -o assets/AppIcon.icns
 [ -f assets/AppIcon.icns ] && cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
