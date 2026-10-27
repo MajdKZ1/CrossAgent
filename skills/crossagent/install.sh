@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Install the crossagent skill into ~/.claude/skills/crossagent on the Mac and the PC.
-# Safe to re-run. Usage: install.sh [--mac | --pc] [--wrapper | --remove-wrapper]
+# Install the crossagent skill into ~/.claude/skills/crossagent on the Mac and the PC,
+# and its pc-worker / mac-worker subagents into ~/.claude/agents. Safe to re-run. Usage: install.sh [--mac | --pc] [--wrapper | --remove-wrapper]
 #   --wrapper         also hook the claude tmux wrapper into ~/.zshrc / ~/.bashrc
 #   --remove-wrapper  only take the wrapper hook out again (skill stays installed)
 set -eu
@@ -61,7 +61,12 @@ rc_blocks() {
   fi
 }
 
-chmod +x "$SRC/install.sh" "$SRC/scripts/ca"
+chmod +x "$SRC/install.sh" "$SRC/scripts/ca" "$SRC/scripts/"ca-*.py
+
+# Only our two agent files. Other agents in ~/.claude/agents are never touched.
+AGENTS=()
+for a in pc-worker mac-worker; do [ -f "$SRC/agents/$a.md" ] && AGENTS+=("$SRC/agents/$a.md"); done
+RSYNC=(rsync -a --delete --exclude=.DS_Store --exclude=/tests/ --exclude=__pycache__)
 
 if [ "$do_mac" = 1 ]; then
   if [ "$wrap" != remove ]; then
@@ -69,8 +74,13 @@ if [ "$do_mac" = 1 ]; then
       echo "mac: already running from $DEST"
     else
       mkdir -p "$DEST"
-      rsync -a --delete --exclude=.DS_Store "$SRC/" "$DEST/"
+      "${RSYNC[@]}" "$SRC/" "$DEST/"
       echo "mac: installed to ~/.claude/skills/crossagent"
+    fi
+    if [ "${#AGENTS[@]}" -gt 0 ]; then
+      mkdir -p "$HOME/.claude/agents"
+      cp "${AGENTS[@]}" "$HOME/.claude/agents/"
+      echo "mac: installed the pc-worker and mac-worker agents to ~/.claude/agents"
     fi
   fi
   [ -n "$wrap" ] && rc_blocks "$wrap" mac
@@ -79,9 +89,13 @@ fi
 if [ "$do_pc" = 1 ]; then
   if [ "$wrap" != remove ]; then
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS -o ConnectTimeout=20 pc 'mkdir -p ~/.claude/skills/crossagent'
-    rsync -a --delete --exclude=.DS_Store -e "ssh $SSH_OPTS" "$SRC/" pc:.claude/skills/crossagent/
+    ssh $SSH_OPTS -o ConnectTimeout=20 pc 'mkdir -p ~/.claude/skills/crossagent ~/.claude/agents'
+    "${RSYNC[@]}" -e "ssh $SSH_OPTS" "$SRC/" pc:.claude/skills/crossagent/
     echo "pc: installed to ~/.claude/skills/crossagent"
+    if [ "${#AGENTS[@]}" -gt 0 ]; then
+      rsync -a -e "ssh $SSH_OPTS" "${AGENTS[@]}" pc:.claude/agents/
+      echo "pc: installed the pc-worker and mac-worker agents to ~/.claude/agents"
+    fi
   fi
   if [ -n "$wrap" ]; then
     # shellcheck disable=SC2086
