@@ -247,6 +247,14 @@ Under the hood it's one script you can use yourself:
 
 `ca help` lists the rest.
 
+## The claude wrapper
+
+Optional, and the easiest way to use one Claude Code session from several places at once. Install it with `skills/crossagent/install.sh --wrapper` (both machines; `--mac` or `--pc` for one) and remove it with `--remove-wrapper`. It adds one marked block to `~/.zshrc` and `~/.bashrc` that loads a small `claude` shell function.
+
+From then on, `claude` typed in Ghostty, Terminal or a plain ssh login starts Claude inside a tmux session named `ca-<project>-<host>-<n>` and attaches to it. You don't see tmux: no status bar, mouse wheel scrolls back through history, true colour, copy goes to your clipboard (OSC 52), and no prefix key gets in the way of your typing. Close the window and the session keeps running. CrossAgent sees it as a normal session and opens it fully interactive, so you can type from your terminal and from CrossAgent at the same time (it's one Claude process with two screens). The tab says "Also open in Ghostty" so you know.
+
+`claude --ca-name <name>` picks the session name (and reattaches if it exists). It stays out of the way everywhere else: inside tmux, with `-p`, `--version`, `--help` or subcommands like `mcp`, when input or output isn't a terminal (scripts, pipes, the SDK), and with `CLAUDE_NO_TMUX=1 claude` or `command claude`. `--resume` and `--continue` work as usual, just inside the session.
+
 ## Crossover Portal
 
 When the skill splits work across both machines, it opens a Crossover Portal: the project
