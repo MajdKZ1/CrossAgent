@@ -51,7 +51,8 @@ extension Automation {
         let list: [[String: Any]] = d.sessions.map { s in
             ["id": s.sessionId, "host": s.hostId, "status": s.status.rawValue, "launcher": s.launcher.rawValue,
              "title": s.title, "cwd": s.cwd, "pid": s.pid.map { Int($0) } ?? NSNull(), "tmux": s.tmuxSession ?? NSNull(),
-             "subagents": s.subagentCount, "startedAt": s.startedAt.timeIntervalSince1970,
+             "subagents": s.subagentCount, "viewers": s.viewers.map(\.rawValue),
+             "alsoOpen": SessionLauncher.alsoOpen(s.viewers) ?? NSNull(), "startedAt": s.startedAt.timeIntervalSince1970,
              "lastActivity": s.lastActivity.timeIntervalSince1970]
         }
         let obj: [String: Any] = ["sessions": list, "hostErrors": d.hostErrors]

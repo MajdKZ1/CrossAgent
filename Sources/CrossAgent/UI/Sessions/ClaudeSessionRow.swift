@@ -124,6 +124,7 @@ struct ClaudeSessionRow: View, Equatable {
         let place = SessionLook.place(s)
         if !place.isEmpty { parts.append(place) }
         if s.subagentCount > 0 { parts.append(s.subagentCount == 1 ? "1 agent" : "\(s.subagentCount) agents") }
+        if let also = SessionLauncher.alsoOpen(s.viewers) { parts.append(also) }
         // An ended row's age already says "ended".
         return HStack(spacing: 0) {
             if s.isRunning { Text(SessionLook.word(s.status) + "  ").foregroundStyle(SessionLook.color(s.status)) }
@@ -182,5 +183,42 @@ struct DiscoveryViewer: ViewModifier {
         content
             .onAppear { SessionDiscovery.shared.addViewer() }
             .onDisappear { SessionDiscovery.shared.removeViewer() }
+    }
+}
+
+/// "Also open in Ghostty" for a tmux session other places are attached to as well.
+/// Info, not a warning: it's one process, every client sees the same thing. Keeps
+/// discovery polling only while `active` (a tab kept alive behind another isn't).
+struct SessionViewersNote: View {
+    @ObservedObject private var discovery = SessionDiscovery.shared
+    var hostId: String
+    var tmux: String
+    var active: Bool
+    @State private var watching = false
+
+    var body: some View {
+        Group {
+            if let text = Self.text(discovery.sessions, hostId: hostId, tmux: tmux) {
+                Text(text)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.muted)
+                    .lineLimit(1)
+                    .help("The same session, attached there too. Typing in either place goes to the one process.")
+            }
+        }
+        .onAppear { watch(active) }
+        .onChange(of: active) { _, on in watch(on) }
+        .onDisappear { watch(false) }
+    }
+
+    static func text(_ sessions: [ClaudeSession], hostId: String, tmux: String) -> String? {
+        let s = sessions.first { $0.hostId == hostId && $0.tmuxSession == tmux && $0.isRunning }
+        return s.flatMap { SessionLauncher.alsoOpen($0.viewers) }
+    }
+
+    private func watch(_ on: Bool) {
+        guard on != watching else { return }
+        watching = on
+        if on { discovery.addViewer() } else { discovery.removeViewer() }
     }
 }

@@ -82,7 +82,8 @@ final class Automation {
         case "station": app.showStation = cmd["on"] as? Bool ?? !app.showStation
         case "type":
             // Goes through the same path as real keystrokes, so broadcast applies.
-            if let p = pane(index), let text = cmd["text"] as? String {
+            // "tab": an agent tab's id types into its terminal instead.
+            if let p = (cmd["tab"] as? String).flatMap({ app.agentPanes[$0] }) ?? pane(index), let text = cmd["text"] as? String {
                 p.terminal.send(source: p.terminal, data: ArraySlice(Array(text.utf8)))
             }
         case "selectAll": pane(index)?.terminal.selectAll()
@@ -290,6 +291,10 @@ final class Automation {
             var row: [String: Any] = ["id": t.id, "kind": kind, "title": app.title(of: t)]
             if let p = app.agentTerminal(t) {
                 row["terminal"] = p.isLive ? "live" : (p.isExited ? "exited" : "connecting")
+            }
+            if case .agent(.session(let h, let n)) = t.kind,
+               let also = SessionViewersNote.text(SessionDiscovery.shared.sessions, hostId: h, tmux: n) {
+                row["alsoOpen"] = also
             }
             return row
         }

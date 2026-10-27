@@ -87,6 +87,9 @@ private struct AgentTabBody: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 8)
+            if case .agent(.session(let h, let name)) = tab.kind {
+                SessionViewersNote(hostId: h, tmux: name, active: selected)
+            }
             if let node { StateLabel(state: node.state) }
         }
         .padding(.horizontal, 12)
