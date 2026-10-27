@@ -61,6 +61,8 @@ you its report verbatim. It's one subagent from your side and one process on the
    It runs `ca remote pc <role> --continue`, which resumes the SAME headless
    conversation (`claude -p --resume <id>`), so the worker remembers everything. If
    that pc-worker is gone, start a new one with the same role and say it's a follow-up.
+   Starting a role again WITHOUT the follow-up wipes its old conversation, so only do
+   that for new work.
 
 Never run the task on the PC any other way (no `ssh pc claude ...`).
 
@@ -116,7 +118,9 @@ Crossover Portal (Mutagen session `ca-<project>`, two-way-safe) at the same path
 home on both machines. `ca init` opens it.
 
 - `ca remote` flushes the Portal before the worker starts and after it reports, so
-  both sides see the same files. `ca run` and `ca wait` flush too.
+  both sides see the same files. `ca run` and `ca wait` flush too. Without a Portal
+  (PC only mode) a new worker gets a one-off push, a follow-up doesn't (it would
+  overwrite the worker's edits), so pull what you need with `ca portal pull <paths>`.
 - A conflict stops everything (exit 3). Show the user `ca portal conflicts`. Never
   overwrite or delete one side yourself.
 - Build output and dependencies stay per machine (`node_modules`, `.build`, `build`,
