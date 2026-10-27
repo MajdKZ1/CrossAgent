@@ -196,7 +196,8 @@ extension AppState {
     func canonical(_ ref: AgentRef) -> AgentRef {
         switch ref {
         case .node(let id):
-            if let n = orch?.shown.nodes[id], n.kind == .worker, let s = n.tmuxSession {
+            // Remote workers keep their node tab: it has Brief and Result next to the terminal.
+            if let n = orch?.shown.nodes[id], n.kind == .worker, n.remote == nil, let s = n.tmuxSession {
                 return .session(host: n.hostId, name: s)
             }
             return ref
@@ -273,11 +274,13 @@ extension AppState {
     }
 
     /// The live terminal an agent tab shows, if it has one: the orchestrator's own pane,
-    /// or the tab's attached session. Built-in subagents have none.
+    /// the tab's attached session, or a remote worker's. Built-in subagents have none.
     func agentTerminal(_ tab: Tab) -> PaneSession? {
         guard case .agent(let ref) = tab.kind else { return nil }
         if case .node(let id) = ref {
             if id == AgentGraph.orchestratorID { return orchestratorPane }
+            // A remote worker's card, while its Terminal tab is up.
+            if orch?.shown.nodes[id]?.remote != nil, remoteTab(id) == .terminal { return agentPanes[tab.id] }
             return nil
         }
         return agentPanes[tab.id]

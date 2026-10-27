@@ -39,7 +39,7 @@ private struct AgentTabNode: View {
     var selected: Bool
 
     var body: some View {
-        AgentTabBody(tab: tab, node: node, answering: orch.answering, selected: selected)
+        AgentTabBody(tab: tab, node: node, orch: orch, answering: orch.answering, selected: selected)
     }
 
     private var node: AgentNode? {
@@ -56,13 +56,14 @@ private struct AgentTabBody: View {
     @EnvironmentObject private var app: AppState
     var tab: Tab
     var node: AgentNode?
+    var orch: ProjectOrchestrator?
     var answering: String?
     var selected: Bool
 
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: Palette.radius, style: .continuous) }
 
     var body: some View {
-        let hostID = node?.hostId ?? { if case .agent(let r) = tab.kind { return app.hostID(of: r) } else { return nil } }()
+        let hostID = node?.remote?.host ?? node?.hostId ?? { if case .agent(let r) = tab.kind { return app.hostID(of: r) } else { return nil } }()
         let host = hostID.flatMap(app.host)
         VStack(spacing: 0) {
             header(host)
@@ -98,6 +99,9 @@ private struct AgentTabBody: View {
 
     private func caption(_ host: Host?) -> String {
         let where_ = host?.name ?? "?"
+        if let r = node?.remote {
+            return "Remote worker on \(app.host(r.host)?.name ?? r.host), \(r.tmuxSession)"
+        }
         switch tab.kind {
         case .agent(.node(let id)) where id == AgentGraph.orchestratorID:
             if let a = answering { return "Orchestrator on \(where_), answer for \(a) here" }
@@ -127,7 +131,9 @@ private struct AgentTabBody: View {
                 Palette.pane
             }
         default:
-            if let node, node.kind == .subagent {
+            if let node, node.remote != nil, let orch {
+                RemoteWorkerDetail(orch: orch, tab: tab, node: node, selected: selected)
+            } else if let node, node.kind == .subagent {
                 SubagentDetail(node: node, selected: selected)
             } else {
                 Ended(text: node == nil ? "This agent is gone" : "This agent has no terminal")
@@ -163,7 +169,7 @@ private struct StateLabel: View {
 }
 
 /// A pane's terminal, live. Shows a quiet note once its process exits.
-private struct LiveTerminal: View {
+struct LiveTerminal: View {
     @ObservedObject var pane: PaneSession
     var ended: String
     /// Behind another tab: kept at its size, not drawn.
@@ -208,8 +214,6 @@ private struct SubagentDetail: View {
     @EnvironmentObject private var app: AppState
     var node: AgentNode
     var selected: Bool
-    @State private var text = ""
-    @FocusState private var focused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -250,24 +254,9 @@ private struct SubagentDetail: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             Rectangle().fill(Palette.hairline).frame(height: 1)
-            HStack(spacing: 8) {
-                TextField("Message \(node.name)", text: $text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Palette.text)
-                    .lineLimit(1...5)
-                    .focused($focused)
-                    .onSubmit(send)
-                Button("Send", action: send)
-                    .buttonStyle(ChromeButtonStyle(active: !text.isEmpty, tint: Palette.primary))
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            NodeMessageBox(node: node, selected: selected)
         }
         .background(Palette.pane)
-        .onAppear { if selected { focused = true } }
-        .onChange(of: selected) { _, on in if on { focused = true } }
     }
 
     private var activityTitle: String {
@@ -285,13 +274,6 @@ private struct SubagentDetail: View {
         case .waiting(let names): return "Waiting on " + names.joined(separator: ", ")
         default: return node.activity.isEmpty ? "Starting" : node.activity
         }
-    }
-
-    private func send() {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return }
-        app.sendToNode(node.id, text: t)
-        text = ""
     }
 
     private func section<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {

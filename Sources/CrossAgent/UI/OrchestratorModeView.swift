@@ -16,6 +16,9 @@ struct OrchestratorModeView: View {
             }
         }
         .overlay(alignment: .topLeading) { GraphPicker() }
+        .overlay(alignment: .top) {
+            if let o = app.orch, app.orchestratorSessionPick == nil { PendingApprovals(orch: o) }
+        }
         .background(Palette.window)
         .clipShape(RoundedRectangle(cornerRadius: Palette.radius, style: .continuous))
         .modifier(DiscoveryViewer())

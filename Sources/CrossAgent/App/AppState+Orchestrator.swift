@@ -25,6 +25,12 @@ final class ProjectOrchestrator: ObservableObject {
     /// Short lived attached terminals for workers without a tab, by node id, made to
     /// paste a message and dropped again. Never create a session.
     @Published var workerPanes: [String: PaneSession] = [:]
+    /// Which tab a remote worker's card shows, by node id. Terminal when unset.
+    @Published var remoteTabs: [String: RemoteCardTab] = [:]
+    /// Brief and result text read from the worker's host, by `RemoteDoc.slot`.
+    @Published var remoteDocs: [String: RemoteDoc] = [:]
+    /// Approval answers on their way, by permission id.
+    @Published var permissionSends: [String: PermissionSend] = [:]
 
     /// The demo plays in here, never in `graph`, so nothing of it is saved.
     @Published var demoGraph: AgentGraph?
@@ -358,7 +364,10 @@ extension AppState {
     func answerNode(_ id: String) {
         guard let o = orch, let node = o.shown.nodes[id] else { return }
         o.relay = nil
-        if node.kind == .worker, node.tmuxSession != nil {
+        if node.remote?.permission != nil {
+            // Remote approvals are answered on the node's own card.
+            openAgent(.node(id))
+        } else if node.kind == .worker, node.tmuxSession != nil {
             openAgent(.node(id))
         } else {
             openAgent(.node(AgentGraph.orchestratorID))
@@ -378,8 +387,9 @@ extension AppState {
     /// The worker's attached terminal: its agent tab's if one is open, else a short
     /// lived one made on first use. Nil when it has no session or its host is unknown.
     func workerPane(for node: AgentNode) -> PaneSession? {
-        guard let o = orch, let session = node.tmuxSession, let host = host(node.hostId) else { return nil }
-        if let p = agentPane(host: host.id, session: session) {
+        guard let o = orch, let session = node.remote?.tmuxSession ?? node.tmuxSession,
+              let host = host(node.remote?.host ?? node.hostId) else { return nil }
+        if let p = agentPane(host: host.id, session: session) ?? remoteCardPane(node.id) {
             if p.isExited { p.reconnect() }
             return p
         }
