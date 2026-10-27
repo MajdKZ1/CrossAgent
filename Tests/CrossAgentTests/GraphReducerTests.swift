@@ -75,8 +75,8 @@ final class GraphReducerTests: XCTestCase {
 
         var g = run(ev, upTo: 4)  // PermissionRequest
         XCTAssertEqual(g.orchestrator?.state, .needsInput("Needs permission: Running touch x.txt"))
-        g = run(ev, upTo: 5)  // the matching Notification keeps it asking
-        XCTAssertEqual(g.orchestrator?.state, .needsInput("Claude needs your permission"))
+        g = run(ev, upTo: 5)  // the generic Notification does not replace the specific ask
+        XCTAssertEqual(g.orchestrator?.state, .needsInput("Needs permission: Running touch x.txt"))
         g = run(ev, upTo: 6)  // declined, user typed the next prompt
         XCTAssertEqual(g.orchestrator?.state, .thinking)
         g = run(ev, upTo: 10)  // approved: PostToolUse
@@ -251,6 +251,81 @@ final class GraphReducerTests: XCTestCase {
         }
         XCTAssertEqual(Set(g.others.filter { $0.kind == .worker }.map(\.hostId)), ["mac", "pc"])
         XCTAssertEqual(g.others.filter { $0.kind == .subagent }.count, 3)
+    }
+
+    func testResolveNeedsInputFromScreen() {
+        let g = AgentGraph(session: "ca-proj-mac-orch")
+        let ev = HookFixtures.events(HookFixtures.eventsTTY)
+        for e in ev.prefix(19) { g.apply(e) }  // the teammate asks for permission
+        let toucher = "atoucher-a9e051414015c9bc"
+        XCTAssertEqual(g.nodes[toucher]?.state, .needsInput("Needs permission: Running touch z.txt"))
+        let w = "ca-proj-pc-tests"
+        g.apply(AgentEvent(ts: 1019, ev: "WorkerStart", host: "pc", sid: w, role: "worker", node: "tests", tmux: w))
+        g.apply(AgentEvent(ts: 1020, ev: "PermissionRequest", host: "pc", role: "worker", node: "tests", tool: "Bash", sum: "Needs permission: Running make"))
+
+        g.resolveNeedsInput(tmuxSession: "something-else", now: at(1030))
+        XCTAssertEqual(g.nodes[toucher]?.state, .needsInput("Needs permission: Running touch z.txt"))
+
+        g.resolveNeedsInput(tmuxSession: "ca-proj-mac-orch", now: at(1030))
+        XCTAssertEqual(g.nodes[toucher]?.state, .working)
+        XCTAssertEqual(g.nodes[toucher]?.activity, "Running touch z.txt")
+        XCTAssertEqual(g.nodes[toucher]?.updatedAt, at(1030))
+        XCTAssertEqual(g.nodes[w]?.state, .needsInput("Needs permission: Running make"), "a worker has its own session")
+
+        g.resolveNeedsInput(tmuxSession: w, now: at(1031))
+        XCTAssertEqual(g.nodes[w]?.state, .working)
+        XCTAssertEqual(g.nodes[w]?.activity, "Running make")
+
+        // The orchestrator's own prompt; a generic ask falls back to its last tool call.
+        g.apply(AgentEvent(ts: 1040, ev: "PreToolUse", role: "orchestrator", tool: "Bash", sum: "Running ca wait pc tests --timeout 20"))
+        g.apply(AgentEvent(ts: 1041, ev: "Notification", role: "orchestrator", tool: "elicitation_dialog", msg: "Pick one"))
+        XCTAssertEqual(g.orchestrator?.state, .needsInput("Pick one"))
+        g.resolveNeedsInput(tmuxSession: "ca-proj-mac-orch", now: at(1050))
+        XCTAssertEqual(g.orchestrator?.state, .working)
+        XCTAssertEqual(g.orchestrator?.activity, "Running ca wait pc tests --timeout 20")
+    }
+
+    func testWaitingFallbackSkipsWorkersAndDoneAgents() {
+        let g = AgentGraph()
+        let ev = HookFixtures.events(HookFixtures.eventsPrint)
+        for e in ev.prefix(5) { g.apply(e) }  // reader spawned and busy
+        g.apply(AgentEvent(ts: 1100, ev: "WorkerStart", host: "mac", sid: "ca-proj-mac-x", role: "worker", node: "x", tmux: "ca-proj-mac-x"))
+        g.apply(AgentEvent(ts: 1101, ev: "Stop", role: "orchestrator", bg: ["tn-unknown"]))
+        XCTAssertEqual(g.orchestrator?.state, .waiting(["reader"]), "unknown ids mean running subagents, never workers")
+        g.apply(AgentEvent(ts: 1102, ev: "SubagentStop", role: "orchestrator", aid: "acc7d38897638900e", atype: "general-purpose"))
+        g.apply(AgentEvent(ts: 1103, ev: "Stop", role: "orchestrator", bg: ["acc7d38897638900e", "tn-unknown"]))
+        XCTAssertEqual(g.orchestrator?.state, .idle, "done agents are not waited on")
+    }
+
+    func testCaWait() {
+        XCTAssertEqual(AgentGraph.caWaitTasks("ca wait pc wc mac build"), ["wc", "build"])
+        XCTAssertEqual(AgentGraph.caWaitTasks("cd x && ~/.claude/skills/crossagent/scripts/ca wait pc tests --timeout 300 2>&1 | tail"), ["tests"])
+        XCTAssertEqual(AgentGraph.caWaitTasks("ca run pc t -- make\nca wait --timeout 60 pc t"), ["t"])
+        XCTAssertEqual(AgentGraph.caWaitTasks("ca status"), [])
+        XCTAssertEqual(AgentGraph.caWaitTasks("echo ca wait"), [])
+
+        let g = AgentGraph()
+        g.apply(AgentEvent(ts: 1, ev: "UserPromptSubmit", role: "orchestrator", sum: "Asked: go"))
+        g.apply(AgentEvent(ts: 2, ev: "PreToolUse", role: "orchestrator", tool: "Bash", tuid: "t1",
+                           sum: "Running cd ~/proj &&", prompt: "cd ~/proj &&\nca wait pc wc mac build"))
+        XCTAssertEqual(g.orchestrator?.state, .waiting(["wc", "build"]))
+        XCTAssertEqual(g.orchestrator?.activity, "Waiting on wc, build")
+        g.apply(AgentEvent(ts: 22, ev: "PostToolUse", role: "orchestrator", tool: "Bash", tuid: "t1", sum: "Running cd ~/proj &&"))
+        XCTAssertEqual(g.orchestrator?.state, .working)
+        // Without the command field, the summary still works.
+        g.apply(AgentEvent(ts: 23, ev: "PreToolUse", role: "orchestrator", tool: "Bash", sum: "Running ca wait mac lint"))
+        XCTAssertEqual(g.orchestrator?.state, .waiting(["lint"]))
+    }
+
+    func testOneLineStripsMarkdown() {
+        XCTAssertEqual(AgentGraph.oneLine("## **Done**: built `CrossAgent`\nmore"), "Done: built CrossAgent")
+        XCTAssertEqual(AgentGraph.oneLine("```\nhello\n```"), "hello")
+        XCTAssertEqual(AgentGraph.oneLine("- item   one"), "item one")
+        XCTAssertEqual(AgentGraph.oneLine("* star"), "star")
+        let g = AgentGraph()
+        g.apply(AgentEvent(ts: 1, ev: "Stop", role: "orchestrator", msg: "**All set.** Tests pass.\n\n- one\n- two"))
+        XCTAssertEqual(g.orchestrator?.activity, "All set. Tests pass.")
+        XCTAssertEqual(g.orchestrator?.recent.last, "All set. Tests pass. one two")
     }
 
     func testDedupe() {
