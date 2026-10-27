@@ -10,11 +10,14 @@ final class RemoteSampler: @unchecked Sendable {
     }
 
     let host: Host
+    private let command: SpawnCommand
     private let onEvent: @MainActor (Event) -> Void
     private let queue = DispatchQueue(label: "crossagent.activity.remote")
 
     // Everything below is only touched on `queue`.
     private var process: Process?
+    /// Read ends of the current process's pipes, so stop can detach them right away.
+    private var readers: [FileHandle] = []
     private var buffer = Data()
     private var errors = Data()
     private var running = false
@@ -28,8 +31,10 @@ final class RemoteSampler: @unchecked Sendable {
     /// A line comes every 1.5 s, so this much silence means the link is dead.
     static let silenceLimit: TimeInterval = 12
 
-    init(host: Host, onEvent: @escaping @MainActor (Event) -> Void) {
+    /// `command` replaces the ssh sampler, for tests.
+    init(host: Host, command: SpawnCommand? = nil, onEvent: @escaping @MainActor (Event) -> Void) {
         self.host = host
+        self.command = command ?? LinuxSampler.command(host: host)
         self.onEvent = onEvent
     }
 
@@ -44,22 +49,43 @@ final class RemoteSampler: @unchecked Sendable {
     }
 
     func stop() {
-        queue.async { [self] in
-            running = false
-            watchdog?.cancel()
-            watchdog = nil
-            if let p = process, p.isRunning { p.terminate() }
-            process = nil
+        queue.async { [self] in halt() }
+    }
+
+    /// For app termination: stops now and waits up to `timeout` for ssh to exit, then
+    /// kills it, so no sampler is left running on the host with ppid 1.
+    func shutdown(timeout: TimeInterval = 0.5) {
+        let p = queue.sync { () -> Process? in
+            let p = process
+            halt()
+            return p
         }
+        guard let p, p.isRunning else { return }
+        let deadline = Date().addingTimeInterval(timeout)
+        while p.isRunning, Date() < deadline { usleep(10_000) }
+        if p.isRunning { kill(p.processIdentifier, SIGKILL) }
     }
 
     // MARK: Internals (on queue)
 
+    private func halt() {
+        running = false
+        watchdog?.cancel()
+        watchdog = nil
+        detachReaders()
+        if let p = process, p.isRunning { p.terminate() }
+        process = nil
+    }
+
+    private func detachReaders() {
+        for fh in readers { fh.readabilityHandler = nil }
+        readers = []
+    }
+
     private func launch() {
-        let cmd = LinuxSampler.command(host: host)
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: cmd.executable)
-        p.arguments = cmd.args
+        p.executableURL = URL(fileURLWithPath: command.executable)
+        p.arguments = command.args
         p.standardInput = FileHandle.nullDevice
         let out = Pipe(), err = Pipe()
         p.standardOutput = out
@@ -67,30 +93,34 @@ final class RemoteSampler: @unchecked Sendable {
         buffer.removeAll()
         errors.removeAll()
         accumulator = LinuxSampler.Accumulator()
+        // Handlers detach themselves at EOF before anything else: a handler left on a
+        // pipe at EOF fires nonstop and burns a core.
         out.fileHandleForReading.readabilityHandler = { [weak self] fh in
             let data = fh.availableData
+            if data.isEmpty { fh.readabilityHandler = nil; return }
             guard let self else { return }
             self.queue.async {
                 guard self.process === p else { return }
-                if data.isEmpty { fh.readabilityHandler = nil; return }
                 self.consume(data)
             }
         }
         err.fileHandleForReading.readabilityHandler = { [weak self] fh in
             let data = fh.availableData
+            if data.isEmpty { fh.readabilityHandler = nil; return }
             guard let self else { return }
             self.queue.async {
-                if data.isEmpty { fh.readabilityHandler = nil; return }
-                if self.errors.count < 4096 { self.errors.append(data) }
+                if self.process === p, self.errors.count < 4096 { self.errors.append(data) }
             }
         }
+        readers = [out.fileHandleForReading, err.fileHandleForReading]
         p.terminationHandler = { [weak self] proc in
+            out.fileHandleForReading.readabilityHandler = nil
+            err.fileHandleForReading.readabilityHandler = nil
             guard let self else { return }
             self.queue.async {
                 guard self.process === proc else { return }
                 self.process = nil
-                out.fileHandleForReading.readabilityHandler = nil
-                err.fileHandleForReading.readabilityHandler = nil
+                self.readers = []
                 if self.running { self.report(.failed(Self.reason(self.errors, status: proc.terminationStatus))) }
                 self.scheduleRestart()
             }
@@ -102,6 +132,7 @@ final class RemoteSampler: @unchecked Sendable {
             try p.run()
         } catch {
             process = nil
+            detachReaders()
             report(.failed("couldn't start ssh"))
             scheduleRestart()
         }

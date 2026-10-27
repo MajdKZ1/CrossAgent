@@ -171,6 +171,60 @@ final class ActivityTests: XCTestCase {
         XCTAssertEqual(s.values.last, 499)
     }
 
+    // MARK: Sampler lifecycle
+
+    static func cpuSeconds() -> Double {
+        var u = rusage()
+        getrusage(RUSAGE_SELF, &u)
+        return Double(u.ru_utime.tv_sec + u.ru_stime.tv_sec) + Double(u.ru_utime.tv_usec + u.ru_stime.tv_usec) / 1e6
+    }
+
+    /// Processes whose command line contains `marker`. `ownChildren` limits it to this test
+    /// process's children, since a running CrossAgent has its own samplers.
+    static func processes(matching marker: String, ownChildren: Bool = false) -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        p.arguments = (ownChildren ? ["-P", "\(getpid())"] : []) + ["-fl", marker]
+        let out = Pipe()
+        p.standardOutput = out
+        try? p.run()
+        p.waitUntilExit()
+        return String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    }
+
+    /// Regression: stopping used to leave the stdout handler on a pipe at EOF, which then
+    /// fired nonstop. Twenty pauses meant twenty spinning handlers.
+    @MainActor
+    func testStartStopLeaksNoHandlerOrProcess() async throws {
+        let marker = "ca-sampler-test-\(UUID().uuidString.prefix(8))"
+        let line = #"{"cpu":[["cpu",1,0,1,10,0,0,0,0]],"mem":{}}"#
+        let fake = SpawnCommand(executable: "/bin/sh",
+                                args: ["-c", "trap 'exit 0' TERM; while :; do echo '\(line)'; sleep 0.05; done", marker])
+        let pc = Host(id: "pc", name: "Linux PC", type: .ssh, target: "pc", accent: "#5fd39a")
+        var samples = 0
+        let sampler = RemoteSampler(host: pc, command: fake) { e in
+            if case .sample = e { samples += 1 }
+        }
+        for _ in 0..<20 {
+            sampler.start()
+            try await Task.sleep(nanoseconds: 150_000_000)
+            sampler.stop()
+            try await Task.sleep(nanoseconds: 30_000_000)
+        }
+        sampler.start()
+        try await Task.sleep(nanoseconds: 150_000_000)
+        sampler.shutdown()
+        XCTAssertGreaterThan(samples, 20, "the fake sampler should have streamed")
+        XCTAssertEqual(Self.processes(matching: marker), "", "shutdown waits for the process")
+
+        try await Task.sleep(nanoseconds: 500_000_000)
+        let before = Self.cpuSeconds()
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        let used = Self.cpuSeconds() - before
+        XCTAssertLessThan(used, 0.2, "CPU while stopped should be flat, got \(used) s over 2 s")
+        XCTAssertEqual(Self.processes(matching: marker), "")
+    }
+
     // MARK: Live dump
 
     /// `CROSSAGENT_ACTIVITY_DUMP=<seconds> swift test --filter ActivityTests/testLiveDump`
@@ -197,6 +251,39 @@ final class ActivityTests: XCTestCase {
             }
         }
         monitor.stop(detail: true)
+    }
+
+    /// `CROSSAGENT_ACTIVITY_DUMP=1 swift test --filter ActivityTests/testLiveToggle`: pauses and
+    /// resumes the real monitor (Mac plus ssh) 20 times, then checks CPU and leftover processes.
+    @MainActor
+    func testLiveToggle() async throws {
+        guard ProcessInfo.processInfo.environment["CROSSAGENT_ACTIVITY_DUMP"] != nil else {
+            throw XCTSkip("set CROSSAGENT_ACTIVITY_DUMP to run")
+        }
+        let monitor = ActivityMonitor.shared
+        let hosts = HostStore.load()
+        for i in 0..<20 {
+            monitor.start(hosts: hosts, detail: i % 2 == 0)
+            try await Task.sleep(nanoseconds: 1_200_000_000)
+            monitor.stop(detail: i % 2 == 0)
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        let before = Self.cpuSeconds()
+        try await Task.sleep(nanoseconds: 3_000_000_000)
+        let used = Self.cpuSeconds() - before
+        let left = Self.processes(matching: "python3 -I -u -c", ownChildren: true)
+        FileHandle.standardError.write(Data("toggle: \(String(format: "%.3f", used)) s CPU over 3 s while stopped; ssh left: \(left.isEmpty ? "none" : left)\n".utf8))
+        XCTAssertLessThan(used, 0.2)
+        XCTAssertEqual(left, "")
+        for h in monitor.hosts { FileHandle.standardError.write(Data("\(h.name): \(h.cpu.values.count) cpu points\n".utf8)) }
+
+        // Quit path: running, then shutdown must leave nothing behind.
+        monitor.start(hosts: hosts)
+        try await Task.sleep(nanoseconds: 2_500_000_000)
+        XCTAssertNotEqual(Self.processes(matching: "python3 -I -u -c", ownChildren: true), "", "sampler should be running")
+        monitor.shutdown()
+        XCTAssertEqual(Self.processes(matching: "python3 -I -u -c", ownChildren: true), "", "shutdown returns after ssh is gone")
     }
 
     static func describe(_ h: HostActivity, _ s: ActivitySample) -> String {

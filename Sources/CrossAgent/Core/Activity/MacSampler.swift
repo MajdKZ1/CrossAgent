@@ -43,6 +43,14 @@ final class MacSampler: @unchecked Sendable {
         }
     }
 
+    /// Synchronous stop for app termination. The tmux call it may be running is short.
+    func shutdown() {
+        queue.sync {
+            timer?.cancel()
+            timer = nil
+        }
+    }
+
     /// Session load needs a tmux call and a process walk, so it only runs while someone shows it.
     func setWantsSessions(_ on: Bool) {
         queue.async { [self] in

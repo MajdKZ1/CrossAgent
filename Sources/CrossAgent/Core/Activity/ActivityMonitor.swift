@@ -45,6 +45,18 @@ final class ActivityMonitor: ObservableObject {
         update()
     }
 
+    /// Call from applicationWillTerminate: stops sampling right away and makes sure the
+    /// ssh samplers are gone before the app exits, so none outlive it on the host.
+    func shutdown() {
+        viewers = 0
+        detailViewers = 0
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers = []
+        sampling = false
+        mac?.shutdown()
+        remotes.values.forEach { $0.shutdown() }
+    }
+
     func host(_ id: String) -> HostActivity? { hosts.first { $0.hostId == id } }
 
     private func configure(_ list: [Host]) {
