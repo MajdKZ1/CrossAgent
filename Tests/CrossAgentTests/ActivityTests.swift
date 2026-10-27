@@ -56,9 +56,9 @@ final class ActivityTests: XCTestCase {
     // MARK: meminfo
 
     func testMeminfo() {
-        let m = LinuxSampler.memory(["MemTotal": 31_736_492, "MemAvailable": 27_514_524, "SwapTotal": 8_388_604, "SwapFree": 8_388_604])
-        XCTAssertEqual(m.total, 31_736_492 * 1024)
-        XCTAssertEqual(m.used, (31_736_492 - 27_514_524) * 1024)
+        let m = LinuxSampler.memory(["MemTotal": 32_000_000, "MemAvailable": 27_500_000, "SwapTotal": 8_388_604, "SwapFree": 8_388_604])
+        XCTAssertEqual(m.total, 32_000_000 * 1024)
+        XCTAssertEqual(m.used, (32_000_000 - 27_500_000) * 1024)
         XCTAssertEqual(m.swapUsed, 0)
         XCTAssertEqual(m.swapTotal, 8_388_604 * 1024)
         let empty = LinuxSampler.memory([:])
@@ -74,8 +74,8 @@ final class ActivityTests: XCTestCase {
 
     // MARK: hwmon
 
-    // Real line from the PC (Ryzen, NVMe, NVIDIA GPU on the nvidia driver).
-    let pcLine = #"{"t":1793102294.715,"cpu":[["cpu",1,0,1,10,0,0,0,0]],"mem":{"MemTotal":32000000,"MemAvailable":27514524,"SwapTotal":8388604,"SwapFree":8388604},"psi":0.0,"hw":[["nvme","Composite",36850],["nvme","Sensor 1",42850],["nvme","Sensor 2",69850],["nvme","Sensor 3",36850],["k10temp","Tctl",39750],["k10temp","Tccd1",39500]],"gpu":[42.0,6.0],"ses":[["ca-x-pc-1",12.5,104857600,true],["ca-y-pc-1",0.0,2048,false]]}"#
+    // A line as the PC sampler prints it (Ryzen, NVMe, a GeForce on the nvidia driver).
+    let pcLine = #"{"t":1793102294.715,"cpu":[["cpu",1,0,1,10,0,0,0,0]],"mem":{"MemTotal":32000000,"MemAvailable":27500000,"SwapTotal":8388604,"SwapFree":8388604},"psi":0.0,"hw":[["nvme","Composite",36850],["nvme","Sensor 1",42850],["nvme","Sensor 2",69850],["nvme","Sensor 3",36850],["k10temp","Tctl",39750],["k10temp","Tccd1",39500]],"gpu":[42.0,6.0],"ses":[["ca-x-pc-1",12.5,104857600,true],["ca-y-pc-1",0.0,2048,false]]}"#
 
     func testParsesRealLine() throws {
         let raw = try XCTUnwrap(LinuxSampler.parse(Data(pcLine.utf8)))

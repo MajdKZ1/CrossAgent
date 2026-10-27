@@ -4,7 +4,7 @@ import XCTest
 final class SuperMaxTests: XCTestCase {
     static let gib: UInt64 = 1_073_741_824
 
-    // MARK: Parsers, on output captured from the real machines
+    // MARK: Parsers, on output in the real formats
 
     func testLscpu() throws {
         let text = """
@@ -74,7 +74,7 @@ final class SuperMaxTests: XCTestCase {
     }
 
     func testInstalledMemoryFromBlocks() {
-        let usable: UInt64 = 31_736_492 * 1024
+        let usable: UInt64 = 32_000_000 * 1024
         // The PC: 256 blocks of 128 MiB.
         XCTAssertEqual(SpecParsers.installedMemory(blockSizeHex: "8000000", blocks: 256, usable: usable), 32 * Self.gib)
         XCTAssertEqual(SpecParsers.installedMemory(blockSizeHex: nil, blocks: 0, usable: usable), usable)
@@ -131,7 +131,7 @@ final class SuperMaxTests: XCTestCase {
     }
 
     var pc: HostActivity {
-        host("pc", Self.pcSpecs, cpu: 0.40, memUsed: 4 * Self.gib, memTotal: 31_736_492 * 1024,
+        host("pc", Self.pcSpecs, cpu: 0.40, memUsed: 4 * Self.gib, memTotal: 32_000_000 * 1024,
              gpu: GPUReading(name: "NVIDIA GeForce GPU", util: 0.16, memUsed: Self.gib, memTotal: 8 * Self.gib, celsius: 43),
              disk: (220_000_000_000, 700_000_000_000),
              temps: [TempGroup(kind: .cpu, label: "CPU", celsius: 61.5), TempGroup(kind: .gpu, label: "GPU", celsius: 43)])
