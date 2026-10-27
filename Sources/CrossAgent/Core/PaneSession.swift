@@ -6,8 +6,26 @@ final class PaneTerminalView: LocalProcessTerminalView {
     /// When set, user keystrokes go here instead of straight to the process.
     var inputInterceptor: ((ArraySlice<UInt8>) -> Void)?
 
+    /// Keys typed before the other side is ready, sent in order once it is. tmux attaching
+    /// over ssh can eat input that arrives while it sets up the terminal.
+    private var held: [UInt8]?
+
+    func holdInput() { held = held ?? [] }
+
+    func releaseInput() {
+        guard let bytes = held else { return }
+        held = nil
+        if !bytes.isEmpty, process?.running == true { process.send(data: ArraySlice(bytes)) }
+    }
+
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
-        if let inputInterceptor { inputInterceptor(data) } else { super.send(source: source, data: data) }
+        if let inputInterceptor {
+            inputInterceptor(data)
+        } else if held != nil {
+            held?.append(contentsOf: data)
+        } else {
+            super.send(source: source, data: data)
+        }
     }
 
     /// Writes bytes straight to the process, skipping the interceptor.
@@ -69,6 +87,7 @@ final class PaneSession: ObservableObject, Identifiable {
         if let path = inherited["PATH"] { env.append("PATH=\(path)") }
         if !env.contains(where: { $0.hasPrefix("LANG=") }) { env.append("LANG=\(inherited["LANG"] ?? "en_US.UTF-8")") }
         state = .connecting
+        terminal.holdInput()
         terminal.setProcessOutputHandler { [weak self] in
             Task { @MainActor in self?.didReceiveOutput() }
         }
@@ -121,9 +140,15 @@ final class PaneSession: ObservableObject, Identifiable {
 
     fileprivate func didReceiveOutput() {
         lastOutput = Date()
-        if state == .connecting { state = .live }
+        if state == .connecting {
+            state = .live
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.terminal.releaseInput() }
+        }
     }
-    fileprivate func didExit(_ code: Int32?) { state = .exited(code) }
+    fileprivate func didExit(_ code: Int32?) {
+        terminal.releaseInput()
+        state = .exited(code)
+    }
     fileprivate func didSetTitle(_ t: String) { title = t }
 
     final class Delegate: LocalProcessTerminalViewDelegate {
