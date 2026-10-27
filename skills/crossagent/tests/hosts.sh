@@ -180,5 +180,19 @@ else
   echo "skip  claude wrapper (no script(1) here)"
 fi
 
+echo "== event files"
+echo keep > "$T/target"; ln -s "$T/target" "$EV/ca-lnk-pc-x.jsonl"
+python3 -I "$STREAM" --emit RemoteStop --host pc --project lnk --role x --tmux ca-lnk-pc-x rc=0 > /dev/null 2>&1
+t "a linked event file is never written through" sh -c "[ \"\$(cat '$T/target')\" = keep ] && [ -L '$EV/ca-lnk-pc-x.jsonl' ]"
+: > "$EV/ca-open-pc-x.jsonl"; chmod 666 "$EV/ca-open-pc-x.jsonl"
+python3 -I "$STREAM" --emit RemoteStop --host pc --project open --role x --tmux ca-open-pc-x rc=0 > /dev/null 2>&1
+t "an event file others can write is left alone" test ! -s "$EV/ca-open-pc-x.jsonl"
+ln -sf "$T/target" "$EV/ca-lnk2-mac-t9.jsonl"
+(mkdir -p "$T/lnk2" && cd "$T/lnk2" && CA_ROOT="$T/lnk2" "$CA" run mac t9 -- true && "$CA" wait mac t9 --timeout 20) > /dev/null 2>&1
+t "ca's WorkerStart and WorkerStop don't follow links either" test "$(cat "$T/target")" = keep
+chmod 755 "$EV"
+python3 -I "$STREAM" --emit RemoteStop --host pc --project ok --role x --tmux ca-ok-pc-x rc=0 > /dev/null 2>&1
+t "a loose events folder is tightened and still written" sh -c "ls -ld '$EV' | grep -q '^drwx------' && grep -q RemoteStop '$EV/ca-ok-pc-x.jsonl' && ls -l '$EV/ca-ok-pc-x.jsonl' | grep -q '^-rw-------'"
+
 t "nothing called PWNED anywhere" test -z "$(find "$T" -name PWNED 2>/dev/null)"
 cd "$T" || exit 1

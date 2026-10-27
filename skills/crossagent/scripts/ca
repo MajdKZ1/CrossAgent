@@ -39,9 +39,67 @@ private_dirs() {
     if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ]; then chmod 700 "$d" 2>/dev/null || true; fi
   done
 }
-private_dirs
+# ---------- project ----------
+
+# Project slug for session names. Must match ProjectSlug.make in
+# Sources/CrossAgent/Core/Contracts.swift: lowercase a-z 0-9, any other run becomes
+# one '-', dashes trimmed, cut to 16, trimmed again, empty becomes 'project'.
+slug() {
+  local s
+  s="$(printf %s "$1" | LC_ALL=C tr 'A-Z' 'a-z' | LC_ALL=C tr -cs 'a-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-16 | sed 's/-*$//')"
+  echo "${s:-project}"
+}
+
+set_root() {
+  ROOT="$1"
+  NAME="$(basename "$ROOT" | tr -c 'A-Za-z0-9._\n-' '_')"
+  SLUG="$(slug "$(basename "$ROOT")")"
+  PROJ_CONF="$ROOT/.crossagent/project"
+}
+set_root "${CA_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+# The hub passes its slug along so a folder with another name there (dir.<host>=) still matches.
+SLUG="${CA_SLUG:-$SLUG}"
+case "$SLUG" in ""|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) die "bad project slug '$SLUG'" ;; esac
+
+# tmux session for a task in this project: ca-<slug>-<host>-<task>
+sname() { echo "ca-$SLUG-$1-$2"; }
+
+# `ca portal start|stop <path>` works on another folder than the current one.
+root_from() {
+  [ -d "$1" ] || die "no such folder: $1"
+  set_root "$(cd -- "$1" && { git rev-parse --show-toplevel 2>/dev/null || pwd; })"
+}
+
+conf_get() { [ -f "$PROJ_CONF" ] && sed -n "s/^$1=//p" "$PROJ_CONF" | head -1 || true; }
+conf_list() { conf_get "$1" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' || true; }
+
+# Where the project lives on host $1, relative to home: the same path as here
+# (~/Projects/x <-> ~/Projects/x), or ~/crossagent/projects/<name> for projects outside
+# home. dir.<host>= in .crossagent/project overrides it (pc_dir= still counts as dir.pc=).
+# A repo could ship that file, so an override has to stay a plain folder under home.
+host_dir() {
+  local d; d="$(conf_get "dir\\.$1")"
+  [ -n "$d" ] || [ "$1" != pc ] || d="$(conf_get pc_dir)"
+  if [ -n "$d" ]; then
+    d="${d#\~/}"
+    case "/$d/" in
+      //*|*/../*|*/./*|/.*) die "dir.$1=$d in .crossagent/project has to be a folder under home: relative, no . or .. parts, not hidden" ;;
+    esac
+    printf '%s\n' "${d%/}"; return
+  fi
+  case "$ROOT" in "$HOME"/*) printf '%s\n' "${ROOT#"$HOME"/}" ;; *) echo "crossagent/projects/$NAME" ;; esac
+}
+
+# A path relative to home as one word for the remote shell. ./ keeps a leading - from
+# reading as an option.
+rq() { case "$1" in /*) q "$1" ;; *) q "./$1" ;; esac; }
+
+# Old name, still used by the app's ProjectTests to check it agrees with ca.
+pc_dir() { host_dir pc; }
 
 # ---------- hosts ----------
+
+private_dirs
 
 # hosts.json as "id<TAB>type<TAB>target<TAB>name" lines: this machine first (type local,
 # id from CA_HERE, else the file's local entry, else mac on macOS or the hostname), then
@@ -285,61 +343,6 @@ os.replace(tmp, path)
 PY
 }
 
-# ---------- project ----------
-
-# Project slug for session names. Must match ProjectSlug.make in
-# Sources/CrossAgent/Core/Contracts.swift: lowercase a-z 0-9, any other run becomes
-# one '-', dashes trimmed, cut to 16, trimmed again, empty becomes 'project'.
-slug() {
-  local s
-  s="$(printf %s "$1" | LC_ALL=C tr 'A-Z' 'a-z' | LC_ALL=C tr -cs 'a-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-16 | sed 's/-*$//')"
-  echo "${s:-project}"
-}
-
-set_root() {
-  ROOT="$1"
-  NAME="$(basename "$ROOT" | tr -c 'A-Za-z0-9._\n-' '_')"
-  SLUG="$(slug "$(basename "$ROOT")")"
-  PROJ_CONF="$ROOT/.crossagent/project"
-}
-set_root "${CA_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-# The hub passes its slug along so a folder with another name there (dir.<host>=) still matches.
-SLUG="${CA_SLUG:-$SLUG}"
-case "$SLUG" in ""|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) die "bad project slug '$SLUG'" ;; esac
-
-# tmux session for a task in this project: ca-<slug>-<host>-<task>
-sname() { echo "ca-$SLUG-$1-$2"; }
-
-# `ca portal start|stop <path>` works on another folder than the current one.
-root_from() {
-  [ -d "$1" ] || die "no such folder: $1"
-  set_root "$(cd -- "$1" && { git rev-parse --show-toplevel 2>/dev/null || pwd; })"
-}
-
-conf_get() { [ -f "$PROJ_CONF" ] && sed -n "s/^$1=//p" "$PROJ_CONF" | head -1 || true; }
-conf_list() { conf_get "$1" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' || true; }
-
-# Where the project lives on host $1, relative to home: the same path as here
-# (~/Projects/x <-> ~/Projects/x), or ~/crossagent/projects/<name> for projects outside
-# home. dir.<host>= in .crossagent/project overrides it (pc_dir= still counts as dir.pc=).
-# A repo could ship that file, so an override has to stay a plain folder under home.
-host_dir() {
-  local d; d="$(conf_get "dir\\.$1")"
-  [ -n "$d" ] || [ "$1" != pc ] || d="$(conf_get pc_dir)"
-  if [ -n "$d" ]; then
-    d="${d#\~/}"
-    case "/$d/" in
-      //*|*/../*|*/./*|/.*) die "dir.$1=$d in .crossagent/project has to be a folder under home: relative, no . or .. parts, not hidden" ;;
-    esac
-    printf '%s\n' "${d%/}"; return
-  fi
-  case "$ROOT" in "$HOME"/*) printf '%s\n' "${ROOT#"$HOME"/}" ;; *) echo "crossagent/projects/$NAME" ;; esac
-}
-
-# A path relative to home as one word for the remote shell. ./ keeps a leading - from
-# reading as an option.
-rq() { case "$1" in /*) q "$1" ;; *) q "./$1" ;; esac; }
-
 # ---------- reaching other hosts ----------
 
 # Runs "$@" with ca on <host>, in the project's folder there. Read only calls (probe,
@@ -487,11 +490,8 @@ SECRET_IGNORES=(.env '.env.*' '*.pem' '*.key' 'id_*')
 
 # The Portal to host $1: ca-<project> for the first ssh host in hosts.json (the name from
 # before there could be several, so those Portals live on), ca-<project>-<host> for others.
-sess() {
-  local b; b="ca-$(printf %s "$NAME" | tr -c 'A-Za-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//')"
-  [ "$b" != ca- ] || b=ca-project
-  if [ "$1" = "$(first_ssh)" ]; then printf '%s\n' "$b"; else printf '%s\n' "$b-$1"; fi
-}
+# No host means the first one. One line: the app's ProjectTests greps it out.
+sess() { local b; b="ca-$(printf %s "$NAME" | tr -c 'A-Za-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//')"; [ "$b" != ca- ] || b=ca-project; if [ -z "${1:-}" ] || [ "$1" = "$(first_ssh)" ]; then printf '%s\n' "$b"; else printf '%s\n' "$b-$1"; fi; }
 have_mutagen() { command -v mutagen >/dev/null 2>&1; }
 need_mutagen() {
   [ -n "$(ssh_hosts)" ] || die "no ssh hosts set up, so there's nothing to open a Portal to (ca hosts add <id> <ssh-target>)"
@@ -1040,16 +1040,22 @@ check_task() { valid_id "$1" || die "task name must be 1-40 chars of A-Z a-z 0-9
 num() { case "$2" in ""|*[!0123456789]*) die "$1 takes a whole number (got '$2')" ;; esac; [ "${#2}" -le 7 ] || die "$1 is too big (got '$2')"; }
 
 # Appends one WorkerStart/WorkerStop line to ~/.crossagent/events/<session>.jsonl for the
-# app's event pipeline. Best effort: any failure is swallowed so the task never notices.
+# app's event pipeline, through ca-stream.py's checks (private folder, no links, a file
+# only we can write). Best effort: any failure is swallowed so the task never notices.
 # event <ev> <host> <session> <slug> <task> <cwd or rc> <summary text>
 event() {
   local py=/usr/bin/python3
   [ -x "$py" ] || py="$(command -v python3 2>/dev/null)" || return 0
   "$py" -I -c '
-import json, os, re, sys, time
+import importlib.util, json, os, re, sys, time
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("ca_stream", sys.argv[8])
+cs = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cs)
 ev, host, sid, proj, node, extra, text = sys.argv[1:8]
 d = os.path.expanduser("~/.crossagent/events")
-os.makedirs(d, mode=0o700, exist_ok=True)
+if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", sid) or not cs.secure_dir(d):
+    sys.exit(0)
 text = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b.", "", text)
 text = " ".join(text.split())[:160].encode("utf-8", "replace").decode("utf-8")
 e = {"ts": time.time(), "ev": ev, "host": host, "sid": sid, "tmux": sid, "project": proj,
@@ -1059,10 +1065,8 @@ if ev == "WorkerStart":
 else:
     e["rc"] = int(extra) if re.fullmatch(r"-?[0-9]+", extra) else -1
 e["sum"] = text
-fd = os.open(os.path.join(d, sid + ".jsonl"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-with os.fdopen(fd, "a") as f:
-    f.write(json.dumps(e) + "\n")
-' "$@" >/dev/null 2>&1 || true
+cs.append(os.path.join(d, sid + ".jsonl"), (json.dumps(e) + "\n").encode("utf-8"))
+' "$@" "$SKILL_DIR/scripts/ca-stream.py" >/dev/null 2>&1 || true
 }
 
 NO_CLAUDE="ca run --claude is gone. Local work goes to native subagents (Agent tool), work on another host to its <host>-worker subagent (ca remote)"
