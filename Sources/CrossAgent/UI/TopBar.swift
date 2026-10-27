@@ -9,6 +9,7 @@ struct TopBar: View {
         HStack(spacing: 10) {
             if let project = app.project {
                 ProjectTitle(project: project)
+                    .fixedSize()
                 // Paths get their room before the host chips and the spacer.
                 ProjectPath(project: project, sync: app.sync)
                     .layoutPriority(1)
@@ -18,8 +19,9 @@ struct TopBar: View {
                     .foregroundStyle(Palette.text)
                     .padding(.trailing, 4)
             }
-            if width >= 1000 {
-                ForEach(app.hosts) { host in HostChip(host: host) }
+            // Host chips go first when room runs out; the project path needs it more.
+            if width >= (app.project == nil ? 1000 : 1200) {
+                ForEach(app.hosts) { host in HostChip(host: host).fixedSize() }
             }
             Spacer(minLength: 8)
 
@@ -34,6 +36,7 @@ struct TopBar: View {
             }
 
             SyncIndicator(sync: app.sync)
+                .fixedSize()
 
             if app.project != nil {
                 Button { app.showNewPane.toggle() } label: {
