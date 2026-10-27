@@ -611,7 +611,8 @@ final class MascotRig {
     }()
 
     static func accent(_ host: String) -> CGColor {
-        NSColor(hex: accents[host] ?? "#8a909c").cgColor
+        // A theme can override host colours (Mono does); hosts.json otherwise.
+        (ThemeTokens.shared.resolved.hosts[host] ?? NSColor(hex: accents[host] ?? "#8a909c")).cgColor
     }
 
     // MARK: Stills
