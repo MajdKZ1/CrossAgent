@@ -287,3 +287,16 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   - **What stayed:** the Mutagen session name `ca-<project>`, the `ca-cfg` label, the `sync_allow`/`sync_ignore` keys, function names and status words like "watching (in sync)". Renaming those would break existing portals. Projects that already have a CROSSAGENT.md keep their old wording, because `ca init` never overwrites it.
   - **Flush fix:** `ca portal flush` now waits up to about 10 s while Mutagen is still scanning or staging, where before it failed straight away after a resolved conflict.
   - **Installed skill:** the installed copy on both machines was updated with `install.sh`.
+- Super-Max Computer (M23):
+  - **RAM total:** it's installed memory. Linux reports a bit less than what is installed as usable, so it counts memory blocks to get the installed size, and trusts that count only within 25% of the usable figure. RAM used is total minus available, as before.
+  - **GPUs:** the Mac's GPU core count comes from IOKit `gpu-core-count`, with `system_profiler` only as a background fallback, so no cache file is needed. The Mac's GPU load and memory in use come from the IOAccelerator performance statistics every sample, readable without root. `nvidia-smi` gives no core count, so the PC GPU shows none.
+  - **VRAM:** it adds up across discrete GPUs only. The Mac's unified memory is listed beside it, because adding it would count Mac RAM twice.
+  - **Units:** storage is decimal, like Finder and drive labels, and the Mac counts purgeable space as free, like Finder. RAM is binary. Peak temperature leaves out the battery.
+  - **Offline machines:** they drop out of the totals. The card says "1 of 2 online", and the offline half stays dimmed with its last known specs and the reason.
+  - **Steady numbers:** the big load numbers are a 3 sample mean (4.5 s), rounded, in monospaced digits with no transitions.
+  - **The portal ring:** in the card it is steady or off and never pulses, so it costs nothing. It's drawn with Core Animation, and only the crossing state animates.
+  - **The PC sampler:** it stays one ssh stream. It now also sends the nvidia-smi fields, disk space and, once, the CPU specs. GPUs can only be added, after a test caught a line arriving before nvidia-smi output wiping the PC GPU.
+  - **The Mac disk query:** it takes 12 ms, so it runs every 10th sample.
+  - **More than two machines:** the card works for N machines, with a portal on each seam.
+  - **CPU cost:** release build, 45 s runs. The Activity tab with Super-Max uses 2.4 to 2.6% of a core, against 2.2 to 2.4% for the Panes tab.
+- Concurrent test instances shared the bare binary's defaults domain and reopened each other's throwaway projects. Agents now test with a renamed copy of the binary, so each gets its own defaults domain.
