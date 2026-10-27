@@ -70,11 +70,17 @@ host_arg() {
   echo "$h"
 }
 
-# Run "$@" on the PC inside the project's PC dir with the PC's own ca.
+# Run "$@" on the PC inside the project's PC dir with the PC's own ca. Read only
+# calls (probe, status) run in home if the folder isn't there, so a Mac only
+# project never leaves an empty folder on the PC.
 on_pc() {
-  local dir; dir="$(pc_dir)"
+  local dir mk; dir="$(pc_dir)"
+  case "$1" in
+    __probe|__status) mk="{ cd $(q "$dir") 2>/dev/null || cd; }" ;;
+    *) mk="mkdir -p $(q "$dir") && cd $(q "$dir")" ;;
+  esac
   # shellcheck disable=SC2086
-  ssh $SSH_OPTS pc "PATH=\$HOME/.local/bin:\$PATH; mkdir -p $(q "$dir") && cd $(q "$dir") && CA_ROOT=\$PWD exec $RCA$(qall "$@")"
+  ssh $SSH_OPTS pc "PATH=\$HOME/.local/bin:\$PATH; $mk && CA_ROOT=\$PWD exec $RCA$(qall "$@")"
 }
 
 remote_ok() {
@@ -491,7 +497,7 @@ init() {
   elif [ "$mode" = pc ]; then push
   elif have_mutagen; then sync_start
   else say "mutagen isn't installed, falling back to a one-off push (brew install mutagen-io/mutagen/mutagen)"; push; fi
-  echo "ready: $NAME  mac=$( [ "$HERE" = mac ] && echo "$ROOT" | sed "s|^$HOME|~|" || echo -)  pc=~/$(pc_dir)"
+  echo "ready: $NAME  mac=$( [ "$HERE" = mac ] && echo "$ROOT" | sed "s|^$HOME|~|" || echo -)  pc=$( [ "$mode" = mac ] && echo - || echo "~/$(pc_dir)")"
 }
 
 # ---------- tasks ----------
