@@ -25,7 +25,7 @@ final class Automation {
 
     static var enabled: Bool {
         ProcessInfo.processInfo.environment["CROSSAGENT_AUTOMATION"] == "1"
-            || UserDefaults.standard.bool(forKey: "automation")
+            || AppDefaults.store.bool(forKey: "automation")
     }
 
     init(windows: ProjectWindows) {
@@ -99,6 +99,7 @@ final class Automation {
         if handleTheme(name, cmd) { return }
         if handleSessions(name, cmd) { return }
         if handleRemote(name, cmd) { return }
+        if handleRecording(name, cmd) { return }
         switch name {
         case "new" where cmd["check"] as? Bool == true:
             // Same path as the new pane popover, with the folder check on ssh hosts.
