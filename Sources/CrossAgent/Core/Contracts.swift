@@ -126,6 +126,8 @@ struct AgentNode: Identifiable, Equatable, Codable {
     var finishedAt: Date?
     var flow: CableFlow = .none
     var flowAt: Date?
+    /// While `needsInput`: the state it interrupted (a pending `ca wait`), restored once answered.
+    var resumeState: AgentState? = nil
 }
 
 /// The live graph for one project. The orchestrator is always `nodes[orchestratorID]`.

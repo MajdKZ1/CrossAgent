@@ -110,7 +110,7 @@ extension AgentGraph {
         case "PostToolUseFailure", "StopFailure":
             update(o, at: t) { $0.state = .error(e.err ?? "Something failed"); $0.activity = e.err ?? "Failed" }
         case "PermissionRequest":
-            update(o, at: t) { $0.state = .needsInput(e.sum ?? "Needs permission"); $0.activity = e.sum ?? "Needs permission" }
+            update(o, at: t) { Self.ask(&$0, e.sum ?? "Needs permission", specific: true) }
         case "Notification":
             guard let kind = e.tool, Self.needsInputNotifications.contains(kind) else { return }
             // Subagent permission prompts also send an orchestrator Notification.
@@ -193,6 +193,11 @@ extension AgentGraph {
             }
             guard mine else { continue }
             update(id, at: now) {
+                if case .waiting(let names)? = $0.resumeState {
+                    $0.state = .waiting(names)
+                    $0.activity = "Waiting on " + names.joined(separator: ", ")
+                    return
+                }
                 $0.state = .working
                 let prefix = "Needs permission: "
                 if $0.activity.hasPrefix(prefix) {
@@ -235,10 +240,13 @@ extension AgentGraph {
             update(aid, at: t) { if $0.state != .done { $0.state = .thinking } }
         case "PreToolUse":
             revive(aid)
+            // A handback (or a message to the lead) carries the agent's report. Show it,
+            // so it is also the result when SubagentStop comes with no message.
+            let report = Self.isReport(e) ? e.prompt.flatMap { $0.isEmpty ? nil : $0 } : nil
             update(aid, at: t) {
                 $0.state = .working
-                $0.activity = e.sum ?? "Working"
-                if let s = e.sum { Self.push(s, into: &$0.recent) }
+                $0.activity = report ?? e.sum ?? "Working"
+                if let s = report ?? e.sum { Self.push(s, into: &$0.recent) }
             }
             if e.tool == "SendMessage", let to = e.to { messageSent(to: to, from: aid, at: t) }
         case "PostToolUse":
@@ -247,7 +255,7 @@ extension AgentGraph {
             update(aid, at: t) { $0.state = .error(e.err ?? "Something failed"); $0.activity = e.err ?? "Failed" }
         case "PermissionRequest":
             revive(aid)
-            update(aid, at: t) { $0.state = .needsInput(e.sum ?? "Needs permission"); $0.activity = e.sum ?? "Needs permission" }
+            update(aid, at: t) { Self.ask(&$0, e.sum ?? "Needs permission", specific: true) }
         case "Notification":
             guard let kind = e.tool, Self.needsInputNotifications.contains(kind) else { return }
             update(aid, at: t) { Self.ask(&$0, e.msg ?? "Needs your input") }
@@ -317,7 +325,7 @@ extension AgentGraph {
         case "PostToolUse":
             update(id, at: t) { n in if Self.isBusyOrStuck(n.state) { n.state = .working } }
         case "PermissionRequest":
-            update(id, at: t) { $0.state = .needsInput(e.sum ?? "Needs permission"); $0.activity = e.sum ?? "Needs permission" }
+            update(id, at: t) { Self.ask(&$0, e.sum ?? "Needs permission", specific: true) }
         case "Notification":
             guard let kind = e.tool, Self.needsInputNotifications.contains(kind) else { return }
             update(id, at: t) { Self.ask(&$0, e.msg ?? "Needs your input") }
@@ -356,7 +364,7 @@ extension AgentGraph {
         guard let n = nodes[id], n.state != .done else { return }
         update(id, at: t) {
             $0.state = .done
-            if let m = message {
+            if let m = message, !Self.oneLine(m).isEmpty {
                 $0.activity = m
                 Self.push(m, into: &$0.recent)
             } else if $0.activity.isEmpty {
@@ -398,8 +406,14 @@ extension AgentGraph {
         case .error(let s): n.state = .error(Self.oneLine(s))
         default: break
         }
+        if case .needsInput = n.state {} else { n.resumeState = nil }
         if let t { n.updatedAt = max(n.updatedAt, t) }
         if n != nodes[id] { nodes[id] = n }
+    }
+
+    private static func isReport(_ e: AgentEvent) -> Bool {
+        e.tool == "SubagentHandback"
+            || (e.tool == "SendMessage" && ["team-lead", "main", "lead", "orchestrator"].contains((e.to ?? "").lowercased()))
     }
 
     private static func isBusyOrStuck(_ s: AgentState) -> Bool {
@@ -409,10 +423,17 @@ extension AgentGraph {
         }
     }
 
-    /// Sets needsInput, but a generic notification never replaces a more specific ask
-    /// (like the PermissionRequest's "Needs permission: Running x").
-    private static func ask(_ n: inout AgentNode, _ text: String) {
-        if case .needsInput = n.state { return }
+    /// Sets needsInput and remembers a `ca wait` it interrupts. A generic notification
+    /// never replaces a more specific ask (like the PermissionRequest's "Needs
+    /// permission: Running x"); a `specific` one does.
+    private static func ask(_ n: inout AgentNode, _ text: String, specific: Bool = false) {
+        if case .needsInput = n.state {
+            guard specific else { return }
+        } else if case .waiting = n.state {
+            n.resumeState = n.state
+        } else {
+            n.resumeState = nil
+        }
         n.state = .needsInput(text)
         n.activity = text
     }

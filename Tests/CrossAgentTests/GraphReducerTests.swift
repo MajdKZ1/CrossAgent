@@ -100,7 +100,7 @@ final class GraphReducerTests: XCTestCase {
         XCTAssertEqual(g.nodes[toucher]?.state, .working)
         g = run(ev, upTo: 23)  // SendMessage to the lead
         XCTAssertEqual(g.nodes[toucher]?.flow, .toOrchestrator)
-        XCTAssertEqual(g.nodes[toucher]?.activity, "Messaging team-lead: touch z.txt succeeded")
+        XCTAssertEqual(g.nodes[toucher]?.activity, "touch z.txt succeeded: no permission denial, exit 0, no output. Ran in /Users/me/proj.")
 
         g = run(ev)
         XCTAssertEqual(g.nodes[toucher]?.state, .done)
@@ -277,12 +277,12 @@ final class GraphReducerTests: XCTestCase {
         XCTAssertEqual(g.nodes[w]?.activity, "Running make")
 
         // The orchestrator's own prompt; a generic ask falls back to its last tool call.
-        g.apply(AgentEvent(ts: 1040, ev: "PreToolUse", role: "orchestrator", tool: "Bash", sum: "Running ca wait pc tests --timeout 20"))
+        g.apply(AgentEvent(ts: 1040, ev: "PreToolUse", role: "orchestrator", tool: "Bash", sum: "Running swift build"))
         g.apply(AgentEvent(ts: 1041, ev: "Notification", role: "orchestrator", tool: "elicitation_dialog", msg: "Pick one"))
         XCTAssertEqual(g.orchestrator?.state, .needsInput("Pick one"))
         g.resolveNeedsInput(tmuxSession: "ca-proj-mac-orch", now: at(1050))
         XCTAssertEqual(g.orchestrator?.state, .working)
-        XCTAssertEqual(g.orchestrator?.activity, "Running ca wait pc tests --timeout 20")
+        XCTAssertEqual(g.orchestrator?.activity, "Running swift build")
     }
 
     func testWaitingFallbackSkipsWorkersAndDoneAgents() {
@@ -315,6 +315,66 @@ final class GraphReducerTests: XCTestCase {
         // Without the command field, the summary still works.
         g.apply(AgentEvent(ts: 23, ev: "PreToolUse", role: "orchestrator", tool: "Bash", sum: "Running ca wait mac lint"))
         XCTAssertEqual(g.orchestrator?.state, .waiting(["lint"]))
+    }
+
+    func testCaWaitSurvivesAPermissionPrompt() {
+        let g = AgentGraph(session: "ca-proj-mac-orch")
+        g.apply(AgentEvent(ts: 1, ev: "PreToolUse", role: "orchestrator", tool: "Bash", tuid: "t1",
+                           sum: "Running ca wait pc wc mac build", prompt: "ca wait pc wc mac build"))
+        XCTAssertEqual(g.orchestrator?.state, .waiting(["wc", "build"]))
+        g.apply(AgentEvent(ts: 2, ev: "PermissionRequest", role: "orchestrator", tool: "Bash", sum: "Needs permission: Running ca wait pc wc mac build"))
+        g.apply(AgentEvent(ts: 2.1, ev: "Notification", role: "orchestrator", tool: "permission_prompt", msg: "Claude needs your permission"))
+        XCTAssertEqual(g.orchestrator?.state, .needsInput("Needs permission: Running ca wait pc wc mac build"))
+        XCTAssertEqual(g.orchestrator?.resumeState, .waiting(["wc", "build"]))
+
+        g.resolveNeedsInput(tmuxSession: "ca-proj-mac-orch", now: at(3))
+        XCTAssertEqual(g.orchestrator?.state, .waiting(["wc", "build"]))
+        XCTAssertEqual(g.orchestrator?.activity, "Waiting on wc, build")
+        XCTAssertNil(g.orchestrator?.resumeState)
+
+        g.apply(AgentEvent(ts: 20, ev: "PostToolUse", role: "orchestrator", tool: "Bash", tuid: "t1"))
+        XCTAssertEqual(g.orchestrator?.state, .working)
+
+        // A prompt over plain work resumes to working, and leaves nothing behind.
+        g.apply(AgentEvent(ts: 21, ev: "PreToolUse", role: "orchestrator", tool: "Bash", sum: "Running rm x"))
+        g.apply(AgentEvent(ts: 22, ev: "PermissionRequest", role: "orchestrator", tool: "Bash", sum: "Needs permission: Running rm x"))
+        XCTAssertNil(g.orchestrator?.resumeState)
+        g.resolveNeedsInput(tmuxSession: "ca-proj-mac-orch", now: at(23))
+        XCTAssertEqual(g.orchestrator?.state, .working)
+        // Answered through a hook event instead (PostToolUse): the remembered state is dropped.
+        g.apply(AgentEvent(ts: 24, ev: "PreToolUse", role: "orchestrator", tool: "Bash", sum: "Running ca wait pc wc"))
+        g.apply(AgentEvent(ts: 25, ev: "PermissionRequest", role: "orchestrator", tool: "Bash", sum: "Needs permission: Running ca wait pc wc"))
+        g.apply(AgentEvent(ts: 26, ev: "PostToolUse", role: "orchestrator", tool: "Bash"))
+        XCTAssertEqual(g.orchestrator?.state, .working)
+        XCTAssertNil(g.orchestrator?.resumeState)
+    }
+
+    func testHandbackIsTheResult() {
+        let g = AgentGraph()
+        let a = "awriter-1"
+        g.apply(AgentEvent(ts: 1, ev: "SubagentStart", role: "orchestrator", aid: a, atype: "writer"))
+        g.apply(AgentEvent(ts: 2, ev: "PreToolUse", role: "orchestrator", aid: a, atype: "writer", tool: "Read", sum: "Reading a.txt"))
+        g.apply(AgentEvent(ts: 3, ev: "PreToolUse", role: "orchestrator", aid: a, atype: "writer", tool: "SubagentHandback",
+                           sum: "Reporting back", prompt: "## Report\n**a.txt** says `hello`.\n- one line"))
+        g.apply(AgentEvent(ts: 4, ev: "PostToolUse", role: "orchestrator", aid: a, atype: "writer", tool: "SubagentHandback", sum: "Reporting back"))
+        g.apply(AgentEvent(ts: 5, ev: "SubagentStop", role: "orchestrator", aid: a, atype: "writer"))
+        XCTAssertEqual(g.nodes[a]?.state, .done)
+        XCTAssertEqual(g.nodes[a]?.activity, "Report")
+        XCTAssertEqual(g.nodes[a]?.recent.last, "Report a.txt says hello. one line")
+
+        // A message to the lead counts too; a real stop message still wins.
+        let b = "aother-2"
+        g.apply(AgentEvent(ts: 6, ev: "SubagentStart", role: "orchestrator", aid: b, atype: "other"))
+        g.apply(AgentEvent(ts: 7, ev: "PreToolUse", role: "orchestrator", aid: b, atype: "other", tool: "SendMessage",
+                           sum: "Messaging team-lead: done", prompt: "Build is green on both machines.", to: "team-lead"))
+        XCTAssertEqual(g.nodes[b]?.flow, .toOrchestrator)
+        g.apply(AgentEvent(ts: 8, ev: "SubagentStop", role: "orchestrator", aid: b, atype: "other", msg: "```\n```"))
+        XCTAssertEqual(g.nodes[b]?.activity, "Build is green on both machines.")
+        let c = "athird-3"
+        g.apply(AgentEvent(ts: 9, ev: "SubagentStart", role: "orchestrator", aid: c, atype: "third"))
+        g.apply(AgentEvent(ts: 10, ev: "PreToolUse", role: "orchestrator", aid: c, atype: "third", tool: "SubagentHandback", prompt: "short"))
+        g.apply(AgentEvent(ts: 11, ev: "SubagentStop", role: "orchestrator", aid: c, atype: "third", msg: "**Full answer** here"))
+        XCTAssertEqual(g.nodes[c]?.activity, "Full answer here")
     }
 
     func testOneLineStripsMarkdown() {
