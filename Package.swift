@@ -12,7 +12,7 @@ let package = Package(
             name: "CrossAgent",
             dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")],
             path: "Sources/CrossAgent",
-            resources: [.copy("Resources/AppIcon.icns"), .copy("Resources/crossagent-hook.py")]
+            resources: [.copy("Resources/AppIcon.icns"), .copy("Resources/crossagent-hook.py"), .copy("Resources/Themes")]
         ),
         .testTarget(
             name: "CrossAgentTests",

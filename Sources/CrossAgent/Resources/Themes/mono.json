@@ -1,0 +1,40 @@
+{
+  "name": "Mono",
+  "ui": {
+    "window": "#0b0b0b",
+    "surface": "#101010",
+    "raised": "#181818",
+    "border": "#c8c8c814",
+    "hairline": "#c8c8c80d",
+    "text": "#c8c8c8",
+    "muted": "#8c8c8c",
+    "faint": "#626262",
+    "accent": "#8fa1b3",
+    "success": "#8fae94",
+    "warning": "#bba67c",
+    "danger": "#bf8a8a",
+    "broadcast": "#c09a84",
+    "synced": "#8fae94",
+    "chip": "#c8c8c80a",
+    "chipHover": "#c8c8c814"
+  },
+  "terminal": {
+    "background": "#101010",
+    "foreground": "#c8c8c8",
+    "cursor": "#a8a8a8",
+    "selection": "#333333",
+    "selectionForeground": "#e0e0e0",
+    "ansi": [
+      "#2e2e2e", "#b07a7a", "#8aa585", "#b0a073", "#7f91ad", "#a089ad", "#7fa6a6", "#b4b4b4",
+      "#808080", "#c79a9a", "#a8c2a3", "#cbbd93", "#a2b2cb", "#bba9c7", "#a2c2c2", "#dedede"
+    ]
+  },
+  "mascot": {
+    "body": "#b3dcff",
+    "eyes": "#0b1218"
+  },
+  "hosts": {
+    "mac": "#8fa1b3",
+    "pc": "#8fae94"
+  }
+}

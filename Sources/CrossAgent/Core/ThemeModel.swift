@@ -4,6 +4,8 @@ import AppKit
 // Everyone reads colours through `Palette` (SwiftUI) and `Theme` (terminals); the theme
 // work makes those follow `ThemeStore.shared.current`. Layer based views (canvas,
 // mascot) listen for `.crossAgentThemeChanged` and recolour themselves.
+//
+// Colours are hex strings: "#rrggbb", or "#rrggbbaa" for translucent ones.
 
 struct AppTheme: Codable, Equatable, Identifiable {
     var id: String { name }
@@ -14,10 +16,16 @@ struct AppTheme: Codable, Equatable, Identifiable {
         var border: String, hairline: String
         var text: String, muted: String, faint: String
         var accent: String, success: String, warning: String, danger: String, broadcast: String
+        /// Sync indicator when everything is synced. Falls back to `success`.
+        var synced: String?
+        /// Resting and hovered fill of small controls. Fall back to a low alpha of `text`.
+        var chip: String?, chipHover: String?
     }
 
     struct Terminal: Codable, Equatable {
         var background: String, foreground: String, cursor: String, selection: String
+        /// Text drawn over the selection. Falls back to black.
+        var selectionForeground: String?
         /// 16 ANSI colours: black, red, green, yellow, blue, magenta, cyan, white, then the bright ones.
         var ansi: [String]
     }
@@ -29,6 +37,8 @@ struct AppTheme: Codable, Equatable, Identifiable {
     var ui: UI
     var terminal: Terminal
     var mascot: Mascot
+    /// Optional per host accent overrides, keyed by host id from hosts.json.
+    var hosts: [String: String]?
 }
 
 extension Notification.Name {

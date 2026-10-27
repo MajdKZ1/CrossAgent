@@ -1,0 +1,36 @@
+{
+  "name": "Default",
+  "ui": {
+    "window": "#0b0c0f",
+    "surface": "#0f1115",
+    "raised": "#14171c",
+    "border": "#ffffff12",
+    "hairline": "#ffffff0d",
+    "text": "#d7dae0",
+    "muted": "#8a909c",
+    "faint": "#5b616c",
+    "accent": "#6ea8fe",
+    "success": "#5fd39a",
+    "warning": "#f5b041",
+    "danger": "#f07178",
+    "broadcast": "#ff9f6e",
+    "synced": "#8fd694",
+    "chip": "#ffffff0a",
+    "chipHover": "#ffffff14"
+  },
+  "terminal": {
+    "background": "#0f1115",
+    "foreground": "#d7dae0",
+    "cursor": "#9aa4b2",
+    "selection": "#00a6b2",
+    "selectionForeground": "#000000",
+    "ansi": [
+      "#000000", "#c23621", "#25bc24", "#adad27", "#492ee1", "#d338d3", "#33bbc8", "#cbcccd",
+      "#818383", "#fc391f", "#31e722", "#eaec23", "#5833ff", "#f935f8", "#14f0f0", "#e9ebeb"
+    ]
+  },
+  "mascot": {
+    "body": "#b3dcff",
+    "eyes": "#0b1218"
+  }
+}
