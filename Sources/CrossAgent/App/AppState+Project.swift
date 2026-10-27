@@ -5,8 +5,8 @@ extension AppState {
 
     var recentProjects: [RecentProject] { store.recents() }
 
-    /// Switches to the project in `url`. The current project's state is saved and its
-    /// pane clients close; their tmux sessions keep running.
+    /// Brings the project in `url` to the front. An open one comes back as it was; the
+    /// current one is parked with its terminals running (see `stashWorkspace`).
     func openProject(_ url: URL) {
         let next = Project(url: url)
         guard ProjectStore.folderExists(next.path) else {
@@ -15,11 +15,13 @@ extension AppState {
             return
         }
         if project?.path == next.path { return }
-        if project != nil { saveLayout() }
-        tearDownOrchestrator()
-        closeAllPanes()
-        orchestratorPane?.close()
-        orchestratorPane = nil
+        stashWorkspace()
+        if let ws = workspaces.first(where: { $0.project.path == next.path }) {
+            restoreWorkspace(ws)
+            monitor?.refreshNow()
+            return
+        }
+        resetToWelcome()
 
         project = next
         store.noteOpened(next)
@@ -28,10 +30,12 @@ extension AppState {
         setUpOrchestrator(for: next, on: state.orchestratorOn)
         restoreState(state, project: next)
         orchestratorRestored(workers: state.workerNodes ?? [])
+        if let t = selectedTab { select(t.id) }
         monitor?.refreshNow()
     }
 
-    /// Back to the welcome screen. Nothing is killed.
+    /// Closes the front project: another open one comes forward, else the welcome
+    /// screen. Nothing is killed.
     func closeProject() {
         guard project != nil else { return }
         saveLayout()
@@ -39,14 +43,14 @@ extension AppState {
         closeAllPanes()
         orchestratorPane?.close()
         orchestratorPane = nil
-        isRestoring = true
-        project = nil
-        orchestratorInfo = nil
-        nodePositions = [:]
-        finishedNodes = []
-        mode = .panes
-        isRestoring = false
-        store.lastProjectPath = nil
+        for p in agentPanes.values { p.close() }
+        agentPanes = [:]
+        if let ws = workspaces.last {
+            restoreWorkspace(ws)
+        } else {
+            resetToWelcome()
+            store.lastProjectPath = nil
+        }
     }
 
     /// On launch: reopens the last project if its folder still exists.
@@ -75,14 +79,17 @@ extension AppState {
         if let o = orchestratorPane {
             orch = OrchestratorState(hostId: o.host.id, session: o.session, enabled: true)
         }
+        let saved = savedTabs
         let state = ProjectState(
             panes: panes.map { SavedPane(hostId: $0.host.id, mode: $0.mode, session: $0.session) },
-            mode: mode.rawValue,
+            mode: saved.tabs.first { $0.id == saved.selected }?.mode.rawValue,
             orchestrator: orch,
             nodePositions: savedNodePositions,
             finishedNodes: finishedNodes.isEmpty ? nil : finishedNodes,
             orchestratorOn: self.orch?.enabled,
-            workerNodes: activeWorkerNodes.isEmpty ? nil : activeWorkerNodes)
+            workerNodes: activeWorkerNodes.isEmpty ? nil : activeWorkerNodes,
+            tabs: saved.tabs,
+            selectedTab: saved.selected)
         store.saveState(state, for: project)
     }
 
@@ -102,8 +109,7 @@ extension AppState {
         }
         nodePositions = state.nodePositions
         finishedNodes = state.finishedNodes ?? []
-        mode = state.mode.flatMap(AppMode.init(rawValue:)) ?? .panes
-        modeBeforeStation = .panes
+        restoreTabs(state)
         if let first = panes.first { focus(first.id) }
     }
 

@@ -2,7 +2,8 @@ import AppKit
 import Combine
 import SwiftUI
 
-enum AppMode: String, Codable { case panes, station, orchestrator }
+/// What the selected tab shows. Follows the tab selection, set it through `select` / `open`.
+enum AppMode: String, Codable { case panes, station, orchestrator, activity, agent, welcome, dev }
 
 /// Everything the window shows: panes, focus, broadcast, layout persistence.
 @MainActor
@@ -13,23 +14,28 @@ final class AppState: ObservableObject {
     /// Mutagen ca-* sync sessions for the top bar. Started by AppDelegate.
     let sync = SyncMonitor()
 
-    @Published private(set) var panes: [PaneSession] = []
+    /// Set directly only by the workspace swap; use `adopt` / `close` otherwise.
+    @Published var panes: [PaneSession] = []
     @Published var focusedID: UUID?
     @Published var maximizedID: UUID?
     @Published private(set) var broadcast = false
     /// The open project. Set it through `openProject` / `closeProject`.
     @Published var project: Project?
-    /// Which view the window shows. Saved with the project.
-    @Published var mode: AppMode = .panes {
+    /// What the selected tab shows. Set by `select`.
+    @Published var mode: AppMode = .welcome {
         didSet {
-            if mode == .station, oldValue != .station { modeBeforeStation = oldValue }
-            if mode != oldValue {
-                saveLayout()
-                orchestratorModeChanged(from: oldValue)
-            }
+            if mode != oldValue { orchestratorModeChanged(from: oldValue) }
         }
     }
-    var modeBeforeStation: AppMode = .panes
+    /// The open project's tabs, or a lone Welcome tab with no project. See Tabs.swift.
+    @Published var tabs: [Tab] = [Tab(kind: .welcome)]
+    @Published var selectedTabID: String = ""
+    /// Where closing the selected tab goes back to.
+    var previousTabID: String?
+    /// Attached terminals of agent tabs that show a tmux session, by tab id.
+    @Published var agentPanes: [String: PaneSession] = [:]
+    /// Projects open in the background, kept warm so switching back is instant.
+    var workspaces: [ProjectWorkspace] = []
     /// The project's orchestrator Claude. Not in `panes`, the canvas shows it.
     @Published var orchestratorPane: PaneSession?
     /// The open project's agent graph, event pipeline and canvas overlays. See AppState+Orchestrator.
@@ -56,7 +62,7 @@ final class AppState: ObservableObject {
     @Published var folderPrompt: FolderPrompt?
     /// "<project path>|<host id>" pairs whose folder was found this session.
     var foldersFound: Set<String> = []
-    private var stateWatchers: [UUID: AnyCancellable] = [:]
+    var stateWatchers: [UUID: AnyCancellable] = [:]
 
     private static let lastHostKey = "lastHostID"
 
@@ -66,15 +72,16 @@ final class AppState: ObservableObject {
         self.store = store
         self.hosts = hosts
         lastHostID = UserDefaults.standard.string(forKey: Self.lastHostKey) ?? hosts.first?.id ?? "mac"
+        selectedTabID = tabs[0].id
     }
 
     func host(_ id: String) -> Host? { hosts.first { $0.id == id } }
 
-    /// The station is one of the modes. Turning it off goes back to the mode before it.
+    /// The station is a tab. Turning it off goes back to the tab before it.
     var showStation: Bool {
         get { mode == .station }
         set {
-            if newValue { mode = .station } else if mode == .station { mode = modeBeforeStation == .station ? .panes : modeBeforeStation }
+            if newValue { open(.station) } else if mode == .station { selectPrevious() }
         }
     }
 
@@ -130,6 +137,7 @@ final class AppState: ObservableObject {
         let pane = PaneSession(host: host, mode: mode, session: name, cwd: cwdOverride ?? project.cwd(for: host),
                                env: projectEnv(project))
         adopt(pane)
+        if self.mode != .panes { open(.panes) }
         lastHostID = host.id
         UserDefaults.standard.set(host.id, forKey: Self.lastHostKey)
         focus(pane.id)
@@ -255,13 +263,13 @@ final class AppState: ObservableObject {
 
     func toggleBroadcast() { setBroadcast(!broadcast) }
 
-    func setBroadcast(_ on: Bool) {
+    func setBroadcast(_ on: Bool, quiet: Bool = false) {
         broadcast = on
         for pane in panes { wire(pane) }
-        flash(on ? "Broadcast on, typing goes to every live pane" : "Broadcast off")
+        if !quiet { flash(on ? "Broadcast on, typing goes to every live pane" : "Broadcast off") }
     }
 
-    private func wire(_ pane: PaneSession) {
+    func wire(_ pane: PaneSession) {
         if broadcast {
             pane.terminal.inputInterceptor = { [weak self] data in
                 MainActor.assumeIsolated { self?.broadcastInput(data) }

@@ -9,7 +9,7 @@ struct NodeRelay: Equatable {
 }
 
 /// Orchestrator mode for one open project: the agent graph, the event pipeline that
-/// feeds it, and what the canvas has open on top (detail card, relay card).
+/// feeds it, and the relay card the canvas has open on top.
 /// Made when a project opens, stopped and dropped when it closes.
 @MainActor
 final class ProjectOrchestrator: ObservableObject {
@@ -19,12 +19,11 @@ final class ProjectOrchestrator: ObservableObject {
     @Published var enabled: Bool
     /// Hooks are being installed.
     @Published var busy = false
-    /// Node shown in the detail card.
-    @Published var detail: String?
-    /// Set when the card was opened to answer a prompt for another node.
+    /// Set when the orchestrator's tab was opened to answer a prompt for another node.
     @Published var answering: String?
     @Published var relay: NodeRelay?
-    /// Attached terminals for workers, by node id. Never create a session.
+    /// Short lived attached terminals for workers without a tab, by node id, made to
+    /// paste a message and dropped again. Never create a session.
     @Published var workerPanes: [String: PaneSession] = [:]
 
     /// The demo plays in here, never in `graph`, so nothing of it is saved.
@@ -64,6 +63,14 @@ extension AppState {
                                                 pcRelativePath: project.pcRelativePath, hosts: hosts, graph: graph)
         let o = ProjectOrchestrator(graph: graph, controller: controller, enabled: on ?? controller.isEnabled)
         orch = o
+        wireOrchestrator(o)
+    }
+
+    /// Hooks the graph up to this window's state. Dropped while the project is parked
+    /// in the background (its graph keeps following), redone when it comes back.
+    func wireOrchestrator(_ o: ProjectOrchestrator) {
+        o.watchers = []
+        let graph = o.graph
         $orchestratorPane
             .sink { [weak self] pane in self?.syncOrchestratorNode(pane) }
             .store(in: &o.watchers)
@@ -127,7 +134,7 @@ extension AppState {
         orch = nil
     }
 
-    private func syncOrchestratorNode(_ pane: PaneSession?) {
+    func syncOrchestratorNode(_ pane: PaneSession?) {
         guard let g = orch?.graph, var n = g.orchestrator else { return }
         if pane == nil, n.tmuxSession != nil { n.state = .idle; n.activity = "Stopped" }
         if pane != nil, n.tmuxSession == nil, n.activity == "Stopped" { n.activity = "Idle" }
@@ -294,7 +301,7 @@ extension AppState {
     /// The orchestrator session keeps running.
     func turnOffOrchestrator() {
         guard let o = orch, o.enabled || o.controller.isEnabled else { return }
-        closeNodeOverlays()
+        o.relay = nil
         o.busy = true
         Task { [weak self] in
             await o.controller.disable()
@@ -304,7 +311,7 @@ extension AppState {
             self.saveLayout()
             self.flash("Orchestrator off, hooks removed")
         }
-        if mode == .orchestrator { mode = .panes }
+        if mode == .orchestrator { open(.panes) }
     }
 
     /// Entering the mode with an orchestrator already running turns the pipeline on.
@@ -314,7 +321,7 @@ extension AppState {
             Task { await enableOrchestrator() }
         }
         if old == .orchestrator {
-            closeNodeOverlays()
+            o.relay = nil
             stopDemo()
         }
         // The station's own setActive runs as its view goes away, so check after it.
@@ -329,74 +336,44 @@ extension AppState {
         saveLayout()
     }
 
-    // MARK: Detail card
+    // MARK: Opening nodes
 
-    /// Opens the detail card for a node. Workers get an attached terminal.
+    /// A canvas node click: the node's agent tab.
     func expandNode(_ id: String) {
-        guard let o = orch, let node = o.shown.nodes[id] else { return }
-        if let old = o.detail, old != id { releaseWorkerPane(old) }
-        o.answering = nil
-        o.detail = id
-        o.relay = nil
-        if node.kind == .worker { _ = workerPane(for: node) }
-        focusDetailTerminal()
+        orch?.relay = nil
+        openAgent(.node(id))
     }
 
-    /// Opens the card on the terminal that shows the node's prompt: its own, else the
+    /// Opens the tab on the terminal that shows the node's prompt: its own, else the
     /// orchestrator's (built-in subagents ask in there).
     func answerNode(_ id: String) {
         guard let o = orch, let node = o.shown.nodes[id] else { return }
+        o.relay = nil
         if node.kind == .worker, node.tmuxSession != nil {
-            expandNode(id)
+            openAgent(.node(id))
         } else {
-            expandNode(AgentGraph.orchestratorID)
+            openAgent(.node(AgentGraph.orchestratorID))
             if id != AgentGraph.orchestratorID { o.answering = node.name }
         }
     }
 
-    func closeDetail() {
-        guard let o = orch, let id = o.detail else { return }
-        o.detail = nil
-        o.answering = nil
-        releaseWorkerPane(id)
-        if let win = window, win.firstResponder is PaneTerminalView { win.makeFirstResponder(nil) }
-    }
-
+    /// The relay card, and the selected agent tab.
     func closeNodeOverlays() {
-        orch?.relay = nil
-        closeDetail()
-    }
-
-    /// The terminal the detail card shows, if it has one.
-    var detailTerminal: PaneSession? {
-        guard let o = orch, let id = o.detail, let node = o.shown.nodes[id] else { return nil }
-        switch node.kind {
-        case .orchestrator: return orchestratorPane
-        case .worker: return o.workerPanes[id]
-        case .subagent: return nil
+        if let o = orch, o.relay != nil {
+            o.relay = nil
+        } else if selectedTab?.isAgent == true {
+            closeTab()
         }
     }
 
-    /// Gives the card's terminal the keyboard. The view may not be in the window yet,
-    /// and a relayout as the attach goes live can take focus away, so keep at it until
-    /// the terminal holds focus and is past connecting (about 4 s at most), while the
-    /// same card is open.
-    private func focusDetailTerminal(attempt: Int = 0) {
-        guard let o = orch, let id = o.detail, attempt < 80 else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0 : 0.05)) { [weak self] in
-            guard let self, self.orch === o, o.detail == id, let pane = self.detailTerminal else { return }
-            let t = pane.terminal
-            if let win = t.window, win.firstResponder !== t { win.makeFirstResponder(t) }
-            if t.window?.firstResponder !== t || pane.state == .connecting {
-                self.focusDetailTerminal(attempt: attempt + 1)
-            }
-        }
-    }
-
-    /// The worker's attached terminal, made on first use. Nil when it has no session
-    /// or its host is unknown.
+    /// The worker's attached terminal: its agent tab's if one is open, else a short
+    /// lived one made on first use. Nil when it has no session or its host is unknown.
     func workerPane(for node: AgentNode) -> PaneSession? {
         guard let o = orch, let session = node.tmuxSession, let host = host(node.hostId) else { return nil }
+        if let p = agentPane(host: host.id, session: session) {
+            if p.isExited { p.reconnect() }
+            return p
+        }
         if let p = o.workerPanes[node.id] {
             if p.isExited { p.reconnect() }
             return p
@@ -413,7 +390,7 @@ extension AppState {
 
     // MARK: Sending
 
-    /// Text from the detail card's input box: built-in subagents get `@name text` through
+    /// Text from an agent tab's input box: built-in subagents get `@name text` through
     /// the orchestrator, terminals get the text and Enter.
     func sendToNode(_ id: String, text: String) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -429,7 +406,11 @@ extension AppState {
     func openNodeRelay(from: String, to: String) {
         guard let o = orch, from != to, o.shown.nodes[to] != nil else { return }
         var source: PaneSession?
-        if from == AgentGraph.orchestratorID { source = orchestratorPane } else { source = o.workerPanes[from] }
+        if from == AgentGraph.orchestratorID {
+            source = orchestratorPane
+        } else if let n = o.shown.nodes[from], let s = n.tmuxSession {
+            source = agentPane(host: n.hostId, session: s) ?? o.workerPanes[from]
+        }
         o.relay = NodeRelay(from: from, to: to, text: source?.selectedText ?? "")
     }
 
@@ -481,16 +462,17 @@ extension AppState {
             guard let self else { return }
             guard pane.isLive else {
                 self.flash("This worker's session has ended")
-                if o.detail != id { self.releaseWorkerPane(id) }
+                self.releaseWorkerPane(id)
                 return
             }
             pane.sendPaste(text)
             if enter { self.pressEnter(in: pane) }
             self.flash(enter ? "Sent to \(label)" : "Relayed \(text.count) chars to \(label)")
-            // A terminal opened just for this goes away once tmux has the text.
-            if o.detail != id {
+            // A terminal opened just for this goes away once tmux has the text. A tab's
+            // own terminal is not in workerPanes, so it stays.
+            if o.workerPanes[id] != nil {
                 try? await Task.sleep(for: .seconds(1))
-                if o.detail != id { self.releaseWorkerPane(id) }
+                self.releaseWorkerPane(id)
             }
         }
     }
@@ -543,7 +525,6 @@ extension AppState {
         guard let o = orch, o.demoGraph != nil else { return }
         o.demoTimer?.invalidate()
         o.demoTimer = nil
-        if let id = o.detail, o.graph.nodes[id] == nil { closeDetail() }
         if let r = o.relay, o.graph.nodes[r.to] == nil { o.relay = nil }
         o.demoGraph = nil
     }

@@ -14,16 +14,13 @@ struct FolderPrompt: Equatable {
 extension AppState {
     // MARK: Projects
 
-    /// The welcome screen shows with no project, unless the station or a pane opened
-    /// from it is up.
-    var showsWelcome: Bool { project == nil && panes.isEmpty && mode != .station }
+    /// The Welcome tab is up: no project open.
+    var showsWelcome: Bool { project == nil && mode == .welcome }
 
-    /// Opens a project and resets the window chrome. The old project's sessions keep running.
+    /// Opens a project and resets the window chrome. The old project stays open behind it.
     func switchProject(_ url: URL) {
         resetChrome()
         openProject(url)
-        // The station is not part of a project, so a project always opens on its own view.
-        if mode == .station { mode = .panes }
     }
 
     func leaveProject() {
@@ -72,14 +69,22 @@ extension AppState {
 
     // MARK: Modes
 
-    /// Pressing the active mode's shortcut again goes back. The station returns to
-    /// whatever was up before it, the others to the panes.
+    /// Shows the tab for a mode (automation's "mode").
+    func toggleModeOn(_ m: AppMode) {
+        if mode != m { toggleMode(m) }
+    }
+
+    /// Pressing the shortcut of the tab that's up goes back to the tab before it.
     func toggleMode(_ m: AppMode) {
-        if m == .station {
-            showStation.toggle()
-        } else {
-            mode = mode == m ? .panes : m
+        let kind: TabKind
+        switch m {
+        case .station: kind = .station
+        case .orchestrator: kind = .orchestrator
+        case .activity: kind = .activity
+        case .panes: kind = .panes
+        default: return
         }
+        if mode == m { selectPrevious() } else { open(kind) }
     }
 
     // MARK: New pane with a folder check

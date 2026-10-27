@@ -104,7 +104,8 @@ struct OrchestratorState: Codable, Equatable {
 /// or hand edited files still load.
 struct ProjectState: Codable, Equatable {
     var panes: [SavedPane] = []
-    /// "panes", "station" or "orchestrator".
+    /// The selected tab's mode ("panes", "orchestrator", "agent"...). Older files only had
+    /// this; newer ones restore from `tabs`.
     var mode: String?
     var orchestrator: OrchestratorState?
     var nodePositions: [String: CGPoint] = [:]
@@ -113,10 +114,13 @@ struct ProjectState: Codable, Equatable {
     var orchestratorOn: Bool?
     /// Workers still running at the last save. Dropped on restore when their session is gone.
     var workerNodes: [AgentNode]?
+    /// The window's tabs for this project, in order, and the selected one's id.
+    var tabs: [Tab]?
+    var selectedTab: String?
 
     init(panes: [SavedPane] = [], mode: String? = nil, orchestrator: OrchestratorState? = nil,
          nodePositions: [String: CGPoint] = [:], finishedNodes: [AgentNode]? = nil, orchestratorOn: Bool? = nil,
-         workerNodes: [AgentNode]? = nil) {
+         workerNodes: [AgentNode]? = nil, tabs: [Tab]? = nil, selectedTab: String? = nil) {
         self.panes = panes
         self.mode = mode
         self.orchestrator = orchestrator
@@ -124,6 +128,8 @@ struct ProjectState: Codable, Equatable {
         self.finishedNodes = finishedNodes
         self.orchestratorOn = orchestratorOn
         self.workerNodes = workerNodes
+        self.tabs = tabs
+        self.selectedTab = selectedTab
     }
 
     init(from decoder: Decoder) throws {
@@ -135,7 +141,17 @@ struct ProjectState: Codable, Equatable {
         finishedNodes = try? c.decodeIfPresent([AgentNode].self, forKey: .finishedNodes)
         orchestratorOn = try? c.decodeIfPresent(Bool.self, forKey: .orchestratorOn)
         workerNodes = try? c.decodeIfPresent([AgentNode].self, forKey: .workerNodes)
+        // One unreadable tab (a kind from a newer build, say) drops only itself.
+        if let raw = try? c.decodeIfPresent([LossyTab].self, forKey: .tabs) {
+            tabs = raw.compactMap(\.tab)
+        }
+        selectedTab = try? c.decodeIfPresent(String.self, forKey: .selectedTab)
     }
+}
+
+private struct LossyTab: Decodable {
+    var tab: Tab?
+    init(from decoder: Decoder) throws { tab = try? Tab(from: decoder) }
 }
 
 // MARK: - Store
