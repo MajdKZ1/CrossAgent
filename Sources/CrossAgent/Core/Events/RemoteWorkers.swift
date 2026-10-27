@@ -45,7 +45,7 @@ extension AgentGraph {
     /// Applies one role "remote" event.
     func applyRemote(_ e: AgentEvent, at t: Date) {
         guard let role = e.node, !role.isEmpty else { return }
-        let host = e.host ?? "pc"
+        let host = e.host ?? defaultRemoteHost
         let key = Self.remoteKey(host: host, role: role)
         let tmux = e.tmux ?? e.sid ?? CASessionName.make(slug: e.project ?? "", host: host, task: role)
         let id: String
@@ -183,7 +183,7 @@ extension AgentGraph {
                 remoteTable.revived.remove(c)
             } else {
                 nodes[c]!.remote = nil
-                nodes[c]!.hostId = orchestrator?.hostId ?? "mac"
+                nodes[c]!.hostId = orchestratorHost
                 remoteTable.retired.insert(c)
             }
         }
@@ -228,11 +228,31 @@ extension AgentGraph {
         }
     }
 
-    /// `ca` host words, same as `resolve` in the skill's ca script.
-    nonisolated static func remoteHost(_ word: String) -> String {
+    /// Where a remote event with no host came from: the only ssh host, else the orchestrator's.
+    var defaultRemoteHost: String {
+        let ssh = hosts.filter { !$0.isLocal }
+        return ssh.count == 1 ? ssh[0].id : orchestratorHost
+    }
+
+    /// Words that mean the local host or "the remote one", like `resolve` in the skill's ca script.
+    nonisolated static let localWords: Set<String> = ["local", "here", "localhost", "mac", "macbook", "laptop"]
+    nonisolated static let remoteWords: Set<String> = ["remote", "ssh", "overseas"]
+
+    /// The host id a `ca` host word means. In order: a host id (any case), a host's full
+    /// name or one word of it when only one host has it, a local word (the local host),
+    /// a remote word (the only ssh host). Anything else that looks like a host id stays
+    /// as it is; the rest gives nil.
+    nonisolated static func remoteHost(_ word: String, hosts: [Host]) -> String? {
         let w = word.lowercased()
-        if ["local", "mac", "macbook", "laptop", "here", "localhost"].contains(w) { return "mac" }
-        if ["pc", "ssh", "overseas", "linux", "remote", "desktop", "ubuntu", "box"].contains(w) { return "pc" }
-        return w
+        if let h = hosts.first(where: { $0.id.lowercased() == w }) { return h.id }
+        let named = hosts.filter { h in
+            let name = h.name.lowercased()
+            return name == w || name.split(whereSeparator: { $0 == " " || $0 == "-" || $0 == "_" }).contains { $0 == w }
+        }
+        if named.count == 1 { return named[0].id }
+        if localWords.contains(w), let h = hosts.first(where: \.isLocal) { return h.id }
+        let ssh = hosts.filter { !$0.isLocal }
+        if remoteWords.contains(w), ssh.count == 1 { return ssh[0].id }
+        return HostID.isValid(word) ? word : nil
     }
 }

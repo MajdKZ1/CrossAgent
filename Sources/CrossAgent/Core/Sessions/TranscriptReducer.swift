@@ -159,7 +159,7 @@ final class TranscriptReducer {
         case .spawn(let name, let prompt):
             guard let tuid = item.toolUseId else { return }
             if graph.nodes[tuid] == nil {
-                graph.nodes[tuid] = AgentNode(id: tuid, name: name, kind: .subagent, hostId: graph.orchestrator?.hostId ?? "mac",
+                graph.nodes[tuid] = AgentNode(id: tuid, name: name, kind: .subagent, hostId: graph.orchestratorHost,
                                               state: .thinking, activity: "Starting", prompt: prompt.map { String($0.prefix(600)) },
                                               startedAt: t, updatedAt: t, flow: .toNode, flowAt: t)
             }
@@ -224,7 +224,7 @@ final class TranscriptReducer {
     private func linkRemote(_ item: TranscriptItem, to id: String) {
         guard item.tool == "Bash" else { return }
         let command = item.command ?? (item.text.hasPrefix("Running ") ? String(item.text.dropFirst(8)) : item.text)
-        for r in AgentGraph.caRemoteTargets(command) {
+        for r in graph.caRemoteTargets(command) {
             graph.linkRemote(nodeID: id, host: r.host, role: r.role, slug: slug, at: item.at)
         }
     }
@@ -234,7 +234,7 @@ final class TranscriptReducer {
         if let id = nodeForAgent[agentId], graph.nodes[id] != nil { return id }
         if graph.nodes[agentId] == nil {
             graph.nodes[agentId] = AgentNode(id: agentId, name: name ?? "agent", kind: .subagent,
-                                             hostId: graph.orchestrator?.hostId ?? "mac", state: .thinking,
+                                             hostId: graph.orchestratorHost, state: .thinking,
                                              activity: "Starting", startedAt: t, updatedAt: t, flow: .toNode, flowAt: t)
         }
         nodeForAgent[agentId] = agentId

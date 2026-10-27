@@ -59,6 +59,13 @@ enum CASessionName {
     }
 }
 
+/// Host ids as hosts.json and the hook write them: `[A-Za-z0-9_-]{1,40}`.
+enum HostID {
+    static func isValid(_ id: String) -> Bool {
+        id.range(of: "^[A-Za-z0-9_-]{1,40}$", options: .regularExpression) != nil
+    }
+}
+
 // MARK: - Events
 
 /// One line in ~/.crossagent/events/<session>.jsonl on either machine. Written by the
@@ -67,7 +74,7 @@ enum CASessionName {
 struct AgentEvent: Codable, Equatable {
     var ts: Double                // unix seconds
     var ev: String                // hook_event_name, or WorkerStart / WorkerStop
-    var host: String?             // machine that wrote it: "mac" or "pc"
+    var host: String?             // id of the machine that wrote it, see HostID
     var sid: String?              // Claude session_id, or the tmux session for workers
     var cwd: String?
     var role: String?             // CROSSAGENT_ROLE: "orchestrator" | "worker"
@@ -181,11 +188,20 @@ final class AgentGraph: ObservableObject {
     @Published var finished: [String] = []
     /// Which node shows which remote worker. See Core/Events/RemoteWorkers.swift.
     var remoteTable = RemoteTable()
+    /// The configured hosts, for host nicknames in `ca remote` commands and fallbacks
+    /// for events that name no host.
+    var hosts: [Host]
+    /// Where the orchestrator runs. Events with no host are taken to come from here.
+    let orchestratorHost: String
 
     var orchestrator: AgentNode? { nodes[Self.orchestratorID] }
     var others: [AgentNode] { nodes.values.filter { $0.kind != .orchestrator }.sorted { $0.startedAt < $1.startedAt } }
 
-    init(orchestratorHost: String = "mac", session: String? = nil) {
+    /// `orchestratorHost` defaults to the local host in `hosts`.
+    init(orchestratorHost: String? = nil, session: String? = nil, hosts: [Host] = HostStore.defaults) {
+        let orchestratorHost = orchestratorHost ?? hosts.first(where: \.isLocal)?.id ?? hosts.first?.id ?? "local"
+        self.hosts = hosts
+        self.orchestratorHost = orchestratorHost
         let now = Date()
         nodes[Self.orchestratorID] = AgentNode(id: Self.orchestratorID, name: "orchestrator", kind: .orchestrator,
                                                hostId: orchestratorHost, state: .idle, activity: "Idle",

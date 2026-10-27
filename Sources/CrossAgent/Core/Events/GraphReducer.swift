@@ -100,7 +100,7 @@ extension AgentGraph {
                 if !tasks.isEmpty {
                     update(o, at: t) { $0.state = .waiting(tasks); $0.activity = "Waiting on " + tasks.joined(separator: ", ") }
                 }
-                for r in Self.caRemoteTargets(command) { linkRemote(nodeID: o, host: r.host, role: r.role, slug: e.project, at: t) }
+                for r in caRemoteTargets(command) { linkRemote(nodeID: o, host: r.host, role: r.role, slug: e.project, at: t) }
             }
         case "PostToolUse":
             if e.tool == "Agent" || e.tool == "Task", let id = e.to, !id.isEmpty {
@@ -178,10 +178,13 @@ extension AgentGraph {
         return tasks
     }
 
+    /// `caRemoteTargets` with this graph's hosts.
+    func caRemoteTargets(_ command: String) -> [RemoteTarget] { Self.caRemoteTargets(command, hosts: hosts) }
+
     /// Workers a `ca remote <host> <role> ...` or `ca remote wait <host> <role>` command
     /// starts or waits on, anywhere in a shell line. `answer`, `status`, `stop` and
-    /// `template` name no worker to link.
-    nonisolated static func caRemoteTargets(_ command: String) -> [RemoteTarget] {
+    /// `template` name no worker to link. Host words resolve through `hosts`, see `remoteHost`.
+    nonisolated static func caRemoteTargets(_ command: String, hosts: [Host] = HostStore.defaults) -> [RemoteTarget] {
         var out: [RemoteTarget] = []
         for line in command.components(separatedBy: CharacterSet(charactersIn: "\n;|&()")) {
             let words = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
@@ -194,7 +197,8 @@ extension AgentGraph {
             guard j + 1 < words.count, !["answer", "status", "stop", "template"].contains(words[j]) else { continue }
             let host = words[j], role = words[j + 1]
             guard !host.isEmpty, !role.isEmpty, !host.hasPrefix("-"), !role.hasPrefix("-"), !role.hasPrefix(">") else { continue }
-            let r = RemoteTarget(host: remoteHost(host), role: role)
+            guard let id = remoteHost(host, hosts: hosts) else { continue }
+            let r = RemoteTarget(host: id, role: role)
             if !out.contains(r) { out.append(r) }
         }
         return out
@@ -239,7 +243,7 @@ extension AgentGraph {
     private func spawned(_ id: String, _ e: AgentEvent, _ t: Date) {
         let name = e.name ?? nodes[id]?.name ?? "agent"
         if nodes[id] == nil {
-            nodes[id] = AgentNode(id: id, name: name, kind: .subagent, hostId: e.host ?? "mac", state: .thinking,
+            nodes[id] = AgentNode(id: id, name: name, kind: .subagent, hostId: e.host ?? orchestratorHost, state: .thinking,
                                   activity: "Starting", prompt: e.prompt, startedAt: t, updatedAt: t)
         }
         update(id, at: t) {
@@ -256,7 +260,7 @@ extension AgentGraph {
             // agent_type. Only real agents get a node.
             guard e.ev == "SubagentStart" || e.ev == "PreToolUse" || e.ev == "PermissionRequest",
                   let type = e.atype, !type.isEmpty else { return }
-            nodes[aid] = AgentNode(id: aid, name: type, kind: .subagent, hostId: e.host ?? "mac", state: .thinking,
+            nodes[aid] = AgentNode(id: aid, name: type, kind: .subagent, hostId: e.host ?? orchestratorHost, state: .thinking,
                                    activity: "Starting", startedAt: t, updatedAt: t, flow: .toNode, flowAt: t)
         }
         switch e.ev {
@@ -274,7 +278,7 @@ extension AgentGraph {
             }
             if e.tool == "SendMessage", let to = e.to { messageSent(to: to, from: aid, at: t) }
             if e.tool == "Bash", let command = e.prompt {
-                for r in Self.caRemoteTargets(command) { linkRemote(nodeID: aid, host: r.host, role: r.role, slug: e.project, at: t) }
+                for r in caRemoteTargets(command) { linkRemote(nodeID: aid, host: r.host, role: r.role, slug: e.project, at: t) }
             }
         case "PostToolUse":
             update(aid, at: t) { n in if Self.isBusyOrStuck(n.state) { n.state = .working } }
@@ -297,7 +301,7 @@ extension AgentGraph {
 
     private func applyWorker(_ e: AgentEvent, _ t: Date) {
         guard let id = e.tmux ?? e.sid, !id.isEmpty else { return }
-        let host = e.host ?? "mac"
+        let host = e.host ?? orchestratorHost
         if e.ev == "WorkerStart" {
             if nodes[id] != nil { revive(id) }
             let n = AgentNode(id: id, name: e.node ?? e.name ?? id, kind: .worker, hostId: host, state: .working,

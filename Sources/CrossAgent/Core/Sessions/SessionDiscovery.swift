@@ -258,7 +258,7 @@ final class LocalSessionScanner: @unchecked Sendable {
         if let tmux = tmuxPath {
             cmd = SpawnCommand(executable: tmux, args: ["list-clients", "-F", format])
         } else {
-            let host = Host(id: "mac", name: "", type: .local, target: nil, accent: "")
+            let host = Host(id: "local", name: "", type: .local, target: nil, accent: "")
             cmd = CommandBuilder.oneShot(host: host, script: "tmux list-clients -F " + CommandBuilder.shellQuote(format))
         }
         return parseClients(Runner.runSync(cmd, timeout: 5).stdout)
@@ -274,7 +274,7 @@ final class LocalSessionScanner: @unchecked Sendable {
     }
 
     static func localTmuxPanes() -> [Int32: String] {
-        let host = Host(id: "mac", name: "", type: .local, target: nil, accent: "")
+        let host = Host(id: "local", name: "", type: .local, target: nil, accent: "")
         let r = Runner.runSync(CommandBuilder.oneShot(host: host, script: "tmux list-panes -a -F '#{pane_pid} #{session_name}'"), timeout: 5)
         var out: [Int32: String] = [:]
         for line in r.stdout.split(whereSeparator: \.isNewline) {

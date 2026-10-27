@@ -376,10 +376,12 @@ final class SessionFeed: ObservableObject {
         let key = "\(host):\(sessionId)" as NSString
         if let f = registry.object(forKey: key) { return f }
         let discovery = SessionDiscovery.shared
-        let h = discovery.host(host) ?? Host(id: host, name: host, type: host == "mac" ? .local : .ssh, target: host, accent: "")
+        let h = discovery.host(host) ?? HostStore.defaults.first { $0.id == host }
+            ?? Host(id: host, name: host, type: .ssh, target: host, accent: "")
         let known = discovery.session(host: host, sessionId: sessionId)
         let f = SessionFeed(host: h, sessionId: sessionId, tmuxSession: known?.tmuxSession, status: known?.status ?? .idle,
                             cwd: known?.cwd)
+        f.graph.hosts = discovery.hosts
         registry.setObject(f, forKey: key)
         f.pullRemoteEvents()
         return f

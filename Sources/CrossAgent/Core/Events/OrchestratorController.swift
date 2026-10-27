@@ -24,6 +24,7 @@ final class OrchestratorController: ObservableObject {
         self.pcRelativePath = pcRelativePath
         self.hosts = hosts
         self.graph = graph
+        graph.hosts = hosts
         self.isEnabled = HookInstaller.hooksInstalled(projectPath: macPath)
     }
 
