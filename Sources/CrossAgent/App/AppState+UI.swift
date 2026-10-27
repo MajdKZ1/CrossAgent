@@ -17,33 +17,19 @@ extension AppState {
     /// The Welcome tab is up: no project open.
     var showsWelcome: Bool { project == nil && mode == .welcome }
 
-    /// Opens a project and resets the window chrome. The old project stays open behind it.
+    /// Opens the project in its own window, or brings that window forward.
     func switchProject(_ url: URL) {
-        resetChrome()
-        openProject(url)
+        ProjectWindows.shared.open(url, from: self)
     }
 
+    /// Closes this window's project, and with it the window.
     func leaveProject() {
-        resetChrome()
-        closeProject()
-        objectWillChange.send()
-    }
-
-    private func resetChrome() {
-        showRelayPicker = false
-        showNewPane = false
-        folderPrompt = nil
-        maximizedID = nil
+        ProjectWindows.shared.closeProject(self)
     }
 
     /// Folder picker as a sheet on the window.
     func presentOpenPanel() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Open"
-        panel.message = "Pick a project folder"
+        let panel = Self.projectPanel()
         let done: (NSApplication.ModalResponse) -> Void = { [weak self, weak panel] r in
             guard r == .OK, let url = panel?.url else { return }
             self?.switchProject(url)
@@ -51,14 +37,26 @@ extension AppState {
         if let window { panel.beginSheetModal(for: window, completionHandler: done) } else { panel.begin(completionHandler: done) }
     }
 
+    static func projectPanel() -> NSOpenPanel {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Open"
+        panel.message = "Pick a project folder"
+        return panel
+    }
+
     func removeRecent(path: String) {
         store.removeRecent(path: path)
         objectWillChange.send()
+        ProjectWindows.shared.recentsChanged()
     }
 
     func clearRecents() {
         for r in store.recents() { store.removeRecent(path: r.path) }
         objectWillChange.send()
+        ProjectWindows.shared.recentsChanged()
     }
 
     /// True when Mutagen is syncing the open project.

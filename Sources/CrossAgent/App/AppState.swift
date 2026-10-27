@@ -5,26 +5,28 @@ import SwiftUI
 /// What the selected tab shows. Follows the tab selection, set it through `select` / `open`.
 enum AppMode: String, Codable { case panes, station, orchestrator, activity, sessions, agent, welcome, dev }
 
-/// Everything the window shows: panes, focus, broadcast, layout persistence.
+/// Everything one project window shows: panes, focus, broadcast, layout persistence.
+/// One per window, see ProjectWindows.
 @MainActor
 final class AppState: ObservableObject {
     let hosts: [Host]
     /// Watches ca-* tmux sessions on every host. Feeds the station and free name picking.
+    /// Shared by every window, set by ProjectWindows.
     var monitor: TmuxMonitor? {
         didSet { watchMonitorForAgentTabs() }
     }
     var monitorWatch: AnyCancellable?
     /// When each agent tab last retried its attach, so a failing one doesn't spin.
     var agentRetryAt: [String: Date] = [:]
-    /// Mutagen ca-* sync sessions for the top bar. Started by AppDelegate.
-    let sync = SyncMonitor()
+    /// Mutagen ca-* sync sessions for the top bar. Started by ProjectWindows.
+    var sync: SyncMonitor { .shared }
 
-    /// Set directly only by the workspace swap; use `adopt` / `close` otherwise.
+    /// Use `adopt` / `close`.
     @Published var panes: [PaneSession] = []
     @Published var focusedID: UUID?
     @Published var maximizedID: UUID?
     @Published private(set) var broadcast = false
-    /// The open project. Set it through `openProject` / `closeProject`.
+    /// The window's project, nil in the welcome window. Set once by `openProject`.
     @Published var project: Project?
     /// What the selected tab shows. Set by `select`.
     @Published var mode: AppMode = .welcome {
@@ -39,8 +41,6 @@ final class AppState: ObservableObject {
     var previousTabID: String?
     /// Attached terminals of agent tabs that show a tmux session, by tab id.
     @Published var agentPanes: [String: PaneSession] = [:]
-    /// Projects open in the background, kept warm so switching back is instant.
-    var workspaces: [ProjectWorkspace] = []
     /// The project's orchestrator Claude. Not in `panes`, the canvas shows it.
     @Published var orchestratorPane: PaneSession?
     /// The open project's agent graph, event pipeline and canvas overlays. See AppState+Orchestrator.
@@ -210,7 +210,7 @@ final class AppState: ObservableObject {
 
     // MARK: Window
 
-    /// The main window, handed over by ContentView once it is on screen.
+    /// This state's window, handed over by ProjectWindows.
     private(set) weak var window: NSWindow?
     private var responderObservation: NSKeyValueObservation?
 
@@ -220,7 +220,6 @@ final class AppState: ObservableObject {
         window.backgroundColor = Theme.window
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.tabbingMode = .disallowed
         sync.updateLoop()
         // Clicks into a terminal make it first responder; follow that to move pane focus.
         responderObservation = window.observe(\.firstResponder, options: [.new]) { [weak self] win, _ in
@@ -341,13 +340,6 @@ final class AppState: ObservableObject {
         toastTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(2.2))
             if !Task.isCancelled { self?.toast = nil }
-        }
-    }
-
-    /// Opens an ssh master per remote host in the background so the first pane opens fast.
-    func warmUpConnections() {
-        for host in hosts where !host.isLocal {
-            Task.detached { _ = Runner.runSync(CommandBuilder.oneShot(host: host, script: "true"), timeout: 30) }
         }
     }
 }

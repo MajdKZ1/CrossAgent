@@ -5,7 +5,7 @@ import AppKit
 /// handles ours and returns nil so nothing else (menus included) fires twice.
 @MainActor
 final class Shortcuts {
-    private let app: AppState
+    private let windows: ProjectWindows
     private var monitor: Any?
     /// The last key event handled here. SwiftUI still fires a menu item's keyboardShortcut
     /// even after the monitor swallowed the event, so menu actions check this to skip it.
@@ -26,8 +26,8 @@ final class Shortcuts {
         static let digits: [UInt16] = [18, 19, 20, 21, 23, 22, 26, 28, 25]
     }
 
-    init(app: AppState) {
-        self.app = app
+    init(windows: ProjectWindows) {
+        self.windows = windows
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let swallowed = MainActor.assumeIsolated {
                 guard self?.handle(event) == nil else { return false }
@@ -39,15 +39,16 @@ final class Shortcuts {
     }
 
     private func handle(_ event: NSEvent) -> NSEvent? {
-        // Popovers (new pane) and other windows keep their own keys.
-        guard let main = app.window, event.window === main else { return event }
+        // Keys go to the project window they were typed in. Popovers (new pane) and
+        // other windows keep their own.
+        guard let app = windows.state(for: event.window) else { return event }
         // Never let a key reach a terminal on a hidden tab; it goes to the shown one instead.
         app.dropHiddenTerminalFocus()
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
         let key = event.keyCode
 
-        if app.showRelayPicker { return handleRelayPicker(key: key, flags: flags) }
-        if app.folderPrompt != nil, !flags.contains(.command) { return handleFolderPrompt(key: key) }
+        if app.showRelayPicker { return handleRelayPicker(app, key: key, flags: flags) }
+        if app.folderPrompt != nil, !flags.contains(.command) { return handleFolderPrompt(app, key: key) }
         if app.mode == .orchestrator, let o = app.orch, o.relay != nil {
             // Esc or Cmd+W closes the relay card.
             if (key == Key.escape && flags.isEmpty) || (key == Key.w && flags == .command) {
@@ -91,7 +92,7 @@ final class Shortcuts {
     }
 
     /// The missing folder card: Enter starts sync, Esc cancels, other plain keys go nowhere.
-    private func handleFolderPrompt(key: UInt16) -> NSEvent? {
+    private func handleFolderPrompt(_ app: AppState, key: UInt16) -> NSEvent? {
         switch key {
         case Key.escape: app.cancelFolderPrompt()
         case Key.returnKey, Key.enter: app.promptStartSync()
@@ -101,7 +102,7 @@ final class Shortcuts {
     }
 
     /// While the relay picker is up it owns the keyboard: arrows, 1-9, Enter, Esc.
-    private func handleRelayPicker(key: UInt16, flags: NSEvent.ModifierFlags) -> NSEvent? {
+    private func handleRelayPicker(_ app: AppState, key: UInt16, flags: NSEvent.ModifierFlags) -> NSEvent? {
         let count = app.relayTargets.count
         switch key {
         case Key.escape: app.closeRelayPicker()

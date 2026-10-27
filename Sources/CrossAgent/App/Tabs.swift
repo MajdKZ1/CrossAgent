@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import Foundation
 
-// The single window tab strip. Other parts of the app (canvas, station, activity,
+// The tab strip of a project window. Other parts of the app (canvas, station, activity,
 // mascot orbs) only call `openAgent`.
 
 /// Something that can be opened as an agent chat tab.
@@ -16,7 +16,7 @@ enum AgentRef: Hashable, Codable {
     case claude(host: String, sessionId: String)
 }
 
-/// One tab in the main window.
+/// One tab in a project window.
 enum TabKind: Hashable, Codable {
     case welcome, panes, station, orchestrator, activity, sessions
     case agent(AgentRef)
@@ -88,28 +88,6 @@ struct Tab: Identifiable, Hashable, Codable {
         case .dev: .dev
         }
     }
-}
-
-/// A project that is open but not in front: everything AppState holds for it, parked
-/// so switching back is instant. Terminal clients keep running and keep scrollback.
-@MainActor
-final class ProjectWorkspace {
-    let project: Project
-    var panes: [PaneSession] = []
-    var focusedID: UUID?
-    var maximizedID: UUID?
-    var stateWatchers: [UUID: AnyCancellable] = [:]
-    var orchestratorPane: PaneSession?
-    var orch: ProjectOrchestrator?
-    var orchestratorInfo: OrchestratorState?
-    var nodePositions: [String: CGPoint] = [:]
-    var finishedNodes: [AgentNode] = []
-    var tabs: [Tab] = []
-    var selectedTabID = ""
-    var previousTabID: String?
-    var agentPanes: [String: PaneSession] = [:]
-
-    init(project: Project) { self.project = project }
 }
 
 extension AppState {
@@ -432,136 +410,5 @@ extension AppState {
             }
         let sel = list.contains { $0.id == selectedTabID } ? selectedTabID : list.first?.id
         return (list, sel)
-    }
-
-    // MARK: Workspaces
-
-    /// Parks the open project with its terminals still running. The no project
-    /// workspace (Welcome, maybe a station or a session tab) is just closed.
-    func stashWorkspace() {
-        guard let project else {
-            for p in agentPanes.values { p.close() }
-            agentPanes = [:]
-            return
-        }
-        saveLayout()
-        stopDemo()
-        orch?.relay = nil
-        if let o = orch {
-            o.saveTask?.cancel()
-            o.watchers = []
-            if o.monitorFast, mode != .station { monitor?.setActive(false) }
-            o.monitorFast = false
-        }
-        if broadcast { setBroadcast(false, quiet: true) }
-        let ws = ProjectWorkspace(project: project)
-        ws.panes = panes
-        ws.focusedID = focusedID
-        ws.maximizedID = maximizedID
-        ws.stateWatchers = stateWatchers
-        ws.orchestratorPane = orchestratorPane
-        ws.orch = orch
-        ws.orchestratorInfo = orchestratorInfo
-        ws.nodePositions = nodePositions
-        ws.finishedNodes = finishedNodes
-        ws.tabs = tabs
-        ws.selectedTabID = selectedTabID
-        ws.previousTabID = previousTabID
-        ws.agentPanes = agentPanes
-        workspaces.removeAll { $0.project.path == project.path }
-        workspaces.append(ws)
-    }
-
-    /// Brings a parked project back to the front, terminals and all.
-    func restoreWorkspace(_ ws: ProjectWorkspace) {
-        workspaces.removeAll { $0 === ws }
-        isRestoring = true
-        project = ws.project
-        panes = ws.panes
-        focusedID = ws.focusedID
-        maximizedID = ws.maximizedID
-        stateWatchers = ws.stateWatchers
-        orchestratorInfo = ws.orchestratorInfo
-        nodePositions = ws.nodePositions
-        finishedNodes = ws.finishedNodes
-        agentPanes = ws.agentPanes
-        orch = ws.orch
-        orchestratorPane = ws.orchestratorPane
-        tabs = ws.tabs
-        previousTabID = ws.previousTabID
-        selectedTabID = ws.selectedTabID
-        mode = selectedTab?.mode ?? .panes
-        isRestoring = false
-        for pane in panes { wire(pane) }
-        if let o = orch { wireOrchestrator(o) }
-        store.lastProjectPath = ws.project.path
-        store.noteOpened(ws.project)
-        if let t = selectedTab { select(t.id) }
-    }
-
-    /// Empties the front without saving: what's left is the no project Welcome tab.
-    func resetToWelcome() {
-        isRestoring = true
-        project = nil
-        panes = []
-        stateWatchers = [:]
-        focusedID = nil
-        maximizedID = nil
-        orch = nil
-        orchestratorPane = nil
-        orchestratorInfo = nil
-        nodePositions = [:]
-        finishedNodes = []
-        agentPanes = [:]
-        let welcome = Tab(kind: .welcome)
-        tabs = [welcome]
-        previousTabID = nil
-        selectedTabID = welcome.id
-        mode = .welcome
-        isRestoring = false
-    }
-
-    /// Paths of every open project, the front one included, in the order they were opened.
-    var openProjects: [Project] {
-        workspaces.map(\.project) + (project.map { [$0] } ?? [])
-    }
-
-    /// On quit: saves and closes every parked project.
-    func closeParkedWorkspaces() {
-        for ws in workspaces {
-            store.saveState(projectState(ws), for: ws.project)
-            if let o = ws.orch {
-                o.controller.stop()
-                o.demoTimer?.invalidate()
-                o.saveTask?.cancel()
-                for p in o.workerPanes.values { p.close() }
-            }
-            ws.orchestratorPane?.close()
-            for p in ws.panes { p.close() }
-            for p in ws.agentPanes.values { p.close() }
-        }
-        workspaces = []
-    }
-
-    private func projectState(_ ws: ProjectWorkspace) -> ProjectState {
-        var finished = ws.finishedNodes
-        if let g = ws.orch?.graph { finished = g.finished.compactMap { g.nodes[$0] } }
-        var info = ws.orchestratorInfo
-        if let o = ws.orchestratorPane { info = OrchestratorState(hostId: o.host.id, session: o.session, enabled: true) }
-        let g = ws.orch?.graph
-        let workers = g.map { g in
-            g.nodes.values.filter { $0.kind == .worker && !g.finished.contains($0.id) }.sorted { $0.startedAt < $1.startedAt }
-        } ?? []
-        let tabs = ws.tabs.filter { if case .dev = $0.kind { false } else { true } }
-        return ProjectState(
-            panes: ws.panes.map { SavedPane(hostId: $0.host.id, mode: $0.mode, session: $0.session) },
-            mode: tabs.first { $0.id == ws.selectedTabID }?.mode.rawValue,
-            orchestrator: info,
-            nodePositions: g.map { g in ws.nodePositions.filter { g.nodes[$0.key] != nil } } ?? ws.nodePositions,
-            finishedNodes: finished.isEmpty ? nil : finished,
-            orchestratorOn: ws.orch?.enabled,
-            workerNodes: workers.isEmpty ? nil : workers,
-            tabs: tabs,
-            selectedTab: tabs.contains { $0.id == ws.selectedTabID } ? ws.selectedTabID : tabs.first?.id)
     }
 }

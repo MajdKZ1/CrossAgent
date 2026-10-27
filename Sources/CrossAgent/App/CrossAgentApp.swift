@@ -6,98 +6,103 @@ struct CrossAgentApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        // One window. Everything else is a tab in it, or a popover.
-        Window("CrossAgent", id: "main") {
-            ContentView()
-                .environmentObject(appDelegate.app)
-                .themed()
-                .frame(minWidth: 640, minHeight: 400)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .commands {
-            PaneCommands(app: appDelegate.app)
-            CommandGroup(after: .toolbar) { Menu("Theme") { ThemeMenuItems() } }
-        }
+        // Project windows are plain NSWindows made by ProjectWindows, one per project.
+        // Everything else is a tab in one of them, or a popover.
         Settings { ThemeSettingsView() }
+            .commands {
+                PaneCommands(windows: .shared)
+                CommandGroup(after: .toolbar) { Menu("Theme") { ThemeMenuItems() } }
+            }
     }
 }
 
-/// Menu items for discoverability. The keys themselves are handled by `Shortcuts`,
-/// so every action goes through `item`, which skips a key press already handled there.
+/// Menu items for discoverability. They act on the key project window. The keys
+/// themselves are handled by `Shortcuts`, so every action goes through `item`, which
+/// skips a key press already handled there.
 struct PaneCommands: Commands {
-    let app: AppState
+    @ObservedObject var windows: ProjectWindows
 
-    private func item(_ title: String, _ action: @escaping () -> Void) -> Button<Text> {
+    private func item(_ title: String, _ action: @escaping (AppState) -> Void) -> Button<Text> {
         Button(title) {
-            MainActor.assumeIsolated { if !Shortcuts.currentEventWasHandled { action() } }
+            MainActor.assumeIsolated {
+                if !Shortcuts.currentEventWasHandled, let app = windows.current { action(app) }
+            }
         }
     }
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            item("New Pane") { app.openNewPanePopover() }
+            item("New Pane") { $0.openNewPanePopover() }
                 .keyboardShortcut("t")
-            item("Open Project…") { app.presentOpenPanel() }
-                .keyboardShortcut("o")
-            Menu("Open Recent") { RecentProjectsMenu(app: app) }
+            Button("Open Project…") {
+                MainActor.assumeIsolated { if !Shortcuts.currentEventWasHandled { windows.presentOpenPanel() } }
+            }
+            .keyboardShortcut("o")
+            Menu("Open Recent") { RecentProjectsMenu(windows: windows) }
             Divider()
-            item("Close Tab") { if app.mode == .panes { app.close() } else { app.closeTab() } }
+            item("Close Tab") { app in if app.mode == .panes { app.close() } else { app.closeTab() } }
                 .keyboardShortcut("w")
-            Button("Close Project") { app.leaveProject() }
+            Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
+            item("Close Project") { $0.leaveProject() }
         }
         CommandGroup(before: .sidebar) {
-            Button("Panes") { app.open(.panes) }
-            item("Station") { app.toggleMode(.station) }
+            item("Panes") { $0.open(.panes) }
+            item("Station") { $0.toggleMode(.station) }
                 .keyboardShortcut("v", modifiers: [.command, .shift])
-            item("Orchestrator") { if app.project != nil { app.toggleMode(.orchestrator) } }
+            item("Orchestrator") { app in if app.project != nil { app.toggleMode(.orchestrator) } }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
-            Button("Activity") { app.open(.activity) }
+            item("Activity") { $0.open(.activity) }
             Divider()
-            item("Next Tab") { app.selectAdjacentTab(1) }
+            item("Next Tab") { $0.selectAdjacentTab(1) }
                 .keyboardShortcut("]", modifiers: [.command, .shift])
-            item("Previous Tab") { app.selectAdjacentTab(-1) }
+            item("Previous Tab") { $0.selectAdjacentTab(-1) }
                 .keyboardShortcut("[", modifiers: [.command, .shift])
             ForEach(1..<10) { n in
-                item(n == 9 ? "Last Tab" : "Tab \(n)") { app.selectTab(shortcut: n - 1) }
+                item(n == 9 ? "Last Tab" : "Tab \(n)") { $0.selectTab(shortcut: n - 1) }
                     .keyboardShortcut(KeyEquivalent(Character("\(n)")))
             }
             Divider()
         }
-        CommandMenu("Orchestrator") { OrchestratorMenu(app: app) }
+        CommandMenu("Orchestrator") {
+            if let app = windows.current { OrchestratorMenu(app: app) }
+        }
         CommandMenu("Panes") {
-            item("Next Pane") { app.moveFocus(1) }
+            item("Next Pane") { $0.moveFocus(1) }
                 .keyboardShortcut("]", modifiers: [.command, .option])
-            item("Previous Pane") { app.moveFocus(-1) }
+            item("Previous Pane") { $0.moveFocus(-1) }
                 .keyboardShortcut("[", modifiers: [.command, .option])
-            item("Maximize / Restore") { app.toggleMaximize() }
+            item("Maximize / Restore") { $0.toggleMaximize() }
                 .keyboardShortcut(.return)
             Divider()
-            item("Broadcast") { app.toggleBroadcast() }
+            item("Broadcast") { $0.toggleBroadcast() }
                 .keyboardShortcut("b", modifiers: [.command, .shift])
-            item("Relay Selection") { app.openRelayPicker() }
+            item("Relay Selection") { $0.openRelayPicker() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
             Divider()
             ForEach(1..<10) { n in
-                item("Focus Pane \(n)") { app.focus(index: n - 1) }
+                item("Focus Pane \(n)") { $0.focus(index: n - 1) }
                     .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .control)
             }
         }
     }
 }
 
-/// File > Open Recent. A view so it follows the app's changes (recents are not published,
-/// but the app publishes whenever they change).
+/// File > Open Recent. Recents are not published; ProjectWindows publishes when they change.
 struct RecentProjectsMenu: View {
-    @ObservedObject var app: AppState
+    @ObservedObject var windows: ProjectWindows
 
     var body: some View {
-        let recents = app.recentProjects
+        let recents = windows.store.recents()
         ForEach(recents) { r in
-            Button(r.name) { app.switchProject(r.url) }
+            Button(r.name) { windows.open(r.url) }
         }
         if !recents.isEmpty { Divider() }
-        Button("Clear Menu") { app.clearRecents() }
-            .disabled(recents.isEmpty)
+        Button("Clear Menu") {
+            for r in recents { windows.store.removeRecent(path: r.path) }
+            windows.recentsChanged()
+        }
+        .disabled(recents.isEmpty)
     }
 }
 
@@ -119,7 +124,6 @@ struct OrchestratorMenu: View {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let app = AppState()
     private var automation: Automation?
     private var shortcuts: Shortcuts?
 
@@ -128,39 +132,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         if let icon = Self.bundledIcon() { NSApp.applicationIconImage = icon }
         NSApp.appearance = NSAppearance(named: .darkAqua)
-        NSWindow.allowsAutomaticWindowTabbing = false
         // CROSSAGENT_NO_ACTIVATE=1 keeps a test launch from stealing focus.
         if ProcessInfo.processInfo.environment["CROSSAGENT_NO_ACTIVATE"] != "1" { NSApp.activate(ignoringOtherApps: true) }
-        if Automation.enabled { automation = Automation(app: app) }
+        let windows = ProjectWindows.shared
+        if Automation.enabled { automation = Automation(windows: windows) }
         MascotGallery.writeSnapshotsIfRequested()
-        shortcuts = Shortcuts(app: app)
-        app.warmUpConnections()
-        let monitor = TmuxMonitor(hosts: app.hosts)
-        app.monitor = monitor
-        monitor.start()
-        app.sync.start { [weak app] in app?.window }
-        app.restoreLastProject()
-        // Dev views open as tabs in the window, never as windows of their own.
+        shortcuts = Shortcuts(windows: windows)
+        windows.restore()
+        // With no other scene SwiftUI opens Settings at launch. Only Cmd+, should.
+        closeSettings()
+        DispatchQueue.main.async { self.closeSettings() }
+        // Dev views open as tabs in the front window, never as windows of their own.
         // The demo opens last so it's the one showing: its pointer checks need the canvas up.
-        if MascotGallery.isRequested { app.open(.dev(.mascotGallery)) }
-        if OrchestratorDemo.isRequested { app.open(.dev(.orchestratorDemo)) }
+        if MascotGallery.isRequested { windows.current?.open(.dev(.mascotGallery)) }
+        if OrchestratorDemo.isRequested { windows.current?.open(.dev(.orchestratorDemo)) }
+    }
+
+    /// Runs before any window closes for the quit, so the open list is still whole.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        ProjectWindows.shared.prepareToQuit()
+        return .terminateNow
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        app.monitor?.stop()
-        app.sync.stop()
+        ProjectWindows.shared.monitor.stop()
+        SyncMonitor.shared.stop()
         // Synchronous, so no ssh sampler is left running on the PC after quit.
         ActivityMonitor.shared.shutdown()
         EventFollower.shutdownAll()
-        app.saveLayout()
-        app.tearDownOrchestrator()
-        app.closeParkedWorkspaces()
-        for pane in app.panes { pane.close() }
-        for pane in app.agentPanes.values { pane.close() }
-        app.orchestratorPane?.close()
+        ProjectWindows.shared.saveAndCloseAll()
     }
 
+    /// Closing the last window quits. Closing one of several just closes that project.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    /// A click on the Dock icon with every window closed (Settings was up) brings back the welcome window.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag, ProjectWindows.shared.states.isEmpty { ProjectWindows.shared.showWelcome() }
+        return true
+    }
+
+    private func closeSettings() {
+        for w in NSApp.windows where w.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" { w.close() }
+    }
 
     /// AppIcon.icns from the .app, or from the SwiftPM resource bundle next to a bare
     /// binary (swift run). Looked up by hand since Bundle.module traps when it's missing.

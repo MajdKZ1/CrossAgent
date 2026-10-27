@@ -68,8 +68,7 @@ extension AppState {
         wireOrchestrator(o)
     }
 
-    /// Hooks the graph up to this window's state. Dropped while the project is parked
-    /// in the background (its graph keeps following), redone when it comes back.
+    /// Hooks the graph up to this window's state.
     func wireOrchestrator(_ o: ProjectOrchestrator) {
         o.watchers = []
         let graph = o.graph
@@ -140,7 +139,8 @@ extension AppState {
         o.busyTimer?.invalidate()
         o.demoTimer?.invalidate()
         o.saveTask?.cancel()
-        if o.monitorFast, mode != .station { monitor?.setActive(false) }
+        if o.monitorFast { monitor?.setActive(false, for: ObjectIdentifier(o)) }
+        o.monitorFast = false
         for pane in o.workerPanes.values { pane.close() }
         o.workerPanes = [:]
         o.watchers = []
@@ -244,11 +244,7 @@ extension AppState {
         guard let o = orch, let monitor else { return }
         let prompts = promptSessions(o.graph)
         let want = mode == .orchestrator && !prompts.isEmpty
-        if want, !monitor.isActive {
-            monitor.setActive(true)
-        } else if !want, o.monitorFast, mode != .station {
-            monitor.setActive(false)
-        }
+        if want != o.monitorFast { monitor.setActive(want, for: ObjectIdentifier(o)) }
         o.monitorFast = want
         o.seenWaiting.formIntersection(prompts.keys)
         for (key, p) in prompts {
@@ -337,7 +333,7 @@ extension AppState {
             o.relay = nil
             stopDemo()
         }
-        // The station's own setActive runs as its view goes away, so check after it.
+        // Once the new tab has landed.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.checkNeedsInput() }
     }
 

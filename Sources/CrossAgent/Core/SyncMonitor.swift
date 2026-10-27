@@ -149,10 +149,13 @@ private extension KeyedDecodingContainer {
     }
 }
 
-/// Polls Mutagen for `ca-*` sync sessions every few seconds, only while the main window
-/// is actually on screen. Never starts the Mutagen daemon itself.
+/// Polls Mutagen for `ca-*` sync sessions every few seconds, only while a window is
+/// actually on screen. One for the app, every window shows it. Never starts the
+/// Mutagen daemon itself.
 @MainActor
 final class SyncMonitor: ObservableObject {
+    static let shared = SyncMonitor()
+
     @Published private(set) var installed = false
     @Published private(set) var sessions: [SyncSession] = []
 
@@ -163,14 +166,14 @@ final class SyncMonitor: ObservableObject {
     static let candidates = ["/opt/homebrew/bin/mutagen", "/usr/local/bin/mutagen",
                              NSHomeDirectory() + "/.local/bin/mutagen"]
 
-    private var window: () -> NSWindow? = { nil }
+    private var windows: () -> [NSWindow] = { [] }
     private var binary: String?
     private var lastLookup = Date.distantPast
     private var loop: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
 
-    func start(window: @escaping () -> NSWindow?) {
-        self.window = window
+    func start(windows: @escaping () -> [NSWindow]) {
+        self.windows = windows
         stop()
         let center = NotificationCenter.default
         // Key and active cover the window being handed over after it first appeared.
@@ -193,11 +196,11 @@ final class SyncMonitor: ObservableObject {
     }
 
     private var windowVisible: Bool {
-        guard !NSApp.isHidden, let w = window() else { return false }
-        return w.isVisible && w.occlusionState.contains(.visible)
+        guard !NSApp.isHidden else { return false }
+        return windows().contains { $0.isVisible && $0.occlusionState.contains(.visible) }
     }
 
-    /// Also called when AppState gets its window, since a launch without focus
+    /// Also called when an AppState gets its window, since a launch without focus
     /// fires none of the notifications above.
     func updateLoop() {
         if windowVisible {

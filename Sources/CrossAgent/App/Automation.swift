@@ -3,12 +3,22 @@ import AppKit
 /// Dev only remote control so flows can be tested without clicking.
 /// Off unless CROSSAGENT_AUTOMATION=1 or `defaults write dev.crossagent automation -bool true`.
 /// Send commands with scripts/automation.sh.
+///
+/// Commands act on the key project window (or the one focused last). Add
+/// "project": "<path>" to any command to aim it at that project's window instead.
+///
+///     {"cmd":"open","path":"/tmp/x"}             opens a window, or brings the open one forward
+///     {"cmd":"windows","out":"/tmp/w.json"}      every window: project, title, frame, tabs
+///     {"cmd":"closeWindow","project":"/tmp/x"}   like the close button
+///     {"cmd":"mergeWindows"}                     Window > Merge All Windows
 @MainActor
 final class Automation {
     /// CROSSAGENT_AUTOMATION_ID gives an instance its own channel, so parallel test runs don't collide.
     static let notification = Notification.Name("dev.crossagent.automation"
         + (ProcessInfo.processInfo.environment["CROSSAGENT_AUTOMATION_ID"].map { ".\($0)" } ?? ""))
-    let app: AppState
+    let windows: ProjectWindows
+    /// The window the command being handled acts on.
+    private(set) weak var app: AppState!
     private var observer: NSObjectProtocol?
 
     static var enabled: Bool {
@@ -16,8 +26,8 @@ final class Automation {
             || UserDefaults.standard.bool(forKey: "automation")
     }
 
-    init(app: AppState) {
-        self.app = app
+    init(windows: ProjectWindows) {
+        self.windows = windows
         observer = DistributedNotificationCenter.default().addObserver(
             forName: Self.notification, object: nil, queue: .main
         ) { [weak self] note in
@@ -30,6 +40,20 @@ final class Automation {
         guard let data = json.data(using: .utf8),
               let cmd = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let name = cmd["cmd"] as? String else { return }
+        switch name {
+        case "open":
+            if let path = cmd["path"] as? String { windows.open(URL(fileURLWithPath: path, isDirectory: true)) }
+            return
+        case "windows":
+            write(windowsJSON(), to: cmd["out"] as? String)
+            return
+        case "quit":
+            NSApp.terminate(nil)
+            return
+        default: break
+        }
+        guard let target = (cmd["project"] as? String).map(windows.state(path:)) ?? windows.current else { return }
+        app = target
         let index = cmd["index"] as? Int
         func pane(_ i: Int?) -> PaneSession? {
             guard let i else { return app.focused }
@@ -71,8 +95,9 @@ final class Automation {
                 f.size = NSSize(width: w, height: h)
                 win.setFrame(f, display: true, animate: false)
             }
-        case "open": if let path = cmd["path"] as? String { app.switchProject(URL(fileURLWithPath: path, isDirectory: true)) }
         case "closeProject": app.leaveProject()
+        case "closeWindow": app.window?.performClose(nil)
+        case "mergeWindows": app.window?.mergeAllWindows(nil)
         case "mode": if let m = (cmd["mode"] as? String).flatMap(AppMode.init(rawValue:)) { app.toggleModeOn(m) }
         case "tab":
             if let id = cmd["id"] as? String { app.select(id) } else if let index { app.select(index: index) }
@@ -150,7 +175,6 @@ final class Automation {
         case "click":
             // Synthetic click at window coordinates (origin bottom left), count 2 for a double click.
             if let x = cmd["x"] as? Double, let y = cmd["y"] as? Double { click(at: NSPoint(x: x, y: y), count: cmd["count"] as? Int ?? 1) }
-        case "quit": NSApp.terminate(nil)
         default: break
         }
     }
@@ -276,7 +300,7 @@ final class Automation {
         }
         let obj: [String: Any] = ["project": project, "mode": app.mode.rawValue, "welcome": app.showsWelcome,
                                   "tabs": tabs, "selectedTab": app.selectedTabID,
-                                  "openProjects": app.openProjects.map(\.path),
+                                  "openProjects": windows.openPaths,
                                   "orchestrator": orchestrator, "graph": graph, "detail": detail,
                                   "detailScreen": app.selectedAgentTerminal?.screenText() ?? NSNull(),
                                   "nodePositions": app.nodePositions.mapValues { [$0.x, $0.y] },
@@ -298,11 +322,30 @@ final class Automation {
         return (try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys])) ?? Data()
     }
 
-    /// Visible windows that aren't popovers, tooltips or menus. Should always be 1.
+    /// Visible windows that aren't popovers, tooltips or menus: one per open project
+    /// (or the welcome window), plus Settings if it's up.
     static var realWindows: [NSWindow] {
         NSApp.windows.filter { w in
             w.isVisible && w.styleMask.contains(.titled) && !String(describing: type(of: w)).contains("Popover")
         }
+    }
+
+    /// Every project window, front first, and what the Window menu lists.
+    private func windowsJSON() -> Data {
+        let list: [[String: Any]] = windows.states.map { s in
+            let w = s.window
+            return ["project": s.project?.path ?? NSNull(), "title": w?.title ?? "", "key": w?.isKeyWindow ?? false,
+                    "current": s === windows.current, "visible": w?.isVisible ?? false,
+                    "frame": w.map { NSStringFromRect($0.frame) } ?? "", "frameName": w?.frameAutosaveName ?? "",
+                    "tabs": s.tabs.map(\.title), "selectedTab": s.selectedTab?.title ?? "", "mode": s.mode.rawValue,
+                    "panes": s.panes.map(\.session), "mergedWith": (w?.tabbedWindows?.count ?? 1) - 1,
+                    "tabBar": w?.tabGroup?.isTabBarVisible ?? false,
+                    "contentLayout": w.map { NSStringFromRect($0.contentLayoutRect) } ?? ""]
+        }
+        let menu = NSApp.windowsMenu?.items.filter { $0.target is NSWindow }.map(\.title) ?? []
+        let obj: [String: Any] = ["windows": list, "openProjects": windows.openPaths, "windowsMenu": menu,
+                                  "realWindows": Self.realWindows.count, "monitorFast": windows.monitor.isActive]
+        return (try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys])) ?? Data()
     }
 
     private func write(_ data: Data, to path: String?) {

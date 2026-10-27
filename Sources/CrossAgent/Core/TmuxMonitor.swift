@@ -341,6 +341,7 @@ final class TmuxMonitor: ObservableObject {
 
     private(set) var hosts: [Host]
     private(set) var isActive = false
+    private var fastHolds: [AnyHashable: Int] = [:]
     private var loops: [String: Task<Void, Never>] = [:]
     private var nextDue: [String: Date] = [:]
     /// Bumped by refreshNow so a poll already in flight does not push the next one out.
@@ -373,11 +374,16 @@ final class TmuxMonitor: ObservableObject {
         loops = [:]
     }
 
-    /// Fast (with captures and external Claude processes) while the station is visible.
-    func setActive(_ fast: Bool) {
-        guard fast != isActive else { return }
-        isActive = fast
-        if fast { refreshNow() }
+    /// Fast (with captures and external Claude processes) while any window wants it:
+    /// a station tab, or a canvas waiting on a prompt. Shared by every window, so calls
+    /// are counted per key and it stays fast until each `true` got its `false`.
+    func setActive(_ fast: Bool, for key: AnyHashable = "station") {
+        let n = max(0, (fastHolds[key] ?? 0) + (fast ? 1 : -1))
+        fastHolds[key] = n == 0 ? nil : n
+        let now = !fastHolds.isEmpty
+        guard now != isActive else { return }
+        isActive = now
+        if now { refreshNow() }
     }
 
     /// Polls every host as soon as its current poll (if any) finishes.

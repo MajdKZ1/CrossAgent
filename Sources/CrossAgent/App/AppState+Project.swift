@@ -5,27 +5,13 @@ extension AppState {
 
     var recentProjects: [RecentProject] { store.recents() }
 
-    /// Brings the project in `url` to the front. An open one comes back as it was; the
-    /// current one is parked with its terminals running (see `stashWorkspace`).
+    /// Loads the project into this window. A window keeps its project for life; other
+    /// projects open in windows of their own (ProjectWindows).
     func openProject(_ url: URL) {
+        guard project == nil else { return }
         let next = Project(url: url)
-        guard ProjectStore.folderExists(next.path) else {
-            flash("That folder is gone")
-            store.removeRecent(path: next.path)
-            return
-        }
-        if project?.path == next.path { return }
-        stashWorkspace()
-        if let ws = workspaces.first(where: { $0.project.path == next.path }) {
-            restoreWorkspace(ws)
-            monitor?.refreshNow()
-            return
-        }
-        resetToWelcome()
-
         project = next
         store.noteOpened(next)
-        store.lastProjectPath = next.path
         let state = store.loadState(for: next)
         setUpOrchestrator(for: next, on: state.orchestratorOn)
         restoreState(state, project: next)
@@ -34,33 +20,20 @@ extension AppState {
         monitor?.refreshNow()
     }
 
-    /// Closes the front project: another open one comes forward, else the welcome
-    /// screen. Nothing is killed.
+    /// Saves the project and closes its terminal clients, as its window goes away.
+    /// Nothing is killed: tmux sessions keep running.
     func closeProject() {
         guard project != nil else { return }
         saveLayout()
+        stopDemo()
         tearDownOrchestrator()
         closeAllPanes()
         orchestratorPane?.close()
         orchestratorPane = nil
         for p in agentPanes.values { p.close() }
         agentPanes = [:]
-        if let ws = workspaces.last {
-            restoreWorkspace(ws)
-        } else {
-            resetToWelcome()
-            store.lastProjectPath = nil
-        }
-    }
-
-    /// On launch: reopens the last project if its folder still exists.
-    func restoreLastProject() {
-        guard project == nil, let path = store.lastProjectPath else { return }
-        guard ProjectStore.folderExists(path) else {
-            store.lastProjectPath = nil
-            return
-        }
-        openProject(URL(fileURLWithPath: path, isDirectory: true))
+        // Done with it: a later save (quit) must not write the emptied grid over it.
+        project = nil
     }
 
     /// Env every pane of the project gets.
