@@ -152,7 +152,9 @@ extension AppState {
         // Written to a temp name and moved, so the waiting tool never reads half a file.
         let word = allow ? "allow" : "deny"
         let dir = "\"$HOME/.crossagent/approvals\""
-        let script = "mkdir -p \(dir) && printf \(word) > \(dir)/\(ask.id).answer.tmp"
+        // Only while the request is still waiting, so a late answer leaves no file behind.
+        let script = "test -f \(dir)/\(ask.id).json || { echo 'that request already timed out' >&2; exit 1; }"
+            + " && printf \(word) > \(dir)/\(ask.id).answer.tmp"
             + " && mv -f \(dir)/\(ask.id).answer.tmp \(dir)/\(ask.id).answer"
         o.permissionSends[ask.id] = .sending
         // Answers for prompts that are gone by now.
