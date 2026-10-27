@@ -47,6 +47,10 @@ final class AppState: ObservableObject {
     @Published var relayPickIndex = 0
     /// Bumped whenever any pane changes state, so host chips can recount live panes.
     @Published private(set) var paneStateVersion = 0
+    /// Shown when a new pane's host does not have the project folder yet.
+    @Published var folderPrompt: FolderPrompt?
+    /// "<project path>|<host id>" pairs whose folder was found this session.
+    var foldersFound: Set<String> = []
     private var stateWatchers: [UUID: AnyCancellable] = [:]
 
     private static let lastHostKey = "lastHostID"
@@ -83,10 +87,11 @@ final class AppState: ObservableObject {
 
     // MARK: Panes
 
-    /// Opens a pane in the open project's folder. A nil or empty session name picks the
-    /// next free `ca-<slug>-<host>-<n>`. Nil when no project is open.
+    /// Opens a pane in the open project's folder, or in `cwdOverride` when set. A nil or
+    /// empty session name picks the next free `ca-<slug>-<host>-<n>`. Nil when no project is open.
     @discardableResult
-    func newPane(hostID: String? = nil, mode: PaneMode = .claude, session: String? = nil, taken: Set<String> = []) -> PaneSession? {
+    func newPane(hostID: String? = nil, mode: PaneMode = .claude, session: String? = nil, taken: Set<String> = [],
+                 cwdOverride: String? = nil) -> PaneSession? {
         guard let project else {
             flash("Open a project first")
             return nil
@@ -106,7 +111,8 @@ final class AppState: ObservableObject {
                 Task { [weak self] in
                     let r = await Runner.run(CommandBuilder.oneShot(host: host, script: "tmux ls -F '#{session_name}' 2>/dev/null || true"))
                     let names = Set(r.stdout.split(separator: "\n").map(String.init))
-                    self?.newPane(hostID: host.id, mode: mode, session: self?.nextSessionName(host: host, taken: taken.union(names)), taken: taken)
+                    self?.newPane(hostID: host.id, mode: mode, session: self?.nextSessionName(host: host, taken: taken.union(names)), taken: taken,
+                                  cwdOverride: cwdOverride)
                 }
                 return nil
             }
@@ -116,7 +122,7 @@ final class AppState: ObservableObject {
             focus(existing.id)
             return existing
         }
-        let pane = PaneSession(host: host, mode: mode, session: name, cwd: project.cwd(for: host),
+        let pane = PaneSession(host: host, mode: mode, session: name, cwd: cwdOverride ?? project.cwd(for: host),
                                env: projectEnv(project))
         adopt(pane)
         lastHostID = host.id

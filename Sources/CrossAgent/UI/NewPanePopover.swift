@@ -107,7 +107,7 @@ struct NewPanePopover: View {
     private func create() {
         guard nameValid, let host else { return }
         app.showNewPane = false
-        app.newPane(hostID: host.id, mode: mode, session: trimmed)
+        app.requestPane(hostID: host.id, mode: mode, session: trimmed)
     }
 
     /// Arrows and Tab belong to the text field, so catch them first. Only installed while

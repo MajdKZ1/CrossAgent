@@ -11,6 +11,14 @@ extension AppState {
             return
         }
         // `tmux new -A` attaches the existing session; the mode only matters if it is gone.
+        if project == nil {
+            // Attaching needs no project. Not saved anywhere, there is no project to save it in.
+            guard let host = host(info.hostId), SessionName.isValid(info.name) else { return }
+            let pane = PaneSession(host: host, mode: info.isClaude ? .claude : .shell, session: info.name)
+            adopt(pane)
+            showFromStation(pane)
+            return
+        }
         guard let pane = newPane(hostID: info.hostId, mode: info.isClaude ? .claude : .shell, session: info.name) else { return }
         showFromStation(pane)
     }

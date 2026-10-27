@@ -4,19 +4,26 @@ struct ContentView: View {
     @EnvironmentObject private var app: AppState
 
     var body: some View {
+        let gridVisible = app.mode == .panes
         VStack(spacing: 0) {
             TopBar()
             ZStack {
-                // The grid stays alive under the station so terminals keep running and sized.
+                // The grid stays alive under the other modes so terminals keep running and sized.
                 PaneGrid()
-                    .opacity(app.showStation ? 0 : 1)
-                    .allowsHitTesting(!app.showStation)
-                if app.panes.isEmpty && !app.showStation { EmptyState() }
+                    .opacity(gridVisible ? 1 : 0)
+                    .allowsHitTesting(gridVisible)
+                if app.showsWelcome {
+                    WelcomeView()
+                } else if gridVisible && app.panes.isEmpty {
+                    EmptyState()
+                }
                 if app.showStation, let monitor = app.monitor { StationView(monitor: monitor) }
+                if app.mode == .orchestrator { OrchestratorModeView() }
             }
             .padding([.horizontal, .bottom], Palette.gap)
         }
         .background(Palette.window)
+        .modifier(FolderDrop())
         .overlay(alignment: .top) {
             if app.broadcast {
                 Palette.broadcast.frame(height: 2).transition(.opacity)
@@ -25,17 +32,97 @@ struct ContentView: View {
         .overlay {
             if app.showRelayPicker { RelayPicker().transition(.opacity) }
         }
+        .overlay {
+            if let prompt = app.folderPrompt { FolderPromptCard(prompt: prompt).transition(.opacity) }
+        }
         .overlay(alignment: .bottom) {
             if let toast = app.toast { Toast(text: toast).transition(.opacity.combined(with: .offset(y: 6))) }
         }
         .animation(.easeOut(duration: 0.15), value: app.broadcast)
         .animation(.easeOut(duration: 0.12), value: app.showRelayPicker)
+        .animation(.easeOut(duration: 0.12), value: app.folderPrompt)
         .animation(.easeOut(duration: 0.18), value: app.toast)
         .background(WindowAccessor { app.attach(window: $0) })
         .ignoresSafeArea()
-        .onChange(of: app.showStation) { _, on in
+        .onChange(of: app.mode) { _, mode in
             // A hidden terminal must not keep eating keystrokes.
-            if on { app.window?.makeFirstResponder(nil) } else if let id = app.focusedID { app.focus(id) }
+            if mode != .panes {
+                if let win = app.window, app.panes.contains(where: { $0.terminal === win.firstResponder }) {
+                    win.makeFirstResponder(nil)
+                }
+            } else if let id = app.focusedID {
+                app.focus(id)
+            }
+        }
+    }
+}
+
+/// The project folder is missing on the host a new pane is for. Keys are routed here by `Shortcuts`.
+struct FolderPromptCard: View {
+    @EnvironmentObject private var app: AppState
+    var prompt: FolderPrompt
+
+    var body: some View {
+        let tint = Palette.accent(prompt.host)
+        let pcPath = app.project.map { "~/" + $0.pcRelativePath } ?? "the project folder"
+        ZStack {
+            Color.black.opacity(0.35)
+                .onTapGesture { app.cancelFolderPrompt() }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 7) {
+                    Dot(color: tint, size: 6)
+                    Text("No project folder on \(prompt.host.name) yet")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Palette.text)
+                }
+                Text(pcPath)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Palette.muted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                switch prompt.phase {
+                case .missing:
+                    Text("Sync the project there, or open the pane in the home folder.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.muted)
+                case .syncing:
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Starting sync, the first one can take a minute")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Palette.muted)
+                    }
+                case .failed(let output):
+                    ScrollView {
+                        Text(output)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(Palette.danger)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 120)
+                }
+                HStack(spacing: 6) {
+                    Button("Cancel") { app.cancelFolderPrompt() }
+                        .buttonStyle(ChromeButtonStyle())
+                    Spacer()
+                    Button("Open in home folder") { app.promptOpenInHome() }
+                        .buttonStyle(ChromeButtonStyle())
+                        .disabled(prompt.phase == .syncing)
+                    Button(prompt.phase == .missing ? "Start sync" : "Retry sync") { app.promptStartSync() }
+                        .buttonStyle(ChromeButtonStyle(active: true, tint: tint))
+                        .disabled(prompt.phase == .syncing)
+                }
+                .padding(.top, 4)
+                Text("↩ start sync   esc cancel")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Palette.faint)
+            }
+            .padding(14)
+            .frame(width: 360)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(white: 0.085)))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.white.opacity(0.1)))
+            .shadow(color: .black.opacity(0.5), radius: 24, y: 10)
         }
     }
 }

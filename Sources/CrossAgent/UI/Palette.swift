@@ -16,6 +16,8 @@ enum Palette {
     static let broadcast = Color(nsColor: NSColor(hex: "#ff9f6e"))
     /// Sync indicator when every session is synced and watching.
     static let synced = Color(nsColor: NSColor(hex: "#8fd694"))
+    /// Primary actions and the drop highlight. Same blue as the Mac accent.
+    static let primary = Color(nsColor: NSColor(hex: "#6ea8fe"))
     static let danger = Color(nsColor: NSColor(hex: "#f07178"))
     static let chip = Color.white.opacity(0.04)
     static let chipHover = Color.white.opacity(0.08)
