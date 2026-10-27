@@ -448,3 +448,25 @@ Checked on both machines (`claude --version` says `2.1.311 (Claude Code)` on the
 - **Request files are written atomically** (tmp then rename) with the full detail up to 2000 chars; the PermissionAsk event's `prompt` is capped at 600. Both files go away once answered or timed out.
 - **`ca remote wait` announces each unanswered request once** on stderr and skips ones that already have an `.answer` file waiting to be picked up.
 - **Smoke test on the PC (haiku):** turn 1 asked for `python3 hello.py` (acceptEdits doesn't cover running scripts), `ca remote answer pc <id> allow` let it through. Turn 2 (`--continue`) asked for `curl -sI https://example.com | head -n 1`, allowed the same way, got `HTTP/2 200`. Both turns reported session `143f439c-cbb1-49b5-a17f-e8234efba21c`.
+
+### M27 and M29 worker definitions, CROSSAGENT.md and SKILL.md
+
+- **Where the worker definitions live:** `pc-worker` and `mac-worker` are user level, in `~/.claude/agents/` on both machines (install.sh copies them, `ca init` keeps them current). That keeps them out of every project's git tree, and they're available wherever the skill is.
+- **The proxy runs on haiku** with only Bash and Read. All it does is run `ca remote` and pass stdout back, so a big model would burn tokens for nothing.
+- **Brief files, not inline briefs:** the orchestrator writes `.crossagent/briefs/<role>.md` itself, so the worker gets exactly what the orchestrator wrote, not a copy the proxy retyped. `.crossagent/` never crosses the Portal and is gitignored.
+- **Follow-ups go through SendMessage** to the same pc-worker, which runs `ca remote --continue`. A fresh pc-worker with the same role works too, because the conversation is keyed by role on the PC.
+- **mac-worker ships but can't run today:** the PC can't reach the Mac, so `ca remote mac` from the PC fails fast and says why. The code path is the same one pc-worker uses.
+
+### M31 real end to end test (throwaway project ~/ca-e2e, deleted afterwards)
+
+- **Setup:** a tiny stdlib Python lib with tests and a benchmark, `ca init` (CROSSAGENT.md, teammateMode pinned, Portal open, no sessions started), then the orchestrator started from the app (`ca-ca-e2e-mac-orch`, Sonnet 5.5) and given one task: one local subagent writes `sentence_count`, a second reviews it, a pc-worker runs tests and the benchmark on the PC, then a follow-up asks the same worker for medians over 3 runs.
+- **Claude Code's own UI** showed `main` with `general-purpose  Implement sentence_count`, then `pc-worker  Run tests and bench on PC`, with live time and tokens. The pc-worker ran in the background.
+- **No local sessions for local subagents:** before and after `ps` and `tmux ls` on the Mac differ by exactly one claude process, pid 83003, the orchestrator's own pane. No tmux session was added except the orchestrator.
+- **PC:** exactly one remote worker session, `ca-ca-e2e-pc-bench`, in `/home/me/ca-e2e`. The brief it got (header with real specs plus the orchestrator's filled template plus `## Follow-up 1`) was saved and checked. Every turn's `init` and `result` carried the same session id, `4add2f7a-db34-4874-a369-069e7ac4db98`, so the follow-up resumed the conversation.
+- **Permissions:** the first turn needed no approval, because the test project's own `.claude/settings.local.json` allowed `python3 -m unittest*` and `python3 bench.py*` and the Portal synced it to the PC. That's correct (project allow rules apply to workers too) but worth knowing. With those rules removed, the follow-up's `for i in 1 2 3; do ... python3 bench.py ...` raised an approval. It showed on the merged pc-worker node, was allowed from the app, and the PC logged `PermissionAnswer allow`. A third turn's `python3 -c "print(6*7)"` was denied from the app. The worker reported the denial and didn't work around it.
+- **Canvas:** orchestrator, two Mac subagents, one PC worker node (proxy and remote worker merged, PC badge, Brief, Result and Terminal tabs working), plus `verify`, a `ca run` command worker.
+- **The orchestrator checked the claims itself:** it read the diff and ran the tests locally after the writer, applied the reviewer's finding, and after the PC report reran the suite and benchmark on the PC with `ca run pc verify` (3108, 226 and 2546 ops/s against the worker's 3282, 235 and 2530 medians).
+- **Fixed from the test:** unnamed Agent calls showed as "agent" or "general-purpose" on the canvas. The hook now names them by their description, like the transcript parser already did.
+- **Known leftovers:**
+  - If the project has CrossAgent's hooks, the headless worker's hooks still write an event file named after its session id. It has no role, so the app ignores it, and the follower deletes event files after 3 days.
+  - The app's snapshot command doesn't capture terminal views. The card dump showed the remote Terminal tab live with the worker's feed.
