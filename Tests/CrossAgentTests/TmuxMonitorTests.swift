@@ -242,7 +242,7 @@ final class TmuxMonitorTests: XCTestCase {
         try await Task.sleep(nanoseconds: 6_000_000_000)
         mon.stop()
         for h in HostStore.defaults {
-            print("[\(h.id)] reachable=\(mon.reachable[h.id] ?? false) poll=\(String(format: "%.2f", mon.lastPollDuration[h.id] ?? -1))s free=\(mon.freeSessionName(host: h))")
+            print("[\(h.id)] reachable=\(mon.reachable[h.id] ?? false) poll=\(String(format: "%.2f", mon.lastPollDuration[h.id] ?? -1))s free=\(mon.freeSessionName(host: h, slug: "check"))")
             for s in mon.sessions[h.id] ?? [] { print("  \(s.id) cmd=\(s.currentCommand) status=\(s.status)") }
             XCTAssertEqual(mon.reachable[h.id], true)
         }

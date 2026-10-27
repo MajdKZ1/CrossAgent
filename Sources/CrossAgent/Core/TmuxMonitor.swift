@@ -393,12 +393,9 @@ final class TmuxMonitor: ObservableObject {
         Set((sessions[host.id] ?? []).map(\.name))
     }
 
-    /// First `ca-<host>-<n>` not in use on that host, per the last poll.
-    func freeSessionName(host: Host) -> String {
-        let used = sessionNames(host: host)
-        var n = 1
-        while used.contains("ca-\(host.id)-\(n)") { n += 1 }
-        return "ca-\(host.id)-\(n)"
+    /// First `ca-<slug>-<host>-<n>` not in use on that host, per the last poll.
+    func freeSessionName(host: Host, slug: String) -> String {
+        SessionName.nextFree(slug: slug, host: host.id, used: sessionNames(host: host))
     }
 
     /// Polls are sequential per host, so they never overlap; hosts run in separate tasks.

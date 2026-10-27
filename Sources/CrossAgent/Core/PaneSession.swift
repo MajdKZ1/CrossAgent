@@ -26,6 +26,12 @@ final class PaneSession: ObservableObject, Identifiable {
     let host: Host
     let mode: PaneMode
     let session: String
+    /// Where a new tmux session starts, see `CommandBuilder.script`.
+    let cwd: String?
+    /// Extra env for a new tmux session, like CROSSAGENT_PROJECT.
+    let env: [String: String]
+    /// Attach to an existing tmux session only, never create one.
+    let attachOnly: Bool
     let terminal: PaneTerminalView
     let startedAt = Date()
 
@@ -36,10 +42,14 @@ final class PaneSession: ObservableObject, Identifiable {
 
     private var delegateBox: Delegate?
 
-    init(host: Host, mode: PaneMode, session: String) {
+    init(host: Host, mode: PaneMode, session: String, cwd: String? = nil, env: [String: String] = [:],
+         attachOnly: Bool = false) {
         self.host = host
         self.mode = mode
         self.session = session
+        self.cwd = cwd
+        self.env = env
+        self.attachOnly = attachOnly
         terminal = PaneTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
         Theme.apply(to: terminal)
         let box = Delegate(owner: self)
@@ -51,7 +61,8 @@ final class PaneSession: ObservableObject, Identifiable {
     var isExited: Bool { if case .exited = state { return true } else { return false } }
 
     func start() {
-        let cmd = CommandBuilder.command(host: host, mode: mode, session: session)
+        let cmd = CommandBuilder.command(host: host, mode: mode, session: session, cwd: cwd, env: env,
+                                         attachOnly: attachOnly)
         var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         env.append("COLORTERM=truecolor")
         let inherited = ProcessInfo.processInfo.environment
@@ -65,7 +76,7 @@ final class PaneSession: ObservableObject, Identifiable {
                               currentDirectory: FileManager.default.homeDirectoryForCurrentUser.path)
     }
 
-    /// Respawns the same command, which reattaches the same tmux session.
+    /// Respawns the same command (same cwd and env), which reattaches the same tmux session.
     func reconnect() {
         if terminal.process?.running == true { terminal.terminate() }
         terminal.feed(text: "\u{1b}[2J\u{1b}[H")

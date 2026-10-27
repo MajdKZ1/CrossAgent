@@ -8,7 +8,14 @@ enum PaneMode: String, Codable, CaseIterable {
 
 enum SessionName {
     static func isValid(_ name: String) -> Bool {
-        name.range(of: "^[A-Za-z0-9_-]{1,40}$", options: .regularExpression) != nil
+        name.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil
+    }
+
+    /// First `ca-<slug>-<host>-<n>` not in `used`.
+    static func nextFree(slug: String, host: String, used: Set<String>) -> String {
+        var n = 1
+        while used.contains(CASessionName.make(slug: slug, host: host, task: "\(n)")) { n += 1 }
+        return CASessionName.make(slug: slug, host: host, task: "\(n)")
     }
 }
 
@@ -26,18 +33,43 @@ enum CommandBuilder {
     /// Spec script plus `set -q status off` for this session only: the pane header
     /// already shows the session, and tmux's bright status bar clashes with the UI.
     /// Also turns on focus-events, which Claude Code asks for.
-    static func script(mode: PaneMode, session: String) -> String {
+    ///
+    /// `cwd` is where a new session starts (`tmux new -c`, or `cd` without tmux). A
+    /// leading `$HOME/` is left for the host's shell to expand, see `shellPath`.
+    /// `env` goes to the session with `tmux new -e`, or is exported without tmux. Both
+    /// only matter when the session is created; an existing one keeps its own.
+    /// `attachOnly` attaches to an existing session (`tmux attach -t '=NAME'`) and never
+    /// creates one; `mode` is ignored then.
+    static func script(mode: PaneMode, session: String, cwd: String? = nil, env: [String: String] = [:],
+                       attachOnly: Bool = false) -> String {
         precondition(SessionName.isValid(session))
+        let opts = " \\; set -q status off \\; set -sq focus-events on"
+        if attachOnly {
+            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux attach -t '=\(session)'\(opts); else echo 'tmux is not installed here' >&2; exit 1; fi"
+        }
+        var newArgs = "-A -s \(session)"
+        var fallback = ""
+        if let cwd, !cwd.isEmpty {
+            let dir = shellPath(cwd)
+            newArgs += " -c " + dir
+            fallback += "cd \(dir) 2>/dev/null; "
+        }
+        for key in env.keys.sorted() where isEnvKey(key) {
+            let kv = shellQuote("\(key)=\(env[key]!)")
+            newArgs += " -e " + kv
+            fallback += "export \(kv); "
+        }
         switch mode {
         case .claude:
-            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux new -A -s \(session) claude \\; set -q status off \\; set -sq focus-events on; else exec claude; fi"
+            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux new \(newArgs) claude\(opts); else \(fallback)exec claude; fi"
         case .shell:
-            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux new -A -s \(session) \\; set -q status off \\; set -sq focus-events on; else exec \"$SHELL\" -l; fi"
+            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux new \(newArgs)\(opts); else \(fallback)exec \"$SHELL\" -l; fi"
         }
     }
 
-    static func command(host: Host, mode: PaneMode, session: String, localShell: String = LocalShell.path) -> SpawnCommand {
-        let s = script(mode: mode, session: session)
+    static func command(host: Host, mode: PaneMode, session: String, cwd: String? = nil, env: [String: String] = [:],
+                        attachOnly: Bool = false, localShell: String = LocalShell.path) -> SpawnCommand {
+        let s = script(mode: mode, session: session, cwd: cwd, env: env, attachOnly: attachOnly)
         switch host.type {
         case .local:
             return SpawnCommand(executable: localShell, args: ["-lc", s])
@@ -48,10 +80,26 @@ enum CommandBuilder {
         }
     }
 
-    /// Command that kills a tmux session on a host, run without a PTY.
+    /// Quotes a path for sh, leaving a leading `$HOME` (or `~`) to the shell:
+    /// `$HOME/a b` becomes `"$HOME"/'a b'`.
+    static func shellPath(_ path: String) -> String {
+        for prefix in ["$HOME", "~"] where path == prefix || path.hasPrefix(prefix + "/") {
+            let rest = String(path.dropFirst(prefix.count + 1))
+            return rest.isEmpty ? "\"$HOME\"" : "\"$HOME\"/" + shellQuote(rest)
+        }
+        return shellQuote(path)
+    }
+
+    static func isEnvKey(_ key: String) -> Bool {
+        key.range(of: "^[A-Za-z_][A-Za-z0-9_]*$", options: .regularExpression) != nil
+    }
+
+    /// Command that kills a tmux session on a host, run without a PTY. `=` makes tmux
+    /// match the name exactly; a bare `-t ca-pc-1` would kill `ca-pc-10` if `ca-pc-1` were gone.
+    /// Quoted because zsh expands an unquoted `=word` to a command path.
     static func killCommand(host: Host, session: String) -> SpawnCommand {
         precondition(SessionName.isValid(session))
-        return oneShot(host: host, script: "tmux kill-session -t \(session)")
+        return oneShot(host: host, script: "tmux kill-session -t '=\(session)'")
     }
 
     /// Runs a short script in a login shell on the host (no PTY).
