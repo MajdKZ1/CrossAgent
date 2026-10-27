@@ -20,68 +20,40 @@ final class WorkerActivityTests: XCTestCase {
     }
 
     func testBusyRule() {
-        let now = t0.addingTimeInterval(100)
         // A command worker runs until its WorkerStop, whatever tmux shows in front.
-        XCTAssertTrue(AgentGraph.workerBusy(info("a"), claude: false, now: now))
-        XCTAssertTrue(AgentGraph.workerBusy(info("a", status: .running), claude: false, now: now))
-        XCTAssertFalse(AgentGraph.workerBusy(info("a", status: .waitingForInput), claude: false, now: now))
-        XCTAssertFalse(AgentGraph.workerBusy(info("a", dead: true), claude: false, now: now))
-        // Claude goes by its last output, not by a status a slow poll may have kept around.
-        XCTAssertTrue(AgentGraph.workerBusy(info("c", status: .running, lastOutput: now.addingTimeInterval(-3)),
-                                            claude: true, now: now))
-        XCTAssertFalse(AgentGraph.workerBusy(info("c", status: .running, lastOutput: now.addingTimeInterval(-60)),
-                                             claude: true, now: now))
+        XCTAssertTrue(AgentGraph.workerBusy(info("a")))
+        XCTAssertTrue(AgentGraph.workerBusy(info("a", status: .running)))
+        XCTAssertFalse(AgentGraph.workerBusy(info("a", status: .waitingForInput)))
+        XCTAssertFalse(AgentGraph.workerBusy(info("a", dead: true)))
     }
 
     func testBusyWorkerStaysWorkingPastIdleTimeout() {
         let g = AgentGraph()
         let busy = worker(g, "busy", .working)
-        let quiet = worker(g, "quiet", .working)
-        // Polls every 10 s keep the busy one fresh; the quiet Claude dozes off after idleAfter.
+        let gone = worker(g, "gone", .working)
+        // Polls every 10 s keep the busy one fresh; one whose pane died dozes off after idleAfter.
         for s in stride(from: 10.0, through: 60, by: 10) {
             let now = t0.addingTimeInterval(s)
-            g.keepBusyWorkers(["mac": [info(busy, command: "bash"),
-                                       info(quiet, command: "2.1.311", claude: true, lastOutput: t0)]], now: now)
+            g.keepBusyWorkers(["mac": [info(busy), info(gone, dead: true)]], now: now)
             g.tick(now: now)
         }
         XCTAssertEqual(g.nodes[busy]?.state, .working)
-        XCTAssertEqual(g.nodes[quiet]?.state, .idle)
+        XCTAssertEqual(g.nodes[gone]?.state, .idle)
     }
 
-    func testIdleCommandWorkerWakesButIdleClaudeStaysIdle() {
+    func testIdleCommandWorkerWakes() {
         let g = AgentGraph()
         let cmd = worker(g, "cmd", .idle)
-        let claude = worker(g, "claude", .idle, recent: ["hi"])
-        let now = t0.addingTimeInterval(5)
-        // Claude at its prompt redraws now and then; its Stop said idle, so it stays idle.
-        g.keepBusyWorkers(["mac": [info(cmd), info(claude, command: "2.1.311", claude: true, lastOutput: now)]], now: now)
+        g.keepBusyWorkers(["mac": [info(cmd)]], now: t0.addingTimeInterval(5))
         XCTAssertEqual(g.nodes[cmd]?.state, .working)
         XCTAssertEqual(g.nodes[cmd]?.activity, "Running yes")
-        XCTAssertEqual(g.nodes[claude]?.state, .idle)
     }
 
-    func testWorkingClaudeInALongToolCallStaysWorking() {
+    func testRemoteWorkersAreLeftToTheirTurn() {
         let g = AgentGraph()
-        let id = worker(g, "claude", .working)
-        for s in stride(from: 10.0, through: 90, by: 10) {
-            let now = t0.addingTimeInterval(s)
-            // The spinner keeps the screen moving.
-            g.keepBusyWorkers(["mac": [info(id, command: "2.1.311", status: .running, claude: true,
-                                            lastOutput: now.addingTimeInterval(-2))]], now: now)
-            g.tick(now: now)
-        }
-        XCTAssertEqual(g.nodes[id]?.state, .working)
-    }
-
-    func testClaudeWrappedInBashIsKnownByItsHooks() {
-        let g = AgentGraph()
-        // tmux says bash and no capture says Claude, but its hooks filled `recent`.
-        let id = worker(g, "cl", .working, recent: ["hi"])
-        for s in stride(from: 10.0, through: 60, by: 10) {
-            let now = t0.addingTimeInterval(s)
-            g.keepBusyWorkers(["mac": [info(id, command: "bash", status: .running, lastOutput: t0)]], now: now)
-            g.tick(now: now)
-        }
+        let id = worker(g, "tests", .idle)
+        g.nodes[id]?.remote = RemoteInfo(host: "mac", role: "tests", tmuxSession: id)
+        g.keepBusyWorkers(["mac": [info(id)]], now: t0.addingTimeInterval(5))
         XCTAssertEqual(g.nodes[id]?.state, .idle)
     }
 

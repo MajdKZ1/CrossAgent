@@ -196,7 +196,7 @@ extension AppState {
         let g = o.graph
         let now = Date()
         var ended: [String] = []
-        for n in g.nodes.values where n.kind == .worker && !o.unverifiedWorkers.contains(n.id) {
+        for n in g.nodes.values where n.kind == .worker && n.remote == nil && !o.unverifiedWorkers.contains(n.id) {
             switch n.state {
             case .done, .error: continue
             default: break
@@ -236,6 +236,8 @@ extension AppState {
         var out: [String: (host: String, session: String)] = [:]
         for n in g.nodes.values {
             guard case .needsInput = n.state else { continue }
+            // Remote approvals clear through PermissionAnswer, not the screen.
+            guard n.remote?.permission == nil else { continue }
             let holder = n.kind == .worker ? n : g.orchestrator
             guard let h = holder, let s = h.tmuxSession else { continue }
             out[h.hostId + "/" + s] = (h.hostId, s)
@@ -556,41 +558,25 @@ extension AppState {
 }
 
 extension AgentGraph {
-    /// How recent tmux output must be for a Claude worker to count as busy. Above the
-    /// slow poll interval, so a working Claude (its spinner moves) never looks quiet.
-    nonisolated static let screenQuietAfter: TimeInterval = 15
-
-    /// True when a worker's tmux session says it is busy. A command worker (`ca run --
-    /// cmd`) is busy until its WorkerStop marks it done: tmux shows `bash` in front
-    /// either way, so `yes > /dev/null` and `read x` look alike from outside. A Claude
-    /// worker is busy while its screen moves (the monitor's slow polls keep an old
-    /// status around, so this goes by the last output time).
-    nonisolated static func workerBusy(_ s: TmuxSessionInfo, claude: Bool, now: Date) -> Bool {
-        if s.paneDead || s.status == .waitingForInput || s.status == .exited { return false }
-        if claude { return now.timeIntervalSince(s.lastActivity) < screenQuietAfter }
-        return true
-    }
-
-    /// `ca run --claude` wraps Claude in bash, so tmux only names it on fast polls with a
-    /// screen capture. Its hooks give it away too: a command worker gets no events
-    /// between WorkerStart and WorkerStop, so its `recent` stays empty.
-    nonisolated static func isClaudeWorker(_ n: AgentNode, _ s: TmuxSessionInfo) -> Bool {
-        s.isClaude || !n.recent.isEmpty
+    /// True when a `ca run` worker's tmux session says it is busy. It stays busy until
+    /// its WorkerStop marks it done: tmux shows `bash` in front either way, so
+    /// `yes > /dev/null` and `read x` look alike from outside.
+    nonisolated static func workerBusy(_ s: TmuxSessionInfo) -> Bool {
+        !(s.paneDead || s.status == .waitingForInput || s.status == .exited)
     }
 
     /// Workers emit no events while a long command runs, so `tick` would doze them off.
     /// Every few seconds, busy workers are marked working and their clock bumped. Quiet
-    /// ones are left alone and go idle through `tick` as before. A Claude worker the
-    /// hooks put to idle (its Stop) stays idle: Claude redraws now and then at its prompt.
+    /// ones are left alone and go idle through `tick` as before. Remote workers are left
+    /// out: their running turn keeps them alive.
     func keepBusyWorkers(_ sessions: [String: [TmuxSessionInfo]], now: Date) {
-        for (id, n) in nodes where n.kind == .worker {
+        for (id, n) in nodes where n.kind == .worker && n.remote == nil {
             guard let session = n.tmuxSession,
                   let info = sessions[n.hostId]?.first(where: { $0.name == session }) else { continue }
-            let claude = Self.isClaudeWorker(n, info)
-            guard Self.workerBusy(info, claude: claude, now: now) else { continue }
+            guard Self.workerBusy(info) else { continue }
             var m = n
             switch n.state {
-            case .idle where !claude:
+            case .idle:
                 m.state = .working
                 if m.activity.isEmpty || m.activity == "Idle" { m.activity = "Running" }
             case .working, .thinking:
