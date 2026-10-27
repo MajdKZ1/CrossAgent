@@ -16,6 +16,7 @@ extension AppState {
         }
         if project?.path == next.path { return }
         if project != nil { saveLayout() }
+        tearDownOrchestrator()
         closeAllPanes()
         orchestratorPane?.close()
         orchestratorPane = nil
@@ -23,7 +24,10 @@ extension AppState {
         project = next
         store.noteOpened(next)
         store.lastProjectPath = next.path
-        restoreState(store.loadState(for: next), project: next)
+        let state = store.loadState(for: next)
+        setUpOrchestrator(for: next, on: state.orchestratorOn)
+        restoreState(state, project: next)
+        orchestratorRestored()
         monitor?.refreshNow()
     }
 
@@ -31,6 +35,7 @@ extension AppState {
     func closeProject() {
         guard project != nil else { return }
         saveLayout()
+        tearDownOrchestrator()
         closeAllPanes()
         orchestratorPane?.close()
         orchestratorPane = nil
@@ -65,6 +70,7 @@ extension AppState {
     /// project or while one is loading.
     func saveLayout() {
         guard let project, !isRestoring else { return }
+        if let g = self.orch?.graph { finishedNodes = g.finished.compactMap { g.nodes[$0] } }
         var orch = orchestratorInfo
         if let o = orchestratorPane {
             orch = OrchestratorState(hostId: o.host.id, session: o.session, enabled: true)
@@ -74,7 +80,8 @@ extension AppState {
             mode: mode.rawValue,
             orchestrator: orch,
             nodePositions: nodePositions,
-            finishedNodes: finishedNodes.isEmpty ? nil : finishedNodes)
+            finishedNodes: finishedNodes.isEmpty ? nil : finishedNodes,
+            orchestratorOn: self.orch?.enabled)
         store.saveState(state, for: project)
     }
 

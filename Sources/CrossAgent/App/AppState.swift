@@ -23,12 +23,17 @@ final class AppState: ObservableObject {
     @Published var mode: AppMode = .panes {
         didSet {
             if mode == .station, oldValue != .station { modeBeforeStation = oldValue }
-            if mode != oldValue { saveLayout() }
+            if mode != oldValue {
+                saveLayout()
+                orchestratorModeChanged(from: oldValue)
+            }
         }
     }
     var modeBeforeStation: AppMode = .panes
     /// The project's orchestrator Claude. Not in `panes`, the canvas shows it.
     @Published var orchestratorPane: PaneSession?
+    /// The open project's agent graph, event pipeline and canvas overlays. See AppState+Orchestrator.
+    @Published var orch: ProjectOrchestrator?
     /// Last orchestrator host and session, kept when it is stopped so the project remembers.
     var orchestratorInfo: OrchestratorState?
     /// Canvas node positions and finished nodes, saved with the project. Not published;
