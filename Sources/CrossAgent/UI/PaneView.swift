@@ -1,43 +1,80 @@
 import AppKit
 import SwiftUI
 
+/// One pane. In a grid it is a quiet card with a slim header that fades back until
+/// hovered. Alone (one pane, or maximized) it is just the terminal, edge to edge with
+/// some padding, and the header floats in at the top right on hover.
 struct PaneView: View {
     @EnvironmentObject private var app: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var pane: PaneSession
     var focused: Bool
     var hidden: Bool
+    var solo = false
+
+    @State private var hovering = false
+    @State private var nearTop = false
 
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: Palette.radius, style: .continuous) }
+    /// The terminal's own background, so the padding around it reads as part of the terminal.
+    private var fill: Color { Color(nsColor: ThemeTokens.shared.resolved.background) }
+    private func animation(_ duration: Double) -> Animation? { reduceMotion ? nil : .easeOut(duration: duration) }
 
     var body: some View {
         VStack(spacing: 0) {
-            PaneHeader(pane: pane)
+            if !solo {
+                PaneHeader(pane: pane, lit: hovering || focused, showsButtons: hovering)
+            }
             TerminalHost(terminal: pane.terminal, hidden: hidden)
-                .padding(.horizontal, 8)
-                .padding(.top, 2)
-                .padding(.bottom, 6)
+                .padding(solo ? EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 12)
+                              : EdgeInsets(top: 0, leading: 10, bottom: 8, trailing: 8))
                 .overlay {
                     if pane.isExited { ExitedOverlay(pane: pane).transition(.opacity) }
                 }
         }
-        .background(shape.fill(Palette.pane))
+        .background(shape.fill(fill))
+        .overlay(alignment: .topTrailing) {
+            if solo && (nearTop || pane.isExited) {
+                PaneHeader(pane: pane, lit: true, showsButtons: true, floating: true)
+                    .padding(6)
+                    .transition(.opacity)
+            }
+        }
         .overlay(
-            shape.strokeBorder(focused ? Palette.accent(pane.host).opacity(0.85) : Palette.border,
-                               lineWidth: focused ? 1.5 : 1)
+            shape.strokeBorder(focused ? Palette.accent(pane.host).opacity(0.6) : Palette.border.opacity(0.7), lineWidth: 1)
+                .opacity(solo ? 0 : 1)
                 .allowsHitTesting(false)
         )
         .contentShape(shape)
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let p):
+                if !hovering { hovering = true }
+                let top = p.y < 40
+                if top != nearTop { nearTop = top }
+            case .ended:
+                hovering = false
+                nearTop = false
+            }
+        }
         .simultaneousGesture(TapGesture().onEnded { app.focus(pane.id) })
         .opacity(hidden ? 0 : 1)
         .allowsHitTesting(!hidden)
-        .animation(.easeOut(duration: 0.12), value: pane.isExited)
-        .animation(.easeOut(duration: 0.1), value: focused)
+        .animation(animation(0.12), value: pane.isExited)
+        .animation(animation(0.1), value: focused)
+        .animation(animation(0.15), value: nearTop)
     }
 }
 
 struct PaneHeader: View {
     @EnvironmentObject private var app: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var pane: PaneSession
+    /// Full strength while hovered or focused, faded back otherwise.
+    var lit = true
+    var showsButtons = true
+    /// A compact capsule over a solo terminal instead of a row above it.
+    var floating = false
 
     private var dotColor: Color {
         switch pane.state {
@@ -51,29 +88,42 @@ struct PaneHeader: View {
 
     var body: some View {
         HStack(spacing: 7) {
-            Dot(color: dotColor)
-            Text(pane.host.name)
-                .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(Palette.text)
-            ModeBadge(mode: pane.mode)
-            Text(pane.session)
-                .font(.system(size: 11))
-                .foregroundStyle(Palette.faint)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 4)
+            Dot(color: dotColor, size: 6)
+            Group {
+                Text(pane.host.name)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Palette.text)
+                if !floating { ModeBadge(mode: pane.mode) }
+                Text(pane.session)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Palette.faint)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .opacity(lit ? 1 : 0.55)
+            if !floating { Spacer(minLength: 4) }
             buttons
+                .opacity(showsButtons ? 1 : 0)
+                .allowsHitTesting(showsButtons)
         }
-        .padding(.leading, 11)
-        .padding(.trailing, 6)
-        .frame(height: Palette.headerHeight)
+        .padding(.leading, floating ? 9 : 10)
+        .padding(.trailing, floating ? 3 : 5)
+        .frame(height: floating ? 24 : 24)
+        .background {
+            if floating {
+                Capsule(style: .continuous).fill(Palette.raised.opacity(0.92))
+                    .overlay(Capsule(style: .continuous).strokeBorder(Palette.border, lineWidth: 1))
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { app.toggleMaximize(pane.id) }
         .contextMenu { menu }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: lit)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: showsButtons)
     }
 
     private var buttons: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 1) {
             Menu {
                 if targets.isEmpty {
                     Text("No other live panes")
@@ -111,6 +161,9 @@ struct PaneHeader: View {
     @ViewBuilder private var menu: some View {
         Button(app.maximizedID == pane.id ? "Restore" : "Maximize") { app.toggleMaximize(pane.id) }
         Button("Reconnect") { app.reconnect(pane.id) }
+        Divider()
+        Button("Find…") { pane.terminal.showFind() }
+        Button("Clear") { pane.clearScrollback() }
         Divider()
         Button("Close Pane") { app.close(pane.id) }
         Button("Kill Session") { app.kill(pane.id) }

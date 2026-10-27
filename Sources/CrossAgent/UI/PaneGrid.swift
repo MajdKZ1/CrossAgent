@@ -5,12 +5,16 @@ import SwiftUI
 struct PaneGrid: View {
     @EnvironmentObject private var app: AppState
 
+    /// One pane, or one maximized: it shows as a bare terminal with no card chrome.
+    static func isSolo(_ app: AppState) -> Bool { app.panes.count == 1 || app.maximizedID != nil }
+
     var body: some View {
         let maxIndex = app.panes.firstIndex { $0.id == app.maximizedID }
         GridLayout(maximized: maxIndex, gap: Palette.gap) {
             ForEach(app.panes) { pane in
                 let hidden = app.maximizedID != nil && app.maximizedID != pane.id
-                PaneView(pane: pane, focused: pane.id == app.focusedID, hidden: hidden)
+                PaneView(pane: pane, focused: pane.id == app.focusedID, hidden: hidden,
+                         solo: app.panes.count == 1 || app.maximizedID == pane.id)
                     .zIndex(app.maximizedID == pane.id ? 1 : 0)
             }
         }
