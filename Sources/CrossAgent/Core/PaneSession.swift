@@ -16,6 +16,8 @@ final class PaneSession: ObservableObject, Identifiable {
     let env: [String: String]
     /// Attach to an existing tmux session only, never create one.
     let attachOnly: Bool
+    /// Runs instead of `claude` when the session is created, see `CommandBuilder.script`.
+    let program: String?
     let terminal: PaneTerminalView
     let startedAt = Date()
 
@@ -27,13 +29,14 @@ final class PaneSession: ObservableObject, Identifiable {
     private var delegateBox: Delegate?
 
     init(host: Host, mode: PaneMode, session: String, cwd: String? = nil, env: [String: String] = [:],
-         attachOnly: Bool = false) {
+         attachOnly: Bool = false, program: String? = nil) {
         self.host = host
         self.mode = mode
         self.session = session
         self.cwd = cwd
         self.env = env
         self.attachOnly = attachOnly
+        self.program = program
         terminal = PaneTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
         Theme.apply(to: terminal)
         TerminalAppearance.apply(to: terminal)
@@ -49,7 +52,7 @@ final class PaneSession: ObservableObject, Identifiable {
 
     func start() {
         let cmd = CommandBuilder.command(host: host, mode: mode, session: session, cwd: cwd, env: env,
-                                         attachOnly: attachOnly)
+                                         attachOnly: attachOnly, program: program)
         var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         env.append("COLORTERM=truecolor")
         let inherited = ProcessInfo.processInfo.environment
@@ -90,7 +93,7 @@ final class PaneSession: ObservableObject, Identifiable {
         terminal.leaveTmuxScrollback()
         terminal.clearScrollback()
         terminal.write([0x0c])
-        let cmd = CommandBuilder.oneShot(host: host, script: "tmux clear-history -t '=\(session):' 2>/dev/null")
+        let cmd = CommandBuilder.oneShot(host: host, script: "tmux clear-history -t \(CommandBuilder.shellQuote("=" + session + ":")) 2>/dev/null")
         Task {
             try? await Task.sleep(for: .milliseconds(300))
             _ = await Runner.run(cmd)

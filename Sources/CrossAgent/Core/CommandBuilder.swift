@@ -11,6 +11,13 @@ enum SessionName {
         name.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil
     }
 
+    /// Any tmux session name we can attach to by exact match: tmux itself bans `:` and
+    /// `.`, control characters are refused, everything else gets shell quoted.
+    static func isAttachable(_ name: String) -> Bool {
+        !name.isEmpty && name.count <= 128
+            && !name.unicodeScalars.contains { $0 == ":" || $0 == "." || $0.value < 0x20 || $0.value == 0x7f }
+    }
+
     /// First `ca-<slug>-<host>-<n>` not in `used`.
     static func nextFree(slug: String, host: String, used: Set<String>) -> String {
         var n = 1
@@ -40,13 +47,14 @@ enum CommandBuilder {
     /// `env` goes to the session with `tmux new -e`, or is exported without tmux. Both
     /// only matter when the session is created; an existing one keeps its own.
     /// `attachOnly` attaches to an existing session (`tmux attach -t '=NAME'`) and never
-    /// creates one; `mode` is ignored then.
+    /// creates one; `mode` is ignored then, and any tmux name `isAttachable` takes works.
+    /// `program` replaces `claude` in claude mode (a shell line, like `SessionResume.script`).
     static func script(mode: PaneMode, session: String, cwd: String? = nil, env: [String: String] = [:],
-                       attachOnly: Bool = false) -> String {
-        precondition(SessionName.isValid(session))
+                       attachOnly: Bool = false, program: String? = nil) -> String {
+        precondition(attachOnly ? SessionName.isAttachable(session) : SessionName.isValid(session))
         let opts = " \\; set -q status off \\; set -q mouse on \\; set -sq focus-events on"
         if attachOnly {
-            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux attach -t '=\(session)'\(opts); else echo 'tmux is not installed here' >&2; exit 1; fi"
+            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux attach -t \(shellQuote("=" + session))\(opts); else echo 'tmux is not installed here' >&2; exit 1; fi"
         }
         var newArgs = "-A -s \(session)"
         var fallback = ""
@@ -62,15 +70,17 @@ enum CommandBuilder {
         }
         switch mode {
         case .claude:
-            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux new \(newArgs) claude\(opts); else \(fallback)exec claude; fi"
+            let run = program.map(shellQuote) ?? "claude"
+            let direct = program.map { "exec sh -c " + shellQuote($0) } ?? "exec claude"
+            return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux new \(newArgs) \(run)\(opts); else \(fallback)\(direct); fi"
         case .shell:
             return pathPrefix + "if command -v tmux >/dev/null 2>&1; then exec tmux new \(newArgs)\(opts); else \(fallback)exec \"$SHELL\" -l; fi"
         }
     }
 
     static func command(host: Host, mode: PaneMode, session: String, cwd: String? = nil, env: [String: String] = [:],
-                        attachOnly: Bool = false, localShell: String = LocalShell.path) -> SpawnCommand {
-        let s = script(mode: mode, session: session, cwd: cwd, env: env, attachOnly: attachOnly)
+                        attachOnly: Bool = false, program: String? = nil, localShell: String = LocalShell.path) -> SpawnCommand {
+        let s = script(mode: mode, session: session, cwd: cwd, env: env, attachOnly: attachOnly, program: program)
         switch host.type {
         case .local:
             return SpawnCommand(executable: localShell, args: ["-lc", s])
