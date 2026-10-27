@@ -80,7 +80,7 @@ final class AppState: ObservableObject {
     init(hosts: [Host] = HostStore.load(), store: ProjectStore = ProjectStore()) {
         self.store = store
         self.hosts = hosts
-        lastHostID = UserDefaults.standard.string(forKey: Self.lastHostKey) ?? hosts.first?.id ?? "mac"
+        lastHostID = AppDefaults.store.string(forKey: Self.lastHostKey) ?? hosts.first?.id ?? "mac"
         selectedTabID = tabs[0].id
     }
 
@@ -158,7 +158,7 @@ final class AppState: ObservableObject {
         adopt(pane)
         if self.mode != .panes { open(.panes) }
         lastHostID = host.id
-        UserDefaults.standard.set(host.id, forKey: Self.lastHostKey)
+        AppDefaults.store.set(host.id, forKey: Self.lastHostKey)
         focus(pane.id)
         saveLayout()
         monitor?.refreshNow()

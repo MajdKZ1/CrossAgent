@@ -24,7 +24,7 @@ final class HostSetupWindow: NSObject, NSWindowDelegate {
                                  initialTarget: target, testOnOpen: test) { [weak self] in
             self?.window?.close()
         }
-        let hosting = NSHostingView(rootView: view)
+        let hosting = NSHostingView(rootView: view.defaultAppStorage(AppDefaults.store))
         let w = NSWindow(contentRect: NSRect(origin: .zero, size: hosting.fittingSize),
                          styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
         w.titlebarAppearsTransparent = true
@@ -219,7 +219,7 @@ struct HostSetupView: View {
     }
 
     private func skip() {
-        UserDefaults.standard.set(true, forKey: HostStore.setupDismissedKey)
+        AppDefaults.store.set(true, forKey: HostStore.setupDismissedKey)
         done()
     }
 
@@ -230,7 +230,7 @@ struct HostSetupView: View {
                         accent: HostStore.accents[max(0, remotes - 1) % HostStore.accents.count])
         do {
             try HostStore.add(host)
-            UserDefaults.standard.set(true, forKey: HostStore.setupDismissedKey)
+            AppDefaults.store.set(true, forKey: HostStore.setupDismissedKey)
             added = host.name
             ProjectWindows.shared.reloadHosts()
         } catch {

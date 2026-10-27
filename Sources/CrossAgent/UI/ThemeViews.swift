@@ -13,6 +13,7 @@ struct ThemedRoot: ViewModifier {
         content
             .tint(Palette.primary)
             .environment(\.appTheme, store.current)
+            .defaultAppStorage(AppDefaults.store)
     }
 }
 

@@ -76,7 +76,7 @@ final class ThemeStore: ObservableObject {
     init(builtIns: [AppTheme]? = nil, userFolder: URL? = ThemeStore.userFolder, watch: Bool = true) {
         let base = builtIns ?? Self.loadBuiltIns()
         self.builtIns = base
-        selected = UserDefaults.standard.string(forKey: Self.defaultsKey) ?? Self.defaultName
+        selected = AppDefaults.store.string(forKey: Self.defaultsKey) ?? Self.defaultName
         current = base.first ?? .fallback
         all = base
         folder = userFolder
@@ -89,7 +89,7 @@ final class ThemeStore: ObservableObject {
 
     func select(name: String) {
         selected = name
-        UserDefaults.standard.set(name, forKey: Self.defaultsKey)
+        AppDefaults.store.set(name, forKey: Self.defaultsKey)
         reload()
     }
 

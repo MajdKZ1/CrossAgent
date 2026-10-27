@@ -5,6 +5,13 @@ import SwiftUI
 struct CrossAgentApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    init() {
+        #if DEBUG
+        // First thing, before any defaults are read or anything is spawned.
+        DemoMode.prepare()
+        #endif
+    }
+
     var body: some Scene {
         // Project windows are plain NSWindows made by ProjectWindows, one per project.
         // Everything else is a tab in one of them, or a popover.
@@ -113,7 +120,7 @@ struct RecentProjectsMenu: View {
 /// The Orchestrator menu. A view so it follows the open project.
 struct OrchestratorMenu: View {
     @ObservedObject var app: AppState
-    @AppStorage("mascotHidden") private var mascotHidden = false
+    @AppStorage("mascotHidden", store: AppDefaults.store) private var mascotHidden = false
 
     var body: some View {
         let on = app.orch?.enabled == true
