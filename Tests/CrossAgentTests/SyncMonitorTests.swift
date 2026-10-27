@@ -63,4 +63,29 @@ final class SyncMonitorTests: XCTestCase {
         XCTAssertEqual(s?.health, .ok)
         XCTAssertEqual(s?.beta?.display, "pc:?")
     }
+
+    func testPortalStates() throws {
+        let watching = try XCTUnwrap(session(#"{"name":"ca-a","status":"watching","successfulCycles":3}"#))
+        XCTAssertEqual(watching.successfulCycles, 3)
+        XCTAssertEqual(watching.portal(crossing: false), .steady)
+        XCTAssertEqual(watching.portalWords(crossing: false), "In sync")
+        XCTAssertEqual(watching.portal(crossing: true), .crossing)
+        XCTAssertEqual(watching.portalWords(crossing: true), "Files crossing")
+
+        let staging = try XCTUnwrap(session(#"{"name":"ca-a","status":"staging-beta"}"#))
+        XCTAssertEqual(staging.portal(crossing: false), .crossing)
+        let scanning = try XCTUnwrap(session(#"{"name":"ca-a","status":"scanning"}"#))
+        XCTAssertEqual(scanning.portal(crossing: false), .syncing)
+        XCTAssertEqual(scanning.portalWords(crossing: false), "Scanning")
+        let paused = try XCTUnwrap(session(#"{"name":"ca-a","status":"disconnected","paused":true}"#))
+        XCTAssertEqual(paused.portal(crossing: true), .syncing, "paused never pulses")
+        XCTAssertEqual(paused.portalWords(crossing: false), "Paused")
+
+        let conflict = try XCTUnwrap(session(#"{"name":"ca-a","status":"watching","conflicts":[{"root":"a"},{"root":"b"}]}"#))
+        XCTAssertEqual(conflict.portal(crossing: true), .conflict)
+        XCTAssertEqual(conflict.portalWords(crossing: false), "Conflict in 2 files")
+        let failed = try XCTUnwrap(session(#"{"name":"ca-a","status":"watching","beta":{"transitionProblems":[{"path":"x","error":"e"}]}}"#))
+        XCTAssertEqual(failed.portal(crossing: false), .conflict)
+        XCTAssertEqual(failed.portalWords(crossing: false), "1 file failed to cross")
+    }
 }

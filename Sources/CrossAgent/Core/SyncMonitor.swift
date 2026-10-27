@@ -1,6 +1,7 @@
 import AppKit
 
-/// How a sync session (or all of them) is doing, for the top bar dot.
+/// How a Mutagen session (or all of them) is doing. The UI shows it as a Crossover
+/// Portal state, see `SyncSession.portal(crossing:)`.
 enum SyncHealth: Int, Comparable {
     case ok, busy, problem
 
@@ -84,9 +85,11 @@ struct SyncSession: Decodable, Equatable, Identifiable {
     var beta: Endpoint?
     var conflicts: [Conflict]?
     var excludedConflicts: Int?
+    /// Goes up after every cycle that moved something. A change between polls means files crossed.
+    var successfulCycles: UInt64?
 
     enum CodingKeys: String, CodingKey {
-        case identifier, name, status, paused, lastError, alpha, beta, conflicts, excludedConflicts
+        case identifier, name, status, paused, lastError, alpha, beta, conflicts, excludedConflicts, successfulCycles
     }
 
     init(from decoder: Decoder) throws {
@@ -100,6 +103,7 @@ struct SyncSession: Decodable, Equatable, Identifiable {
         beta = c.lenient(.beta)
         conflicts = c.lenient(.conflicts)
         excludedConflicts = c.lenient(.excludedConflicts)
+        successfulCycles = c.lenient(.successfulCycles)
     }
 
     var id: String { identifier ?? name ?? "" }
@@ -132,6 +136,44 @@ struct SyncSession: Decodable, Equatable, Identifiable {
         return s == "watching" && paused != true ? .ok : .busy
     }
 
+    var conflictCount: Int { (conflicts ?? []).count + (excludedConflicts ?? 0) }
+
+    /// Mutagen is moving files right now (not just looking for changes).
+    var isMoving: Bool {
+        let s = status ?? ""
+        return paused != true && (s.hasPrefix("staging") || s == "transitioning" || s == "reconciling" || s == "saving")
+    }
+
+    /// The portal ring for this session. `crossing` is the monitor's "files moved lately".
+    func portal(crossing: Bool) -> PortalRing.State {
+        switch health {
+        case .problem: return .conflict
+        case .busy:
+            // Paused or reconnecting is never "crossing", whatever moved just before.
+            let stalled = paused == true || (status ?? "").hasPrefix("connecting")
+            return !stalled && (isMoving || crossing) ? .crossing : .syncing
+        case .ok: return crossing ? .crossing : .steady
+        }
+    }
+
+    /// The portal's state in a few words, for the popover and tooltips.
+    func portalWords(crossing: Bool) -> String {
+        let n = conflictCount
+        if n > 0 { return "Conflict in \(n) file\(n == 1 ? "" : "s")" }
+        let s = status ?? ""
+        if paused == true { return "Paused" }
+        if s.hasPrefix("connecting") { return "Connecting" }
+        if s == "disconnected" { return "Disconnected" }
+        if s.hasPrefix("halted") { return "Stopped, needs a look" }
+        if error != nil { return "Needs a look" }
+        let failed = (alpha?.transitionProblems?.count ?? 0) + (beta?.transitionProblems?.count ?? 0)
+            + (alpha?.excludedTransitionProblems ?? 0) + (beta?.excludedTransitionProblems ?? 0)
+        if failed > 0 { return "\(failed) file\(failed == 1 ? "" : "s") failed to cross" }
+        if isMoving || crossing { return "Files crossing" }
+        if s.hasPrefix("scanning") || s == "waiting-for-rescan" { return "Scanning" }
+        return s == "watching" ? "In sync" : "Catching up"
+    }
+
     /// Only `ca-*` sessions; anything unparseable is dropped, not fatal.
     static func parse(_ data: Data) -> [SyncSession] {
         struct Item: Decodable {
@@ -149,7 +191,7 @@ private extension KeyedDecodingContainer {
     }
 }
 
-/// Polls Mutagen for `ca-*` sync sessions every few seconds, only while a window is
+/// Polls Mutagen for `ca-*` sessions (Crossover Portals) every few seconds, only while a window is
 /// actually on screen. One for the app, every window shows it. Never starts the
 /// Mutagen daemon itself.
 @MainActor
@@ -158,10 +200,14 @@ final class SyncMonitor: ObservableObject {
 
     @Published private(set) var installed = false
     @Published private(set) var sessions: [SyncSession] = []
+    /// Sessions that moved files in the last `crossingHold` seconds. Worked out on each
+    /// poll, so it needs no timer of its own.
+    @Published private(set) var crossing: Set<String> = []
 
     var health: SyncHealth { sessions.map(\.health).max() ?? .ok }
 
     static let interval: TimeInterval = 3
+    static let crossingHold: TimeInterval = 5
     static let lookupInterval: TimeInterval = 60
     static let candidates = ["/opt/homebrew/bin/mutagen", "/usr/local/bin/mutagen",
                              NSHomeDirectory() + "/.local/bin/mutagen"]
@@ -171,6 +217,8 @@ final class SyncMonitor: ObservableObject {
     private var lastLookup = Date.distantPast
     private var loop: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
+    private var lastCycles: [String: UInt64] = [:]
+    private var lastMoved: [String: Date] = [:]
 
     func start(windows: @escaping () -> [NSWindow]) {
         self.windows = windows
@@ -227,12 +275,32 @@ final class SyncMonitor: ObservableObject {
         guard let binary else {
             if installed { installed = false }
             if !sessions.isEmpty { sessions = [] }
+            if !crossing.isEmpty { crossing = [] }
             return
         }
         if !installed { installed = true }
         let found = await Self.fetch(binary: binary)
         guard !Task.isCancelled else { return }
+        noteCrossing(found)
         if sessions != found { sessions = found }
+    }
+
+    func isCrossing(_ s: SyncSession) -> Bool { crossing.contains(s.id) }
+
+    private func noteCrossing(_ found: [SyncSession]) {
+        let now = Date()
+        for s in found {
+            let cycles = s.successfulCycles ?? 0
+            // The first sighting is a baseline, not a crossing.
+            if let before = lastCycles[s.id], cycles > before { lastMoved[s.id] = now }
+            if s.isMoving { lastMoved[s.id] = now }
+            lastCycles[s.id] = cycles
+        }
+        let ids = Set(found.map(\.id))
+        lastCycles = lastCycles.filter { ids.contains($0.key) }
+        lastMoved = lastMoved.filter { ids.contains($0.key) && now.timeIntervalSince($0.value) < Self.crossingHold }
+        let moving = Set(lastMoved.keys)
+        if crossing != moving { crossing = moving }
     }
 
     /// Runs and parses off the main thread. A failure (daemon not running) is no sessions.
