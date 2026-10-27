@@ -56,7 +56,7 @@ struct PortalRing: View {
         case .off: "off"
         case .steady: "linked"
         case .crossing: "crossing"
-        case .syncing: "syncing"
+        case .syncing: "catching up"
         case .conflict: "conflict"
         }
     }
