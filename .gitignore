@@ -11,3 +11,4 @@ xcuserdata/
 .crossagent/
 system-map.md
 hosts.json
+__pycache__/
