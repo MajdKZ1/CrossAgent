@@ -103,7 +103,9 @@ private_dirs
 
 # hosts.json as "id<TAB>type<TAB>target<TAB>name" lines: this machine first (type local,
 # id from CA_HERE, else the file's local entry, else mac on macOS or the hostname), then
-# the ssh hosts, then hubs (machines that set this one up but that it can't reach).
+# other ids for this same machine (type self), then the ssh hosts, then hubs (machines
+# that set this one up but that it can't reach). CA_HERE is the hub's name for this
+# machine; the local entry stays its own name. Both mean here and never get a worker.
 # Same id and target rules as the app. Lines starting with ! are warnings.
 hosts_load() {
   python3 -I - "$HOSTS_FILE" "$HUBS_FILE" "${CA_HERE:-}" "$UNAME" "$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo host)" <<'PY'
@@ -170,18 +172,29 @@ names = dict((i, n) for i, _, n in ssh)
 if local and local[0] == here:
     hname = local[1]
 else:
-    hname = names.get(here) or ("This Mac" if uname == "Darwin" else clean(hn) or here)
+    hname = names.get(here) or (local[1] if local else "") or ("This Mac" if uname == "Darwin" else clean(hn) or here)
 print("%s\tlocal\t-\t%s" % (here, hname))
+# Other names for this same machine: its own local id when the hub calls it something
+# else (CA_HERE), and its slugged hostname. They mean this machine, never another host.
+selfs = []
+if local and local[0] != here:
+    selfs.append(local[0])
+    print("%s\tself\t-\t%s" % (local[0], local[1]))
+hs = re.sub(r"[^a-z0-9_]+", "-", hn.lower()).strip("-")[:40].strip("-")
+if hs and ID.match(hs) and hs != here and hs not in selfs:
+    selfs.append(hs)
+    print("%s\tself\thostname\t%s" % (hs, hs))
+done = set([here] + selfs)
 for i, t, n in ssh:
-    if i != here:
+    if i not in done:
+        done.add(i)
         print("%s\tssh\t%s\t%s" % (i, t, n))
-hub = [local[0]] if local and local[0] != here else []
+hub = []
 try:
     with open(hubs) as f:
         hub += [l.strip() for l in f]
 except OSError:
     pass
-done = set([here] + [i for i, _, _ in ssh])
 for i in hub:
     if ID.match(i) and i not in done:
         done.add(i)
@@ -200,7 +213,7 @@ htype() { hfield "$1" 2; }
 htarget() { hfield "$1" 3; }
 hname() { hfield "$1" 4; }
 ssh_hosts() { printf '%s\n' "$HOSTS" | awk -F'\t' '$2 == "ssh" { print $1 }'; }
-host_ids() { printf '%s\n' "$HOSTS" | cut -f1; }
+host_ids() { printf '%s\n' "$HOSTS" | awk -F'\t' '$2 != "self" { print $1 }'; }
 first_ssh() { ssh_hosts | head -1; }
 commas() { tr '\n' ' ' | sed 's/ *$//; s/ /, /g'; }
 
@@ -222,6 +235,7 @@ resolve() {
     fi
     h="$n"
   fi
+  [ "$(htype "${h:-x}")" != self ] || h="$HERE"
   if [ -z "$h" ]; then
     case "$w" in
       local|mac|here|laptop|localhost|machine|computer) h="$HERE" ;;
@@ -261,10 +275,11 @@ hosts_cmd() {
   local hid tg i ty nm w
   case "${1:-list}" in
     list)
-      printf '%s\n' "$HOSTS" | while IFS="$(printf '\t')" read -r i ty tg nm; do
+      printf '%s\n' "$HOSTS" | awk -F'\t' '!($2 == "self" && $3 == "hostname")' | while IFS="$(printf '\t')" read -r i ty tg nm; do
         case "$ty" in
           local) w="this machine" ;;
           ssh) w="ssh $tg" ;;
+          self) w="this machine too (another name for $HERE)" ;;
           *) w="set this machine up, can't be reached from here" ;;
         esac
         printf '%-12s %-22s %s\n' "$i" "$nm" "$w"
@@ -275,7 +290,7 @@ hosts_cmd() {
       valid_id "$hid" || die "host ids are 1-40 chars of A-Z a-z 0-9 _ - (got '$hid')"
       target_ok "$tg" || die "bad ssh target '$tg': it can't start with - or hold spaces or control characters"
       [ "$hid" != "$HERE" ] || die "$hid is this machine"
-      case "$(htype "$hid")" in ""|hub) ;; *) die "$hid is already in hosts.json. Remove it first: ca hosts remove $hid" ;; esac
+      case "$(htype "$hid")" in ""|hub) ;; self) die "$hid is another name for this machine" ;; *) die "$hid is already in hosts.json. Remove it first: ca hosts remove $hid" ;; esac
       say "checking: ssh -o BatchMode=yes -o ConnectTimeout=10 $tg true"
       ssh -o BatchMode=yes -o ConnectTimeout=10 "$tg" true < /dev/null \
         || die "can't reach '$tg' with ssh without a prompt. Set up a key (and an alias in ~/.ssh/config if you like), then run this again"
@@ -804,11 +819,12 @@ sync_note() {
 reach_lines() {
   local i ty tg nm one="" lw
   [ "$(ssh_hosts | grep -c .)" != 1 ] || one=1
-  printf '%s\n' "$HOSTS" | while IFS="$(printf '\t')" read -r i ty tg nm; do
+  printf '%s\n' "$HOSTS" | awk -F'\t' '!($2 == "self" && $3 == "hostname")' | while IFS="$(printf '\t')" read -r i ty tg nm; do
     lw="$(printf '%s\n' "$nm" | awk '{print tolower($NF)}')"
     case "$ty" in
       local) echo "- \`$i\` ($nm): this machine. Nicknames: local, here, this machine, $i. Runs things locally." ;;
       ssh) echo "- \`$i\` ($nm): reached with \`ssh $tg\` (options \`$SSH_OPTS\`). Login shell needed for PATH (\`ssh $tg 'exec \$SHELL -lc \"...\"'\`). Nicknames: $i, $(printf '%s' "$nm" | tr 'A-Z' 'a-z')$([ "$lw" = "$i" ] || echo ", $lw")$([ -z "$one" ] || echo ", remote, ssh, overseas")." ;;
+      self) echo "- \`$i\`: another name for this machine (\`$HERE\`)." ;;
       hub) echo "- \`$i\`: set this machine up over ssh. This machine can't reach it unless the user sets that up (ca hosts add)." ;;
     esac
   done
@@ -885,9 +901,11 @@ COLORS = ["green", "purple", "orange", "cyan", "yellow", "pink", "red"]
 with open(tmpl) as f:
     t = f.read()
 want, k = {}, 0
+# This machine, under any of its names, never gets a worker for itself.
+selfs = set([here] + [l.split("\t")[0] for l in hosts.splitlines() if l.split("\t")[1:2] in (["local"], ["self"])])
 for line in hosts.splitlines():
     p = line.split("\t")
-    if len(p) < 4 or p[1] not in ("ssh", "hub"):
+    if len(p) < 4 or p[1] not in ("ssh", "hub") or p[0] in selfs:
         continue
     hid = p[0]
     name = re.sub(r"[^A-Za-z0-9 ._()+-]", "", p[3]).strip() or hid
