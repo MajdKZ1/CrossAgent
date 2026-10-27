@@ -1234,7 +1234,8 @@ Remote workers (headless Claude Code on the other machine, from the Mac; the pc-
 
 Logs: .crossagent/logs/<task>.log, results: .crossagent/results/<task>.md, on the host that ran it.
 Remote workers keep their state in .crossagent/remote/<role>/ on their host, a copy of briefs and
-reports lands in .crossagent/remote/<host>-<role>/ on the Mac.
+reports lands in .crossagent/remote/<host>-<role>/ on the Mac. ca remote and ca remote wait exit
+with the worker's code (0 ok, 1 failed), 3 on a Portal conflict (report printed first), 124 if still running.
 <project> is the folder name as a slug (lowercase a-z 0-9 and -, max 16). Task names: up to 40 chars.
 Workers log WorkerStart/WorkerStop events to ~/.crossagent/events/<session>.jsonl.
 A single command string after -- runs through bash -c, so pipes and && work.
