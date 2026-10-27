@@ -19,6 +19,11 @@ enum Palette {
     /// Primary actions and the drop highlight. Same blue as the Mac accent.
     static let primary = Color(nsColor: NSColor(hex: "#6ea8fe"))
     static let danger = Color(nsColor: NSColor(hex: "#f07178"))
+    static let success = Color(nsColor: NSColor(hex: "#5fd39a"))
+    static let warning = Color(nsColor: NSColor(hex: "#f5b041"))
+    /// Mascot body and eyes, from the theme.
+    static let mascotBody = Color(nsColor: NSColor(hex: "#b3dcff"))
+    static let mascotEyes = Color(nsColor: NSColor(hex: "#0b1218"))
     static let chip = Color.white.opacity(0.04)
     static let chipHover = Color.white.opacity(0.08)
 
