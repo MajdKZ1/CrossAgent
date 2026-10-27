@@ -95,6 +95,29 @@ for n in names:
          'statusAt': (s.get('statusUpdatedAt') or 0) / 1000 or None}
     running.append(fileinfo(e, root + '/projects/' + re.sub('[^A-Za-z0-9]', '-', cwd) + '/' + sid + '.jsonl'))
     seen.add(sid)
+def environ_marked(pid):
+    try:
+        with open('/proc/%d/environ' % pid, 'rb') as f: return b'\0CROSSAGENT_CLIENT=1\0' in b'\0' + f.read()
+    except OSError: return False
+wanted = set(e['tmux'] for e in running if e.get('tmux'))
+if wanted:
+    clients = {}
+    try:
+        out = subprocess.run(['tmux', 'list-clients', '-F', '#{client_pid}\t#{session_name}\t#{client_tty}'], capture_output=True, text=True, timeout=3).stdout
+    except Exception: out = ''
+    for l in out.splitlines():
+        a = l.split('\t')
+        if len(a) < 2 or not a[0].isdigit() or a[1] not in wanted: continue
+        cp = int(a[0]); st = stat(cp)
+        if st is None: continue
+        chain = []; p = st[1]
+        while p > 1 and len(chain) < 32:
+            q = stat(p)
+            if q is None: break
+            chain.append(q[0]); p = q[1]
+        clients.setdefault(a[1], []).append({'chain': chain, 'ca': environ_marked(cp)})
+    for e in running:
+        if e.get('tmux') in clients: e['clients'] = clients[e['tmux']]
 recent = None
 if want_recent:
     recent = []; cut = time.time() - days * 86400

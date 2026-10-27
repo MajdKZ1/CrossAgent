@@ -22,13 +22,24 @@ final class SessionsDiscoveryTests: XCTestCase {
     }
 
     /// A fake process table: this test process in a Ghostty tab.
-    private func scanner(lstart: String = "Mon Oct 26 21:46:58 2026") -> LocalSessionScanner {
+    private func scanner(lstart: String = "Mon Oct 26 21:46:58 2026",
+                         clients: [(pid: Int32, session: String)] = []) -> LocalSessionScanner {
         let me = getpid()
         return LocalSessionScanner(root: root.path, processes: {
             [me: ProcInfo(pid: me, ppid: 70001, tty: "ttys009", lstart: lstart, comm: "claude"),
              70001: ProcInfo(pid: 70001, ppid: 70002, tty: "ttys009", lstart: lstart, comm: "-/bin/zsh"),
-             70002: ProcInfo(pid: 70002, ppid: 1, tty: nil, lstart: lstart, comm: "/Applications/Ghostty.app/Contents/MacOS/ghostty")]
-        }, tmuxPanes: { [:] })
+             70002: ProcInfo(pid: 70002, ppid: 1, tty: nil, lstart: lstart, comm: "/Applications/Ghostty.app/Contents/MacOS/ghostty"),
+             // tmux clients: one in Ghostty, one in Terminal, one CrossAgent pane, one over ssh.
+             71001: ProcInfo(pid: 71001, ppid: 70001, tty: "ttys009", lstart: lstart, comm: "tmux"),
+             71002: ProcInfo(pid: 71002, ppid: 71012, tty: "ttys010", lstart: lstart, comm: "tmux"),
+             71012: ProcInfo(pid: 71012, ppid: 71022, tty: "ttys010", lstart: lstart, comm: "-zsh"),
+             71022: ProcInfo(pid: 71022, ppid: 1, tty: nil, lstart: lstart, comm: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"),
+             71003: ProcInfo(pid: 71003, ppid: 71013, tty: "ttys011", lstart: lstart, comm: "tmux"),
+             71013: ProcInfo(pid: 71013, ppid: 1, tty: nil, lstart: lstart, comm: "/Applications/CrossAgent.app/Contents/MacOS/CrossAgent"),
+             71004: ProcInfo(pid: 71004, ppid: 71014, tty: "ttys012", lstart: lstart, comm: "tmux"),
+             71014: ProcInfo(pid: 71014, ppid: 71024, tty: "ttys012", lstart: lstart, comm: "-zsh"),
+             71024: ProcInfo(pid: 71024, ppid: 1, tty: nil, lstart: lstart, comm: "sshd-session")]
+        }, tmuxPanes: { [:] }, tmuxClients: { clients })
     }
 
     func testLocalScanner() throws {
@@ -83,6 +94,54 @@ final class SessionsDiscoveryTests: XCTestCase {
         let s = ClaudeSession.make(hostId: "mac", raw: r)
         XCTAssertEqual(s.launcher, .crossAgent)
         XCTAssertEqual(s.openMode, .attach(tmux: "ca-proj-mac-orch"))
+    }
+
+    // MARK: Viewers
+
+    func testViewersFromTmuxClients() throws {
+        try writeSession(pid: getpid(), SessionsFixtures.background, status: "idle", extra: #","tmux":"ca-ca-view-mac-1:@0.%0""#)
+        let clients: [(pid: Int32, session: String)] = [(71001, "ca-ca-view-mac-1"), (71002, "ca-ca-view-mac-1"),
+                                                        (71003, "ca-ca-view-mac-1"), (71004, "other"), (71005, "ca-ca-view-mac-1")]
+        let r = try XCTUnwrap(scanner(clients: clients).running().first)
+        XCTAssertEqual(r.clients?.count, 4, "only this session's clients")
+        let s = ClaudeSession.make(hostId: "mac", raw: r)
+        XCTAssertEqual(s.viewers, [.ghostty, .terminal, .other], "CrossAgent's own client left out, unknown pid is other")
+        XCTAssertEqual(SessionLauncher.alsoOpen(s.viewers), "Also open in Ghostty, Terminal and a terminal")
+    }
+
+    func testNoClientsNoViewers() throws {
+        try writeSession(pid: getpid(), SessionsFixtures.background, status: "idle", extra: #","tmux":"ca-ca-view-mac-1:@0.%0""#)
+        let r = try XCTUnwrap(scanner(clients: [(71003, "ca-ca-view-mac-1")]).running().first)
+        XCTAssertEqual(ClaudeSession.make(hostId: "mac", raw: r).viewers, [])
+        // Not in tmux: clients are never looked up.
+        try writeSession(pid: getpid(), SessionsFixtures.background, status: "idle")
+        XCTAssertNil(try XCTUnwrap(scanner(clients: [(71001, "x")]).running().first).clients)
+    }
+
+    func testViewerClassification() {
+        let v = LauncherClassifier.viewers([
+            RawClient(chain: ["bash", "sshd-session", "sshd"], ca: true),          // CrossAgent over ssh
+            RawClient(chain: ["bash", "sshd-session", "sshd"], ca: false),         // someone's ssh login
+            RawClient(chain: ["zsh", "sshd: pc@pts/3", "sshd"]),
+            RawClient(chain: ["-zsh", "login", "/Applications/Ghostty.app/Contents/MacOS/ghostty"]),
+        ])
+        XCTAssertEqual(v, [.ssh, .ghostty])
+        XCTAssertNil(SessionLauncher.alsoOpen([]))
+        XCTAssertEqual(SessionLauncher.alsoOpen([.ghostty]), "Also open in Ghostty")
+        XCTAssertEqual(SessionLauncher.alsoOpen([.ghostty, .ssh]), "Also open in Ghostty and ssh")
+    }
+
+    func testParseClients() {
+        let out = "123\tca-x-mac-1\t/dev/ttys004\nbad line\n456\tmy session\t/dev/pts/2\n"
+        let c = LocalSessionScanner.parseClients(out)
+        XCTAssertEqual(c.map(\.pid), [123, 456])
+        XCTAssertEqual(c.map(\.session), ["ca-x-mac-1", "my session"])
+    }
+
+    func testRemoteScanDecodesClients() throws {
+        let json = #"{"running":[{"sid":"a","path":"/p","pid":5,"tmux":"t","clients":[{"chain":["bash","sshd"],"ca":true},{"chain":["bash","sshd"],"ca":false}]}]}"#
+        let scan = try JSONDecoder().decode(RemoteScan.self, from: Data(json.utf8))
+        XCTAssertEqual(ClaudeSession.make(hostId: "pc", raw: scan.running[0]).viewers, [.ssh])
     }
 
     /// Both hosts through `SessionDiscovery`; the "PC" runs the real discovery script

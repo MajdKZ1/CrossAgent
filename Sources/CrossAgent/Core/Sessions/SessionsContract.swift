@@ -42,6 +42,14 @@ enum SessionLauncher: String, Codable, Hashable {
         case .ended: "ended"
         }
     }
+
+    /// "Also open in Ghostty", "Also open in Ghostty and ssh". Nil for none.
+    static func alsoOpen(_ viewers: [SessionLauncher]) -> String? {
+        let names = viewers.map(\.label)
+        guard let last = names.last else { return nil }
+        let list = names.count == 1 ? last : names.dropLast().joined(separator: ", ") + " and " + last
+        return "Also open in " + list
+    }
 }
 
 enum ClaudeSessionStatus: String, Codable, Hashable {
@@ -75,6 +83,9 @@ struct ClaudeSession: Identifiable, Hashable {
     /// Last transcript write (or process status update).
     var lastActivity: Date
     var subagentCount: Int
+    /// Other places attached to its tmux session right now (Ghostty, an ssh login...),
+    /// CrossAgent's own clients left out. Same session, same process, no conflict.
+    var viewers: [SessionLauncher] = []
 
     var id: String { "\(hostId):\(sessionId)" }
     var isRunning: Bool { pid != nil }

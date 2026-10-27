@@ -133,6 +133,18 @@ enum LauncherClassifier {
         }
         return .other
     }
+
+    /// Where else a tmux session is open, from its clients: one launcher each, deduped,
+    /// in order. CrossAgent's own clients are left out, by their CROSSAGENT_CLIENT mark
+    /// (the PC) or a CrossAgent ancestor (the Mac).
+    static func viewers(_ clients: [RawClient]) -> [SessionLauncher] {
+        var out: [SessionLauncher] = []
+        for c in clients where c.ca != true {
+            let l = classify(chain: c.chain, tmuxSession: nil)
+            if l != .crossAgent, l != .ended, !out.contains(l) { out.append(l) }
+        }
+        return out
+    }
 }
 
 /// <sessionId>/subagents/agent-<agentId>.meta.json. Background and foreground agents

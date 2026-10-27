@@ -23,6 +23,15 @@ struct RawSession: Codable, Equatable {
     /// Only when the scan (re)read the head.
     var head: TranscriptHead?
     var headFull: Bool?
+    /// Clients attached to its tmux session.
+    var clients: [RawClient]?
+}
+
+/// A tmux client attached to a session: its ancestors' command names, nearest first,
+/// and whether it's one of CrossAgent's (CROSSAGENT_CLIENT=1 in its environment).
+struct RawClient: Codable, Equatable {
+    var chain: [String]
+    var ca: Bool?
 }
 
 /// The PC discovery script's output.
@@ -95,7 +104,8 @@ extension ClaudeSession {
                                      derivedName: raw.nameSource == "derived" ? raw.name : nil, cwd: cwd),
             status: status,
             startedAt: (raw.started ?? head?.started).map { Date(timeIntervalSince1970: $0) } ?? mtime ?? now,
-            lastActivity: last, subagentCount: raw.subagents ?? 0)
+            lastActivity: last, subagentCount: raw.subagents ?? 0,
+            viewers: running && raw.tmux != nil ? LauncherClassifier.viewers(raw.clients ?? []) : [])
     }
 }
 
@@ -105,18 +115,24 @@ final class LocalSessionScanner: @unchecked Sendable {
     let root: String
     var processes: () -> [Int32: ProcInfo]
     var tmuxPanes: () -> [Int32: String]
+    /// (client pid, session name) for every attached tmux client.
+    var tmuxClients: () -> [(pid: Int32, session: String)]
     var isAlive: (Int32) -> Bool
     private(set) var heads = HeadCache()
     /// Launcher facts per pid and procStart, so `ps` only runs when a new session shows up.
     private var procCache: [String: (ok: Bool, tty: String?, chain: [String], pids: [Int32])] = [:]
+    /// Ancestors per tmux client pid, same idea.
+    private var clientCache: [Int32: [String]] = [:]
 
     init(root: String,
          processes: @escaping () -> [Int32: ProcInfo] = LocalSessionScanner.psTable,
          tmuxPanes: @escaping () -> [Int32: String] = LocalSessionScanner.localTmuxPanes,
+         tmuxClients: @escaping () -> [(pid: Int32, session: String)] = LocalSessionScanner.localTmuxClients,
          isAlive: @escaping (Int32) -> Bool = { kill($0, 0) == 0 || errno == EPERM }) {
         self.root = root
         self.processes = processes
         self.tmuxPanes = tmuxPanes
+        self.tmuxClients = tmuxClients
         self.isAlive = isAlive
     }
 
@@ -158,7 +174,26 @@ final class LocalSessionScanner: @unchecked Sendable {
             out.append(raw)
         }
         procCache = procCache.filter { live.contains($0.key) }
+        attachClients(&out, table: &table)
         return out
+    }
+
+    /// Fills `clients` for sessions in tmux: one `tmux list-clients` per poll, `ps` only
+    /// for a client pid not seen before. On the Mac a CrossAgent client is told apart by
+    /// its ancestors (the app itself), so `ca` stays nil here.
+    private func attachClients(_ out: inout [RawSession], table: inout [Int32: ProcInfo]?) {
+        let wanted = Set(out.compactMap(\.tmux))
+        guard !wanted.isEmpty else { clientCache = [:]; return }
+        let clients = tmuxClients().filter { wanted.contains($0.session) }
+        for c in clients where clientCache[c.pid] == nil {
+            if table == nil { table = processes() }
+            clientCache[c.pid] = ProcInfo.ancestors(of: c.pid, in: table!)
+        }
+        let pids = Set(clients.map(\.pid))
+        clientCache = clientCache.filter { pids.contains($0.key) }
+        var bySession: [String: [RawClient]] = [:]
+        for c in clients { bySession[c.session, default: []].append(RawClient(chain: clientCache[c.pid] ?? [])) }
+        for i in out.indices { if let t = out[i].tmux { out[i].clients = bySession[t] } }
     }
 
     /// Transcripts written within `days`, minus the running ones.
@@ -208,6 +243,34 @@ final class LocalSessionScanner: @unchecked Sendable {
                                             args: ["TZ=UTC", "LC_ALL=C", "/bin/ps", "-axo", "pid=,ppid=,tty=,lstart=,comm="]),
                                timeout: 5)
         return ProcInfo.parsePS(r.stdout)
+    }
+
+    /// tmux run directly, no login shell: this runs every poll.
+    static let tmuxPath: String? = {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", home + "/.local/bin/tmux", "/usr/bin/tmux"]
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }()
+
+    static func localTmuxClients() -> [(pid: Int32, session: String)] {
+        let format = "#{client_pid}\t#{session_name}\t#{client_tty}"
+        let cmd: SpawnCommand
+        if let tmux = tmuxPath {
+            cmd = SpawnCommand(executable: tmux, args: ["list-clients", "-F", format])
+        } else {
+            let host = Host(id: "mac", name: "", type: .local, target: nil, accent: "")
+            cmd = CommandBuilder.oneShot(host: host, script: "tmux list-clients -F " + CommandBuilder.shellQuote(format))
+        }
+        return parseClients(Runner.runSync(cmd, timeout: 5).stdout)
+    }
+
+    /// `tmux list-clients -F '#{client_pid}\t#{session_name}\t#{client_tty}'` lines.
+    static func parseClients(_ out: String) -> [(pid: Int32, session: String)] {
+        out.split(whereSeparator: \.isNewline).compactMap { line in
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard parts.count >= 2, let pid = Int32(parts[0]), !parts[1].isEmpty else { return nil }
+            return (pid, String(parts[1]))
+        }
     }
 
     static func localTmuxPanes() -> [Int32: String] {
@@ -387,6 +450,7 @@ final class SessionDiscovery: ObservableObject {
             s.tmuxSession = nil
             s.launcher = .ended
             s.status = .ended
+            s.viewers = []
             ended.append(s)
         }
         running[hostId] = newRunning
