@@ -2,9 +2,10 @@ import AppKit
 import SwiftUI
 
 /// The one row at the top of the window: traffic lights, the project menu, the
-/// tabs, then agent chips, sync, activity and the new button on the right. The tabs
-/// take whatever the fixed items leave. When those would leave less than two tabs'
-/// worth, the agent chips go first, so nothing ever clips.
+/// tabs, then agent chips, the portal, the Super-Max readout and the new button on the
+/// right. The tabs take whatever the fixed items leave. When those would leave less than
+/// two tabs' worth, the agent chips go first, so nothing ever clips. Narrow windows also
+/// drop the portal's label.
 struct TopBar: View {
     @EnvironmentObject private var app: AppState
     @State private var titleWidth: CGFloat = 0
@@ -15,6 +16,8 @@ struct TopBar: View {
 
     private static let spacing: CGFloat = 8
     private static let trailingPad: CGFloat = 10
+    /// Below this window width the portal shows its ring only.
+    private static let compactWidth: CGFloat = 1100
 
     var body: some View {
         GeometryReader { geo in
@@ -33,9 +36,9 @@ struct TopBar: View {
                         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { chipsWidth = $0 }
                 }
                 HStack(spacing: Self.spacing) {
-                    SyncIndicator(sync: app.sync)
+                    SyncIndicator(sync: app.sync, compact: geo.size.width < Self.compactWidth)
                         .fixedSize()
-                    ActivityReadout()
+                    SuperMaxReadout()
                         .fixedSize()
                     if app.mode == .panes && !app.panes.isEmpty {
                         Button { app.toggleBroadcast() } label: { Image(systemName: "dot.radiowaves.left.and.right") }
@@ -420,7 +423,7 @@ struct ProjectSwitcher: View {
         .frame(width: 290)
     }
 
-    /// The front project's folders: the Mac one (click to reveal) and the synced PC copy.
+    /// The front project's folders: the Mac one (click to reveal) and the PC copy through the portal.
     private func here(_ p: Project) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Button { NSWorkspace.shared.activateFileViewerSelecting([p.url]) } label: {
@@ -438,7 +441,7 @@ struct ProjectSwitcher: View {
                     .foregroundStyle(Palette.accent(pc).opacity(0.85))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .help("Synced to ~/\(p.pcRelativePath) on \(pc.name)")
+                    .help("Mirrored to ~/\(p.pcRelativePath) on \(pc.name) through Crossover Portal")
             }
         }
         .padding(.horizontal, 8)
