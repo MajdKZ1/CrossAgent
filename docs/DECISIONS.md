@@ -312,3 +312,22 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   - **Narrow windows:** below 1100 pt the indicator drops its "Portal" label and keeps the ring.
   - **Top bar readout:** the Super-Max readout replaces the old activity readout.
   - **What stayed:** the app still calls `ca sync start`, the permanent alias, so older installs of the skill keep working. The `synced` theme token and the automation keys keep their names.
+- Sessions UI (M20):
+  - **Format facts the parser found:**
+    - On macOS, `procStart` is `ps lstart` in UTC. On Linux it's the starttime field of `/proc/<pid>/stat`.
+    - The session file has a `tmux` field, so the tmux session comes straight from it, with `list-panes` only as a fallback.
+    - The project folder name turns every character that isn't a letter or digit into `-`.
+  - **Subagents:** there are three flavours: foreground, background (a later task notification) and in-process teammates (idle notifications, no meta `toolUseId`). Nodes are keyed by the Agent call's tool use id.
+  - **Status:** status values are idle, busy and waiting. Waiting comes with `waitingFor`, either "permission prompt" or "input needed", which drives "waiting for input". The file is deleted on a clean exit, so no file means ended.
+  - **Titles:** the order is a name the user set, then Claude's own ai-title, then the first prompt, then the folder based name.
+  - **Live view layout:** a Conversation / Agents toggle rather than a split. Clicking a subagent node narrows the conversation to it.
+  - **When it polls:** the Live view and discovery only run while visible. The Orchestrator tab keeps discovery going while it's up, so its session picker has a list.
+  - **Continue here:**
+    - It's off while discovery or the feed's own process check says the original is alive, and unknown counts as alive.
+    - Right before spawning it refreshes discovery again.
+    - "I've closed it" asks once, then goes ahead. The original process is never signalled.
+    - The new tmux session is `ca-<slug>-<host>-resume-<6 chars of the id>`, started with `tmux new -A`, so a second click reattaches. It replaces the Live view tab.
+  - **Any tmux session can be attached:** names without `:`, `.` or control characters, up to 128 characters, targeted exactly with a quoted `=name`.
+  - **Project filter:** it matches the resolved path too, since macOS reports `/tmp/x` as `/private/tmp/x`. Mac and PC folders with the same home relative path share a group.
+  - **Station strip:** it now lists other Claude sessions in this project, the ones CrossAgent didn't start, and they can be clicked.
+  - **CPU:** release build, whole app. A Live view on an active session uses about 0.7% of a core, the Sessions tab about 1%.
