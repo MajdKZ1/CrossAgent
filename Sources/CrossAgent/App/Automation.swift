@@ -8,7 +8,7 @@ final class Automation {
     /// CROSSAGENT_AUTOMATION_ID gives an instance its own channel, so parallel test runs don't collide.
     static let notification = Notification.Name("dev.crossagent.automation"
         + (ProcessInfo.processInfo.environment["CROSSAGENT_AUTOMATION_ID"].map { ".\($0)" } ?? ""))
-    private let app: AppState
+    let app: AppState
     private var observer: NSObjectProtocol?
 
     static var enabled: Bool {
@@ -36,6 +36,7 @@ final class Automation {
             return app.panes.indices.contains(i) ? app.panes[i] : nil
         }
         if handlePointer(name, cmd) { return }
+        if handleTerminal(name, cmd) { return }
         switch name {
         case "new" where cmd["check"] as? Bool == true:
             // Same path as the new pane popover, with the folder check on ssh hosts.
@@ -64,14 +65,37 @@ final class Automation {
                 app.relay(to: app.panes[to].id, from: pane(index)?.id)
             }
         case "resize":
-            if let w = cmd["w"] as? Double, let h = cmd["h"] as? Double, let win = NSApp.windows.first(where: { $0.isVisible }) {
+            if let w = cmd["w"] as? Double, let h = cmd["h"] as? Double, let win = app.window {
                 var f = win.frame
                 f.size = NSSize(width: w, height: h)
                 win.setFrame(f, display: true, animate: false)
             }
         case "open": if let path = cmd["path"] as? String { app.switchProject(URL(fileURLWithPath: path, isDirectory: true)) }
         case "closeProject": app.leaveProject()
-        case "mode": if let m = (cmd["mode"] as? String).flatMap(AppMode.init(rawValue:)) { app.mode = m }
+        case "mode": if let m = (cmd["mode"] as? String).flatMap(AppMode.init(rawValue:)) { app.toggleModeOn(m) }
+        case "tab":
+            if let id = cmd["id"] as? String { app.select(id) } else if let index { app.select(index: index) }
+        case "closeTab":
+            if let id = cmd["id"] as? String { app.closeTab(id) } else if let index, app.tabs.indices.contains(index) {
+                app.closeTab(app.tabs[index].id)
+            } else { app.closeTab() }
+        case "moveTab":
+            if let from = cmd["from"] as? Int, let to = cmd["to"] as? Int { app.moveTab(from: from, to: to) }
+        case "openAgent":
+            if let node = cmd["node"] as? String {
+                app.openAgent(.node(node))
+            } else if let host = cmd["host"] as? String, let session = cmd["session"] as? String {
+                app.openAgent(.session(host: host, name: session))
+            }
+        case "openTab":
+            // {"cmd":"openTab","kind":"station"} for panes, station, orchestrator, activity.
+            switch cmd["kind"] as? String {
+            case "panes": app.open(.panes)
+            case "station": app.open(.station)
+            case "orchestrator": app.open(.orchestrator)
+            case "activity": app.open(.activity)
+            default: break
+            }
         case "folderPrompt":
             switch cmd["action"] as? String {
             case "sync": app.promptStartSync()
@@ -227,9 +251,32 @@ final class Automation {
         let project: Any = app.project.map { p in
             ["name": p.name, "path": p.path, "slug": p.slug, "pcRelativePath": p.pcRelativePath]
         } ?? NSNull()
+        let tabs: [[String: Any]] = app.tabs.map { t in
+            var kind: Any = "\(t.mode.rawValue)"
+            switch t.kind {
+            case .agent(.node(let id)): kind = ["agent": ["node": id]]
+            case .agent(.session(let h, let n)): kind = ["agent": ["host": h, "session": n]]
+            case .dev(let d): kind = ["dev": d.rawValue]
+            default: break
+            }
+            var row: [String: Any] = ["id": t.id, "kind": kind, "title": app.title(of: t)]
+            if let p = app.agentTerminal(t) {
+                row["terminal"] = p.isLive ? "live" : (p.isExited ? "exited" : "connecting")
+            }
+            return row
+        }
+        var detail: Any = NSNull()
+        if case .agent(let ref)? = app.selectedTab?.kind {
+            switch ref {
+            case .node(let id): detail = id
+            case .session(let h, let n): detail = "\(h)/\(n)"
+            }
+        }
         let obj: [String: Any] = ["project": project, "mode": app.mode.rawValue, "welcome": app.showsWelcome,
-                                  "orchestrator": orchestrator, "graph": graph, "detail": app.orch?.detail ?? NSNull(),
-                                  "detailScreen": app.detailTerminal?.screenText() ?? NSNull(),
+                                  "tabs": tabs, "selectedTab": app.selectedTabID,
+                                  "openProjects": app.openProjects.map(\.path),
+                                  "orchestrator": orchestrator, "graph": graph, "detail": detail,
+                                  "detailScreen": app.selectedAgentTerminal?.screenText() ?? NSNull(),
                                   "nodePositions": app.nodePositions.mapValues { [$0.x, $0.y] },
                                   "recents": app.recentProjects.map(\.path), "folderPrompt": folderPrompt,
                                   "projectSync": app.projectSyncActive,
@@ -242,10 +289,18 @@ final class Automation {
                                       ["name": s.name ?? "", "status": s.statusWord, "color": s.health.name,
                                        "conflicts": s.conflictRoots] as [String: Any]
                                   }, "active": NSApp.isActive,
-                                  "windows": NSApp.windows.filter(\.isVisible).map { "\(type(of: $0)) key=\($0.isKeyWindow) fr=\($0.firstResponder.map { "\(type(of: $0))" } ?? "-")" }, "relayPickerOpen": app.showRelayPicker,
+                                  "windows": Self.realWindows.count,
+                                  "windowList": NSApp.windows.filter(\.isVisible).map { "\(type(of: $0)) key=\($0.isKeyWindow) fr=\($0.firstResponder.map { "\(type(of: $0))" } ?? "-")" }, "relayPickerOpen": app.showRelayPicker,
                                   "keyWindow": NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "",
                                   "firstResponder": NSApp.keyWindow?.firstResponder.map { String(describing: type(of: $0)) } ?? ""]
         return (try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys])) ?? Data()
+    }
+
+    /// Visible windows that aren't popovers, tooltips or menus. Should always be 1.
+    static var realWindows: [NSWindow] {
+        NSApp.windows.filter { w in
+            w.isVisible && w.styleMask.contains(.titled) && !String(describing: type(of: w)).contains("Popover")
+        }
     }
 
     private func write(_ data: Data, to path: String?) {
@@ -257,7 +312,7 @@ final class Automation {
     /// screen the terminal layer's background shows through), so composite it
     /// over the window color with each terminal's rect filled in the pane color.
     private func snapshot(to path: String) {
-        guard let view = NSApp.windows.first(where: { $0.isVisible })?.contentView,
+        guard let view = app.window?.contentView,
               let cached = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: cached)
         let out = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: cached.pixelsWide, pixelsHigh: cached.pixelsHigh,
@@ -273,8 +328,8 @@ final class Automation {
             pane.terminal.convert(pane.terminal.bounds, to: view).fill()
         }
         cached.draw(in: view.bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-        // The detail card's terminal sits over the canvas, so draw it again on its own background.
-        if let t = app.detailTerminal?.terminal, t.window === view.window, let rep = t.bitmapImageRepForCachingDisplay(in: t.bounds) {
+        // An agent tab's terminal sits over the hidden grid, so draw it again on its own background.
+        if let t = app.selectedAgentTerminal?.terminal, t.window === view.window, let rep = t.bitmapImageRepForCachingDisplay(in: t.bounds) {
             t.cacheDisplay(in: t.bounds, to: rep)
             var rect = t.convert(t.bounds, to: view)
             if view.isFlipped { rect.origin.y = view.bounds.height - rect.maxY }
