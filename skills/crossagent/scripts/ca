@@ -45,7 +45,7 @@ SLUG="${CA_SLUG:-$SLUG}"
 # tmux session for a task in this project: ca-<slug>-<host>-<task>
 sname() { echo "ca-$SLUG-$1-$2"; }
 
-# `ca sync start|stop <path>` works on another folder than the current one.
+# `ca portal start|stop <path>` works on another folder than the current one.
 root_from() {
   [ -d "$1" ] || die "no such folder: $1"
   set_root "$(cd "$1" && { git rev-parse --show-toplevel 2>/dev/null || pwd; })"
@@ -109,7 +109,7 @@ ensure_remote() {
   remote_ok || { say "skill missing on the PC, installing"; "$SKILL_DIR/install.sh" --pc >&2; }
 }
 
-# ---------- sync ----------
+# ---------- one-off copies (push, pull) ----------
 
 EXCLUDES=(
   --exclude=.DS_Store --exclude=node_modules --exclude=.build --exclude=DerivedData
@@ -151,7 +151,11 @@ pull() {
   done
 }
 
-# ---------- live sync (mutagen) ----------
+# ---------- Crossover Portal (live sync with mutagen) ----------
+
+# User facing name is "Crossover Portal" (or "Portal"). Internals keep the old sync names:
+# Mutagen session ca-<project>, label ca-cfg, sync_allow=/sync_ignore= in .crossagent/project,
+# and `ca sync ...` still works as an alias. Renaming any of those would orphan existing sessions.
 
 # Per machine stuff and build output never cross over. .git is skipped with --ignore-vcs.
 SYNC_IGNORES=(.build build DerivedData node_modules target dist .venv venv __pycache__ .DS_Store .crossagent/ '*.log')
@@ -161,7 +165,7 @@ SECRET_IGNORES=(.env '.env.*' '*.pem' '*.key' 'id_*')
 sess() { echo "ca-$(echo "$NAME" | tr -c 'A-Za-z0-9\n' '-' | sed 's/--*/-/g; s/^-//; s/-$//')"; }
 have_mutagen() { command -v mutagen >/dev/null 2>&1; }
 need_mutagen() {
-  [ "$HERE" = mac ] || die "live sync is driven from the Mac"
+  [ "$HERE" = mac ] || die "the Crossover Portal is driven from the Mac"
   have_mutagen || die "mutagen isn't installed: brew install mutagen-io/mutagen/mutagen"
 }
 sync_exists() { mutagen sync list "$(sess)" >/dev/null 2>&1; }
@@ -202,18 +206,18 @@ sync_start() {
   local force="" s pcd hash cur r
   [ "${1:-}" = --force ] && { force=1; shift; }
   [ $# -eq 0 ] || root_from "$1"
-  [ "$ROOT" != "$HOME" ] || die "won't sync your whole home folder, run this in a project"
+  [ "$ROOT" != "$HOME" ] || die "won't open a Portal on your whole home folder, run this in a project"
   s="$(sess)"; pcd="$(pc_dir)"
   build_sync_args
   hash="$(printf '%s\n' "${SARGS[@]}" "$ROOT" "$pcd" | shasum | cut -c1-12)"
   if cur="$(mutagen sync list "$s" --template '{{range .}}{{index .Labels "ca-cfg"}}{{end}}' 2>/dev/null)"; then
     if [ "$cur" = "$hash" ]; then
       mutagen sync resume "$s" >/dev/null 2>&1 || true
-      say "$s already set up"
+      say "Portal $s already open"
       sync_flush
       return
     fi
-    say "sync rules or paths changed, recreating $s (files stay where they are)"
+    say "Portal rules or paths changed, recreating $s (files stay where they are)"
     mutagen sync terminate "$s" >/dev/null
   fi
   ensure_remote
@@ -222,11 +226,11 @@ sync_start() {
   # shellcheck disable=SC2086
   r="$(ssh $SSH_OPTS pc "cd && if [ -n \"\$(ls -A $(q "$pcd") 2>/dev/null)\" ] && ! grep -qx $(q "name=$NAME") $(q "$pcd/.crossagent/project") 2>/dev/null; then echo foreign; else mkdir -p $(q "$pcd/.crossagent") && printf 'name=%s\n' $(q "$NAME") > $(q "$pcd/.crossagent/project") && echo ok; fi")"
   if [ "$r" = foreign ] && [ -z "$force" ]; then
-    die "~/$pcd on the PC already has files that aren't this project. Move them, set pc_dir= in .crossagent/project, or run 'ca sync start --force' to merge (conflicts get flagged, nothing is overwritten)"
+    die "~/$pcd on the PC already has files that aren't this project. Move them, set pc_dir= in .crossagent/project, or run 'ca portal start --force' to merge (conflicts get flagged, nothing is overwritten)"
   fi
   [ "$r" = ok ] || [ -n "$force" ] || die "couldn't prepare ~/$pcd on the PC"
   mutagen sync create --name="$s" --label="ca-cfg=$hash" "${SARGS[@]}" "$ROOT" "pc:~/$pcd" >/dev/null
-  say "syncing $(echo "$ROOT" | sed "s|^$HOME|~|") <-> pc:~/$pcd as $s"
+  say "Crossover Portal open: $(echo "$ROOT" | sed "s|^$HOME|~|") <-> pc:~/$pcd ($s)"
   sync_flush
 }
 
@@ -234,14 +238,14 @@ sync_start() {
 sync_flush() {
   need_mutagen
   local s row word; s="$(sess)"
-  sync_exists || die "no sync for $NAME, run: ca sync start"
+  sync_exists || die "no Portal for $NAME, run: ca portal start"
   row="$(sync_rows "$s")"
   [ "$(echo "$row" | cut -f3)" = true ] && { sync_note "$s" paused; die "$s is paused, resume it with: mutagen sync resume $s"; }
-  mutagen sync flush "$s" >/dev/null 2>&1 || { sync_note "$s" "flush failed"; die "couldn't flush $s, is the PC reachable? (ca sync status)"; }
+  mutagen sync flush "$s" >/dev/null 2>&1 || { sync_note "$s" "flush failed"; die "couldn't flush $s, is the PC reachable? (ca portal status)"; }
   row="$(sync_rows "$s")"; word="$(sync_word "$row")"
   sync_note "$s" "$word"
   case "$word" in
-    watching*) say "synced $NAME"; sync_problems "$s" >&2 ;;
+    watching*) say "Portal flushed, $NAME is in sync"; sync_problems "$s" >&2 ;;
     conflicts*) say "$s has $word. Stop and sort them out first:"; sync_conflicts >&2; return 3 ;;
     *) die "$s: $word" ;;
   esac
@@ -260,7 +264,7 @@ sync_status() {
   need_mutagen
   local rows row
   rows="$(sync_rows)"
-  [ -n "$rows" ] || { echo "no ca-* sync sessions"; return 0; }
+  [ -n "$rows" ] || { echo "no Crossover Portals open"; return 0; }
   while IFS= read -r row; do
     printf '%-26s %-22s %s <-> %s\n' "$(echo "$row" | cut -f1)" "$(sync_word "$row")" \
       "$(echo "$row" | cut -f6 | sed "s|^$HOME|~|")" "$(echo "$row" | cut -f7)"
@@ -286,8 +290,8 @@ sync_conflicts() {
   sync_exists && spec=("$(sess)")
   hint() {
     [ -n "$root" ] || return 0
-    echo "  keep the Mac version: ssh pc 'rm -r ~/$pcp/$root', then ca sync flush"
-    echo "  keep the PC version:  rm -r '$mac/$root', then ca sync flush"
+    echo "  keep the Mac version: ssh pc 'rm -r ~/$pcp/$root', then ca portal flush"
+    echo "  keep the PC version:  rm -r '$mac/$root', then ca portal flush"
     root=""
   }
   while IFS=$'\t' read -r tag a b c d; do
@@ -331,9 +335,9 @@ sync_stop() {
   if sync_exists; then
     mutagen sync terminate "$s" >/dev/null
     sync_note "$s" stopped
-    echo "stopped $s, files stay on both machines"
+    echo "closed Portal $s, files stay on both machines"
   else
-    echo "$s wasn't running"
+    echo "Portal $s wasn't open"
   fi
 }
 
@@ -378,7 +382,7 @@ probe() {
 
 block() { [ -f "$MAP" ] && awk -v s="<!-- ca:$1 -->" -v e="<!-- /ca:$1 -->" '$0==s{f=1;next} $0==e{f=0} f' "$MAP" || true; }
 
-# projects file: name, mac path, pc path, sync session, last sync status (tab separated)
+# projects file: name, mac path, pc path, portal session, last portal status (tab separated)
 register_project() {
   mkdir -p "$CONF"
   local f="$CONF/projects" macd="-" pcd old
@@ -393,7 +397,7 @@ register_project() {
 }
 
 projects_table() {
-  echo "| project | mac | pc | sync session | last sync status |"
+  echo "| project | mac | pc | portal session | last portal status |"
   echo "|---|---|---|---|---|"
   awk -F'\t' '{print "| "$1" | "$2" | "$3" | "($4==""?"-":$4)" | "($5==""?"-":$5)" |"}' "$CONF/projects" 2>/dev/null || true
 }
@@ -403,7 +407,7 @@ copy_map_to_pc() {
   ssh $SSH_OPTS -o ConnectTimeout=10 pc 'mkdir -p ~/.config/crossagent && cat > ~/.config/crossagent/system-map.md' < "$MAP" 2>/dev/null || true
 }
 
-# Record a sync status in the map, only when it changed, so flushes stay cheap.
+# Record a Portal status in the map, only when it changed, so flushes stay cheap.
 sync_note() {
   local cur
   cur="$(awk -F'\t' -v n="$NAME" '$1==n{print $5}' "$CONF/projects" 2>/dev/null | sed 's/ (since .*//')"
@@ -437,7 +441,7 @@ build_map() {
     echo "- pc (nicknames: pc, ssh, overseas, my pc, on my pc): reached from the Mac with \`ssh pc\`. Use ssh options \`$SSH_OPTS\`. Login shell needed for PATH (\`ssh pc 'exec \$SHELL -lc \"...\"'\`)."
     echo "- The PC can't reach the Mac. Run from the PC, ca works PC only."
     echo "- tmux sessions are named ca-<project>-<host>-<task> and show up in the CrossAgent viewing station."
-    echo "- Projects are mirrored live with Mutagen (session ca-<project>, two-way-safe, same path under home on both). Git lives on the Mac only."
+    echo "- Projects are mirrored live through the Crossover Portal (Mutagen session ca-<project>, two-way-safe, same path under home on both). Git lives on the Mac only."
     echo
     echo "<!-- ca:mac -->"
     echo "## mac"
@@ -473,11 +477,11 @@ project_map() {
 # ---------- init ----------
 
 init() {
-  # Where the work goes: both (default, live sync), mac only (no sync), pc only (one-off push, no live sync).
+  # Where the work goes: both (default, Portal), mac only (no Portal), pc only (one-off push, no Portal).
   local mode=both
   if [ $# -gt 0 ]; then mode="$(resolve "$*")" || die "unknown machine '$*' (mac, pc or both)"; fi
   mkdir -p "$ROOT/.crossagent"
-  [ -f "$PROJ_CONF" ] || printf 'name=%s\n# pc_dir=other/path/under/home\n# sync_allow=.env.shared,*.pem   (opt in to syncing these, comma separated)\n# sync_ignore=data,*.sqlite     (extra ignores)\n' "$NAME" > "$PROJ_CONF"
+  [ -f "$PROJ_CONF" ] || printf 'name=%s\n# pc_dir=other/path/under/home\n# sync_allow=.env.shared,*.pem   (opt in to sending these through the Portal, comma separated)\n# sync_ignore=data,*.sqlite     (extra Portal ignores)\n' "$NAME" > "$PROJ_CONF"
 
   if [ ! -f "$ROOT/CROSSAGENT.md" ]; then
     cp "$SKILL_DIR/templates/CROSSAGENT.md" "$ROOT/CROSSAGENT.md"; say "added CROSSAGENT.md"
@@ -507,11 +511,11 @@ init() {
   [ "$HERE" = mac ] && [ "$mode" != mac ] && ensure_remote
   build_map
   project_map
-  if [ "$HERE" != mac ]; then say "on the PC: PC only mode, nothing to sync"
-  elif [ "$mode" = mac ]; then say "Mac only: no sync"
+  if [ "$HERE" != mac ]; then say "on the PC: PC only mode, no Portal"
+  elif [ "$mode" = mac ]; then say "Mac only: no Portal"
   elif [ "$mode" = pc ]; then push
   elif have_mutagen; then sync_start
-  else say "mutagen isn't installed, falling back to a one-off push (brew install mutagen-io/mutagen/mutagen)"; push; fi
+  else say "mutagen isn't installed so no Portal, falling back to a one-off push (brew install mutagen-io/mutagen/mutagen)"; push; fi
   echo "ready: $NAME  mac=$( [ "$HERE" = mac ] && echo "$ROOT" | sed "s|^$HOME|~|" || echo -)  pc=$( [ "$mode" = mac ] && echo - || echo "~/$(pc_dir)")"
 }
 
@@ -557,7 +561,7 @@ run() {
     --) shift; [ $# -ge 1 ] || die "nothing to run after --"; mode=cmd ;;
     *) die "say what to run: --claude \"prompt\" or -- command" ;;
   esac
-  # Hand off only fresh files: flush live sync (or push once without it).
+  # Hand off only fresh files: flush the Portal (or push once without it).
   if sync_active; then sync_flush; elif [ "$host" != "$HERE" ]; then push; fi
   if [ "$host" != "$HERE" ]; then
     if [ "$mode" = claude ]; then on_pc run pc "$task" --claude "$prompt"; else on_pc run pc "$task" -- "$@"; fi
@@ -739,18 +743,20 @@ usage() {
   cat <<'EOF'
 ca: split work across the Mac and the PC
 
-  ca init [mac|pc]              set up this project (CROSSAGENT.md, CLAUDE.md pointer, map) and start
-                                live sync. With mac: no sync. With pc: one-off push, no live sync.
+  ca init [mac|pc]              set up this project (CROSSAGENT.md, CLAUDE.md pointer, map) and open
+                                the Crossover Portal. With mac: no Portal. With pc: one-off push, no Portal.
   ca map [--refresh]            print the system map, or re-probe both machines first
   ca host <word>                nickname -> mac | pc | both  (local, this mac -> mac; pc, ssh, overseas -> pc)
-  ca sync start [--force] [path]  live two-way-safe sync to the same path on the PC (Mutagen session ca-<project>)
-  ca sync status                one line per ca-* sync session
-  ca sync flush                 sync now and wait, fails on conflicts (run and wait do this for you)
-  ca sync conflicts             list conflicting files with both sides' info, resolves nothing
-  ca sync stop [path]           end the sync session, files stay on both machines
-  ca sync push [--delete]       one-off rsync Mac -> PC, for when live sync is off
-  ca sync pull [paths...]       copy paths back from the PC (no paths: PC logs and results into .crossagent/pc/)
-  ca run <host> <task> -- cmd   run a command in tmux session ca-<project>-<host>-<task> (flushes sync first)
+  ca portal start [--force] [path]
+                                open the Crossover Portal: live two-way-safe sync to the same path
+                                on the PC (Mutagen session ca-<project>)
+  ca portal status              one line per open Portal
+  ca portal flush               sync now and wait, fails on conflicts (run and wait do this for you)
+  ca portal conflicts           list conflicting files with both sides' info, resolves nothing
+  ca portal stop [path]         close the Portal, files stay on both machines
+  ca portal push [--delete]     one-off rsync Mac -> PC, for when the Portal is closed
+  ca portal pull [paths...]     copy paths back from the PC (no paths: PC logs and results into .crossagent/pc/)
+  ca run <host> <task> -- cmd   run a command in tmux session ca-<project>-<host>-<task> (flushes the Portal first)
   ca run <host> <task> --claude "prompt"
                                 start an interactive Claude Code worker (acceptEdits) in that session
   ca status                     list ca-* sessions on both machines (old ca-<host>-<task> ones show as legacy)
@@ -763,6 +769,7 @@ Logs: .crossagent/logs/<task>.log, results: .crossagent/results/<task>.md, on th
 <project> is the folder name as a slug (lowercase a-z 0-9 and -, max 16). Task names: up to 40 chars.
 Workers log WorkerStart/WorkerStop events to ~/.crossagent/events/<session>.jsonl.
 A single command string after -- runs through bash -c, so pipes and && work.
+`ca sync ...` is the old name for `ca portal ...` and still works the same.
 EOF
 }
 
@@ -775,7 +782,7 @@ case "$cmd" in
     fi
     cat "$MAP" ;;
   host) h="$(resolve "$*")" || die "unknown nickname '$*'"; echo "$h" ;;
-  sync)
+  portal|sync)
     case "${1:-}" in
       start) shift; sync_start "$@" ;;
       status) sync_status ;;
@@ -784,7 +791,7 @@ case "$cmd" in
       stop) shift; sync_stop "$@" ;;
       push) shift; push "$@" ;;
       pull) shift; pull "$@" ;;
-      *) die "usage: ca sync start|status|flush|conflicts|stop|push|pull" ;;
+      *) die "usage: ca portal start|status|flush|conflicts|stop|push|pull" ;;
     esac ;;
   run) run "$@" ;;
   status) status ;;
