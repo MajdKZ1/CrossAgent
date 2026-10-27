@@ -5,8 +5,9 @@ description: Split or run work across the user's Mac and their Linux PC (ssh pc)
 
 # crossagent
 
-Runs pieces of work on the Mac and the Linux PC in tmux sessions named `ca-<host>-<task>`,
-so the user can watch them in the CrossAgent viewing station. Everything goes through one
+Runs pieces of work on the Mac and the Linux PC in tmux sessions named
+`ca-<project>-<host>-<task>` (`<project>` is the folder name as a short slug, `ca` works it
+out), so the user can watch them in the CrossAgent viewing station. Everything goes through one
 script. Always call it by this exact path, never through a shell variable (the permission
 allowlist matches the literal path):
 
@@ -49,4 +50,8 @@ Below, `ca` is short for that path.
   waiting for input in the viewing station, tell the user.
 - If this runs on the PC (Linux), it works PC only, because the PC can't reach the Mac.
   Say so.
-- `ca help` lists everything. `ca status` shows all `ca-*` sessions on both machines.
+- Task names: up to 40 chars of letters, digits, `-` and `_`.
+- `ca help` lists everything. `ca status` shows all `ca-*` sessions on both machines,
+  old `ca-<host>-<task>` ones marked legacy.
+- Each worker logs a start and a finish event to `~/.crossagent/events/<session>.jsonl`
+  on the machine it ran on, which the CrossAgent app picks up.

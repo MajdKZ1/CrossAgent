@@ -60,8 +60,9 @@ Single machine work (Mac only or PC only) doesn't sync.
   over by themselves; review anything a PC worker changed on the Mac before committing.
   Without sync (PC only mode), `ca run pc` pushes the project first and
   `ca sync pull <paths>` brings files back.
-- Every task runs in a tmux session `ca-<host>-<task>`, which the user can watch in the
-  CrossAgent viewing station. Short task names, letters, digits, `-` and `_`.
+- Every task runs in a tmux session `ca-<project>-<host>-<task>` (project = folder name as a
+  short slug), which the user can watch in the CrossAgent viewing station. Short task names,
+  letters, digits, `-` and `_`, up to 40 chars.
 - Output goes to `.crossagent/logs/<task>.log` and a short result to
   `.crossagent/results/<task>.md` on the host that ran it. `ca wait` and `ca logs` read them back.
 - Claude workers (`--claude`) run with `--permission-mode acceptEdits`. If one stops on a
