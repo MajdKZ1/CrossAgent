@@ -18,6 +18,10 @@ final class ActivityMonitor: ObservableObject {
     private var remotes: [String: RemoteSampler] = [:]
     private var observers: [NSObjectProtocol] = []
     private var sampling = false
+    #if DEBUG
+    /// A demo run's made up machines, in place of `mac` and `remotes`.
+    private var demos: [DemoSampler] = []
+    #endif
 
     /// Reference counted. `detail` viewers (the tab) also want per session load.
     func start(hosts: [Host], detail: Bool = false) {
@@ -25,7 +29,7 @@ final class ActivityMonitor: ObservableObject {
         viewers += 1
         if detail { detailViewers += 1 }
         if observers.isEmpty { observeWindow() }
-        mac?.setWantsSessions(detailViewers > 0)
+        setWantsSessions(detailViewers > 0)
         update()
         // onAppear can run before the window reports itself visible, and a launch
         // without focus posts none of the notifications above.
@@ -37,7 +41,7 @@ final class ActivityMonitor: ObservableObject {
     func stop(detail: Bool = false) {
         viewers = max(0, viewers - 1)
         if detail { detailViewers = max(0, detailViewers - 1) }
-        mac?.setWantsSessions(detailViewers > 0)
+        setWantsSessions(detailViewers > 0)
         if viewers == 0 {
             observers.forEach(NotificationCenter.default.removeObserver)
             observers = []
@@ -55,6 +59,16 @@ final class ActivityMonitor: ObservableObject {
         sampling = false
         mac?.shutdown()
         remotes.values.forEach { $0.shutdown() }
+        #if DEBUG
+        demos.forEach { $0.stop() }
+        #endif
+    }
+
+    private func setWantsSessions(_ on: Bool) {
+        mac?.setWantsSessions(on)
+        #if DEBUG
+        demos.forEach { $0.setWantsSessions(on) }
+        #endif
     }
 
     func host(_ id: String) -> HostActivity? { hosts.first { $0.hostId == id } }
@@ -77,6 +91,17 @@ final class ActivityMonitor: ObservableObject {
         }
         mac = nil
         remotes = [:]
+        #if DEBUG
+        if DemoMode.isOn {
+            demos = ordered.map { h in
+                let id = h.id
+                return DemoSampler(local: h.isLocal) { [weak self] sample, sessions in self?.apply(id, sample, sessions) }
+            }
+            demos.forEach { $0.setWantsSessions(detailViewers > 0) }
+            if wasSampling { resume() }
+            return
+        }
+        #endif
         for h in ordered {
             if h.isLocal {
                 guard mac == nil else { continue }
@@ -146,11 +171,17 @@ final class ActivityMonitor: ObservableObject {
         sampling = true
         mac?.start()
         remotes.values.forEach { $0.start() }
+        #if DEBUG
+        demos.forEach { $0.start() }
+        #endif
     }
 
     private func pause() {
         sampling = false
         mac?.stop()
         remotes.values.forEach { $0.stop() }
+        #if DEBUG
+        demos.forEach { $0.stop() }
+        #endif
     }
 }
