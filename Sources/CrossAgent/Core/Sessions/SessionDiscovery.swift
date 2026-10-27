@@ -352,6 +352,7 @@ final class SessionDiscovery: ObservableObject {
 
     /// One poll of every host now, ended lists included. For tests and a manual refresh.
     func refresh() async {
+        if DemoMode.isOn { return showDemo() }
         lastRecent = [:]
         await withTaskGroup(of: Void.self) { group in
             for h in hosts { group.addTask { await self.poll(h) } }
@@ -383,6 +384,7 @@ final class SessionDiscovery: ObservableObject {
     // MARK: Polling
 
     private func startLoops() {
+        if DemoMode.isOn { return showDemo() }
         for h in hosts where loops[h.id] == nil {
             loops[h.id] = Task { [weak self] in
                 while !Task.isCancelled {
@@ -392,6 +394,13 @@ final class SessionDiscovery: ObservableObject {
                 }
             }
         }
+    }
+
+    /// DemoMode's fixed list instead of a scan.
+    private func showDemo() {
+        let mac = hosts.first(where: \.isLocal)?.id ?? "mac"
+        let pc = hosts.first { $0.id != mac }?.id ?? "pc"
+        if sessions.isEmpty || Set(sessions.map(\.hostId)) != [mac, pc] { sessions = DemoSessions.list(mac: mac, pc: pc) }
     }
 
     private func stopLoops() {

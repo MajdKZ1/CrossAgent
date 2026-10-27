@@ -101,6 +101,11 @@ extension AppState {
     /// original process is gone, unless `force` (the user said they closed it). Never
     /// touches the original process.
     func continueClaudeSession(host h: String, sessionId: String, cwd: String? = nil, force: Bool = false) {
+        if DemoMode.isOn {
+            // Demo sessions are made up, there is nothing to resume.
+            flash("Not in the demo")
+            return
+        }
         guard project != nil else {
             flash("Open a project first")
             return

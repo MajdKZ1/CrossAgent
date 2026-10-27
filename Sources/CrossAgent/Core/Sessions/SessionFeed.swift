@@ -399,6 +399,7 @@ final class SessionFeed: ObservableObject {
         let root = localRoot ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").path
         self.makeSource = source ?? { feed in
             let deliver: @MainActor (FeedBatch) -> Void = { [weak feed] b in feed?.apply(b) }
+            if DemoMode.isOn { return DemoFeedSource(sessionId: sessionId, live: status != .ended, onBatch: deliver) }
             if host.isLocal { return LocalTranscriptTailer(root: root, sessionId: sessionId, onBatch: deliver) }
             return RemoteTranscriptFollower(host: host, sessionId: sessionId, onBatch: deliver)
         }
