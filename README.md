@@ -8,14 +8,17 @@ Everything starts from a project folder, and each project gets its own window wi
 
 <p align="center"><img src="docs/images/orchestrator.png" width="760" alt="Orchestrator mode: the orchestrator in the middle, agents on the Mac and the PC around it"></p>
 
-## What you need
+## Requirements
 
-- A Mac on macOS 14+ (Apple Silicon), with Xcode or the Swift toolchain.
+- macOS 14 or later on Apple Silicon.
+- The Swift toolchain (Xcode or the command line tools). There's no signed download yet: you build the app from source and it runs unsigned on your own Mac.
 - tmux on the Mac (`brew install tmux`).
-- A Linux box you can reach with a plain `ssh <alias>`, ideally with key auth, plus tmux and Claude Code on it. No server or agent to install, CrossAgent just runs `ssh`.
-- Claude Code on both machines if you want Claude panes.
+- Claude Code on every machine where you want Claude panes or workers.
+- python3 on every machine (macOS ships one, every Linux distro too). The hook and the skill use the standard library only.
+- Optional: one or more remote machines, Linux or another Mac, that you can reach with a plain `ssh <alias>` and key auth, with tmux and Claude Code on them. Nothing else gets installed there, CrossAgent just runs `ssh`.
+- Optional: [Mutagen](https://mutagen.io) (`brew install mutagen-io/mutagen/mutagen`) for the Crossover Portal, the live project sync between machines.
 
-## Install
+## Quick start
 
 ```sh
 git clone <this repo> CrossAgent && cd CrossAgent
@@ -23,16 +26,28 @@ swift build -c release && scripts/bundle.sh
 open build/CrossAgent.app        # or drag it into /Applications
 ```
 
-On first launch it writes `~/.config/crossagent/hosts.json`:
+The app isn't signed, so if macOS complains the first time, right click it in Finder and pick Open.
+
+On first launch CrossAgent asks for a remote machine: give it an ssh target (a `Host` alias from `~/.ssh/config`, or `user@host`) and a name, hit **Test**, then **Add**. Or **Skip** and use just this Mac. You can add more later with **Add Remote Machine...**. Hosts live in `~/.config/crossagent/hosts.json`:
 
 ```json
 {"hosts": [
-  {"id": "mac", "name": "This Mac", "type": "local", "accent": "#6ea8fe"},
-  {"id": "pc",  "name": "Linux PC", "type": "ssh", "target": "pc", "accent": "#5fd39a"}
+  {"id": "mac",  "name": "This Mac",  "type": "local", "accent": "#6ea8fe"},
+  {"id": "box",  "name": "Build box", "type": "ssh", "target": "box", "accent": "#5fd39a"}
 ]}
 ```
 
-`target` is anything `ssh` understands, usually a `Host` alias from `~/.ssh/config`. Add more hosts if you have them.
+Any number of hosts, any ids (letters, digits, `-` and `_`). `target` is anything `ssh` understands.
+
+Then open a project folder and hit `Cmd+T` for a pane on any host.
+
+To let Claude Code split work across your machines, install the skill too (it reads the same hosts.json, and asks for a remote machine if there isn't one yet):
+
+```sh
+skills/crossagent/install.sh               # this Mac and every ssh host in hosts.json
+```
+
+Then in any project, ask Claude Code to "use crossagent", or type `/crossagent`.
 
 ## Projects
 
@@ -311,6 +326,30 @@ ca portal pull [paths...]   # copy paths back from the PC
 top bar shows it as a ring linking the Mac and the PC: steady when in sync, pulsing softly while
 files cross, amber while it scans, connects or is paused, red on a conflict or error, and dim when
 the project has no Portal. Click it for the details and any other open Portals.
+
+## Security
+
+CrossAgent runs no server, opens no ports and sends nothing anywhere. Everything goes through your own `ssh`, tmux and Claude Code. Release builds have no remote-control channel (the dev automation hook only exists in debug builds).
+
+- **Approvals:** remote workers never run with bypass permissions. Anything acceptEdits doesn't cover waits for you in the app (or `ca remote answer`), and no answer in 5 minutes means denied. Requests and answers live in `~/.crossagent/approvals` (0700, files 0600). An answer counts only if it's a regular file owned by you, so another local user can't approve anything.
+- **Local state:** `~/.crossagent` (hook script, events, approvals, ssh connection sockets) is 0700 on every machine, its files 0600, and the app skips anything in there that isn't owned by you.
+- **What you hand a worker:** a remote worker is a full Claude Code session on that machine, in the project folder, with your permissions. The brief header tells it to stay in its folder and never commit, but the approval cards are the real guard.
+
+### What gets changed, and how to undo it
+
+| What | Where | Undo |
+| --- | --- | --- |
+| Host list | `~/.config/crossagent/hosts.json` | edit or delete it |
+| App state | `~/Library/Application Support/CrossAgent`, `defaults` domain `dev.crossagent` | delete the folder, `defaults delete dev.crossagent` |
+| Hook script, events, approvals, ssh sockets | `~/.crossagent/` on each machine | `rm -rf ~/.crossagent` |
+| Orchestrator hooks | the project's `.claude/settings.local.json` (local, not committed), on each machine | Orchestrator > Turn Off Orchestrator for This Project. It removes only CrossAgent's entries |
+| tmux sessions | `ca-*` on each machine | close them in the Station, or `tmux kill-session -t <name>` |
+| The skill | `~/.claude/skills/crossagent` on each machine | `rm -rf ~/.claude/skills/crossagent` |
+| Worker subagents | `~/.claude/agents/<host>-worker.md` on each machine, marked as generated | delete those files |
+| Project setup from `ca init` | `CROSSAGENT.md`, one line in `CLAUDE.md`, `.crossagent/` in `.gitignore`, `"teammateMode": "in-process"` in `.claude/settings.local.json`, the `.crossagent/` folder | delete or revert those |
+| Crossover Portal | a Mutagen sync session `ca-<project>` | `ca portal stop` (files stay on both machines) |
+| System map | `~/.config/crossagent/system-map.md` and `projects` on each machine | delete them |
+| claude wrapper (only with `install.sh --wrapper`) | one marked block in `~/.zshrc` and `~/.bashrc` | `skills/crossagent/install.sh --remove-wrapper` |
 
 ## How it works
 
