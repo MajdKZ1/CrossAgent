@@ -34,6 +34,11 @@ final class Automation {
             return app.panes.indices.contains(i) ? app.panes[i] : nil
         }
         switch name {
+        case "new" where cmd["check"] as? Bool == true:
+            // Same path as the new pane popover, with the folder check on ssh hosts.
+            app.requestPane(hostID: cmd["host"] as? String ?? app.lastHostID,
+                            mode: PaneMode(rawValue: cmd["mode"] as? String ?? "claude") ?? .claude,
+                            session: cmd["session"] as? String)
         case "new":
             app.newPane(hostID: cmd["host"] as? String,
                         mode: PaneMode(rawValue: cmd["mode"] as? String ?? "claude") ?? .claude,
@@ -60,6 +65,15 @@ final class Automation {
                 var f = win.frame
                 f.size = NSSize(width: w, height: h)
                 win.setFrame(f, display: true, animate: false)
+            }
+        case "open": if let path = cmd["path"] as? String { app.switchProject(URL(fileURLWithPath: path, isDirectory: true)) }
+        case "closeProject": app.leaveProject()
+        case "mode": if let m = (cmd["mode"] as? String).flatMap(AppMode.init(rawValue:)) { app.mode = m }
+        case "folderPrompt":
+            switch cmd["action"] as? String {
+            case "sync": app.promptStartSync()
+            case "home": app.promptOpenInHome()
+            default: app.cancelFolderPrompt()
             }
         case "state": write(stateJSON(), to: cmd["out"] as? String)
         case "snapshot":
@@ -133,7 +147,23 @@ final class Automation {
                     "frame": NSStringFromRect(p.terminal.convert(p.terminal.bounds, to: nil)),
                     "inWindow": p.terminal.window != nil, "bg": "\(p.terminal.nativeBackgroundColor)", "layerBg": "\(String(describing: p.terminal.layer?.backgroundColor))", "screen": p.screenText()]
         }
-        let obj: [String: Any] = ["panes": panes, "broadcast": app.broadcast,
+        var folderPrompt: Any = NSNull()
+        if let p = app.folderPrompt {
+            var phase = "missing", output = ""
+            switch p.phase {
+            case .missing: break
+            case .syncing: phase = "syncing"
+            case .failed(let o): phase = "failed"; output = o
+            }
+            folderPrompt = ["host": p.host.id, "phase": phase, "output": output]
+        }
+        let project: Any = app.project.map { p in
+            ["name": p.name, "path": p.path, "slug": p.slug, "pcRelativePath": p.pcRelativePath]
+        } ?? NSNull()
+        let obj: [String: Any] = ["project": project, "mode": app.mode.rawValue, "welcome": app.showsWelcome,
+                                  "recents": app.recentProjects.map(\.path), "folderPrompt": folderPrompt,
+                                  "projectSync": app.projectSyncActive,
+                                  "panes": panes, "broadcast": app.broadcast,
                                   "maximized": app.panes.firstIndex { $0.id == app.maximizedID } ?? -1,
                                   "station": app.showStation, "toast": app.toast ?? "",
                                   "newPaneOpen": app.showNewPane,
