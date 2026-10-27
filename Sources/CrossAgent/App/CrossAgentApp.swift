@@ -71,6 +71,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWindow.allowsAutomaticWindowTabbing = false
         NSApp.activate(ignoringOtherApps: true)
         if Automation.enabled { automation = Automation(app: app) }
+        OrchestratorDemo.openIfRequested()
+        MascotGallery.openIfRequested()
         shortcuts = Shortcuts(app: app)
         app.warmUpConnections()
         let monitor = TmuxMonitor(hosts: app.hosts)
