@@ -206,7 +206,8 @@ final class HookScriptTrustTests: XCTestCase {
                      stopAfter: TimeInterval? = nil) throws -> (Int32, Data) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: try python())
-        p.arguments = ["-I"] + args
+        // -B: running the repo's hook must not leave __pycache__ in Sources (SwiftPM warns about it).
+        p.arguments = ["-I", "-B"] + args
         p.environment = ["HOME": home.path].merging(env) { $1 }
         let inp = Pipe(), out = Pipe()
         p.standardInput = inp
