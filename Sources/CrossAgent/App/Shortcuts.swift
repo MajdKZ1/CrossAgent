@@ -41,6 +41,8 @@ final class Shortcuts {
     private func handle(_ event: NSEvent) -> NSEvent? {
         // Popovers (new pane) and other windows keep their own keys.
         guard let main = app.window, event.window === main else { return event }
+        // Never let a key reach a terminal on a hidden tab; it goes to the shown one instead.
+        app.dropHiddenTerminalFocus()
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
         let key = event.keyCode
 
@@ -83,7 +85,7 @@ final class Shortcuts {
         case (Key.v, true, false): app.toggleMode(.station)
         default:
             guard !shift, !option, let n = Key.digits.firstIndex(of: key) else { return event }
-            app.select(index: n)
+            app.selectTab(shortcut: n)
         }
         return nil
     }

@@ -58,7 +58,7 @@ struct PaneCommands: Commands {
             item("Previous Tab") { app.selectAdjacentTab(-1) }
                 .keyboardShortcut("[", modifiers: [.command, .shift])
             ForEach(1..<10) { n in
-                item("Tab \(n)") { app.select(index: n - 1) }
+                item(n == 9 ? "Last Tab" : "Tab \(n)") { app.selectTab(shortcut: n - 1) }
                     .keyboardShortcut(KeyEquivalent(Character("\(n)")))
             }
             Divider()

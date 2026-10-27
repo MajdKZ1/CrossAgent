@@ -229,8 +229,10 @@ final class AppState: ObservableObject {
         guard let pane = panes.first(where: { $0.id == id }) else { return }
         if focusedID != id { focusedID = id }
         if let max = maximizedID, max != id { maximizedID = id }
-        // Defer so the view is in the window after a relayout.
-        DispatchQueue.main.async {
+        // Defer so the view is in the window after a relayout. Only while the grid
+        // shows, so a hidden pane never takes the keyboard.
+        DispatchQueue.main.async { [weak self] in
+            guard self?.mode == .panes else { return }
             pane.terminal.window?.makeFirstResponder(pane.terminal)
         }
     }

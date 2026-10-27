@@ -119,12 +119,20 @@ extension AppState {
         if mode != tab.mode { mode = tab.mode }
         prepare(tab)
         focusSelectedTab()
+        // SwiftUI can hand focus back to a terminal while the old tab hides, so check
+        // again once the switch has landed.
+        DispatchQueue.main.async { [weak self] in self?.dropHiddenTerminalFocus() }
         saveLayout()
     }
 
     func select(index: Int) {
         guard tabs.indices.contains(index) else { return }
         select(tabs[index].id)
+    }
+
+    /// Cmd+1..8 pick by position, Cmd+9 the last tab, like a browser.
+    func selectTab(shortcut n: Int) {
+        if n == 8, let last = tabs.last { select(last.id) } else { select(index: n) }
     }
 
     /// Cmd+Shift+[ and ], wrapping around.
@@ -309,6 +317,31 @@ extension AppState {
         } else {
             focusTerminal(target, tab: tab.id)
         }
+    }
+
+    /// True when the selected tab shows this terminal: a pane in the grid (the
+    /// maximized one if any), or the agent tab's own.
+    func showsTerminal(_ t: PaneTerminalView) -> Bool {
+        guard let tab = selectedTab else { return false }
+        if tab.kind == .panes {
+            guard let pane = panes.first(where: { $0.terminal === t }) else { return false }
+            return maximizedID == nil || maximizedID == pane.id
+        }
+        return agentTerminal(tab)?.terminal === t
+    }
+
+    /// A terminal that isn't on screen must never take keys. Moves focus to the
+    /// selected tab's terminal (or nowhere) and says whether it had to.
+    @discardableResult
+    func dropHiddenTerminalFocus() -> Bool {
+        guard let win = window, let t = win.firstResponder as? PaneTerminalView, !showsTerminal(t) else { return false }
+        win.makeFirstResponder(nil)
+        guard let tab = selectedTab else { return true }
+        let target = tab.kind == .panes ? focused : agentTerminal(tab)
+        if let target, target.terminal.window === win, !target.terminal.isHiddenOrHasHiddenAncestor {
+            win.makeFirstResponder(target.terminal)
+        }
+        return true
     }
 
     /// The view may not be in the window yet, and a relayout as the attach goes live can
