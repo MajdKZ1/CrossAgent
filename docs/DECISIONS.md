@@ -92,3 +92,24 @@ PC (verified over `ssh pc` with uname, os-release, lscpu, free, df):
   - The PC path uses the same rule as the skill's `pc_dir()`, and a unit test runs both against the real script.
 - tmux targets are now exact (`-t '=name'`, quoted because zsh expands `=word`). Before this, killing `ca-pc-1` after it had ended could hit `ca-pc-10` by prefix match.
 - Typing into a worker from the canvas attaches with `tmux attach -t '=name'` and never creates a session, so a stale node can't spawn an empty one.
+- Event pipeline:
+  - One Python stdlib script does both jobs: the hook, and the follower (`--follow`). It is installed to `~/.crossagent/bin/` on both machines. The hooks are `async: true` (in 2.1.311's hook schema), so Claude never waits on them. A call costs about 26 ms.
+  - Event files are trimmed past 512 KB, and files older than 3 days go when a follower starts. In a stress run (800 calls, 8 at a time, through several trims), nothing was lost or duplicated.
+  - The PC is followed by one long lived ssh process over the existing control master. It sends a heartbeat every 10 s, restarts after 40 s of silence with 2/5/15/30 s backoff, and replays 60 to 120 s with dedupe, so a drop loses nothing.
+  - Only events carrying `CROSSAGENT_ROLE` count. The app starts the orchestrator with `ROLE=orchestrator` and `PROJECT=<slug>`, `ca run` workers set `ROLE=worker`, and built-in subagents inherit the orchestrator's env. Random Claude sessions in the same folder don't show up.
+  - Payload facts from a live interactive session:
+    - Notification has `notification_type` but never an `agent_id`, so a permission Notification within 3 s of a subagent's PermissionRequest is credited to that subagent.
+    - Declining a permission sends no event, so "needs input" stays up until the next activity.
+    - Named interactive agents run as teammates. Their `background_tasks` ids don't match agent ids, so "Waiting on" falls back to whichever agents are still busy.
+    - Hidden helper agents (empty `agent_type`) are ignored.
+- Mascot:
+  - **Patch** is a chunky little terminal with a white case, a dark screen face, mint eyes, pink blush and stubby feet. A blue to purple cable arcs over its head like the arch in the app icon.
+  - It's a 28x28 pixel canvas drawn from string grids in Swift, shown at 2x (56 pt), with no image files. It's all original, and the clawd-on-desk repo was never opened.
+  - Nine states, priority: error > needs input > done > juggling (2+ active, one orb per agent in its host colour) > bobbing (1 active) > working > thinking > sleeping (60 s quiet) > idle.
+  - A finished node in error only keeps Patch sad for 20 s.
+  - It redraws only when its frame changes (idle is about 1/s), and pauses when covered, hidden or off screen. A sprite costs about 0.1% CPU idle, and juggling at 12 fps about 1% (release build). It can be hidden with the `mascotHidden` setting.
+- Canvas:
+  - Nodes spread by angle around the orchestrator, and cards are pushed off other nodes' cables. Plain repulsion had stacked nodes on one ray with cables through cards.
+  - The layout freezes 8 s after its last change, so it can never keep the canvas awake.
+  - Plain scroll pans, Cmd+scroll and pinch zoom (0.35x to 2.5x). Option-drag or the edge handle starts a relay cable.
+  - Pulses and zzz are Core Animation. Cables and particles are one Canvas whose TimelineView pauses when nothing moves.
