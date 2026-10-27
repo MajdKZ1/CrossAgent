@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Offline tests for the crossagent skill: ca-stream.py, ca-approve.py, ca remote's checks
-# and the worker loop end to end with a fake claude. No network, no real claude. Runs with a
-# temp HOME and a private tmux server, so your ~/.crossagent and tmux sessions stay untouched.
+# Offline tests for the crossagent skill: ca-stream.py, ca-approve.py, hosts, worker
+# definitions, ca remote's checks, the worker loop end to end with a fake claude, and
+# hostile folder and task names over a fake ssh into a second home. No network, no real
+# claude, ssh or mutagen. Runs with a temp HOME and private tmux servers, so your
+# ~/.crossagent and tmux sessions stay untouched. Every bash ca starts is the bash running
+# this file, so `/bin/bash run.sh` checks bash 3.2.
 # Usage: skills/crossagent/tests/run.sh
 set -u
 
@@ -12,17 +15,25 @@ FIX="$TESTS/fixtures"
 STREAM="$SKILL/scripts/ca-stream.py"
 APPROVE="$SKILL/scripts/ca-approve.py"
 
-T="$(mktemp -d)"
+T="$(cd "$(mktemp -d)" && pwd -P)"
 export HOME="$T/home" TMUX_TMPDIR="$T/tmux" FAKE_LOG="$T/calls"
 unset TMUX TMUX_PANE CROSSAGENT_REMOTE_WORKER CROSSAGENT_ROLE CROSSAGENT_NODE CROSSAGENT_PROJECT CROSSAGENT_HOST CA_ROOT CA_SLUG
-export CA_HERE=mac
-mkdir -p "$HOME/.local/bin" "$TMUX_TMPDIR" "$FAKE_LOG"
+export CA_HERE=mac MUTAGEN_DISABLE_AUTOSTART=1
+# The fake "remote" side: its own home and tmux server, reached through tests/fake-ssh.
+export FAKE_REMOTE="$T/remote" FAKE_REMOTE_TMUX="$T/rtmux" FAKE_SSH_LOG="$T/ssh.log"
+mkdir -p "$HOME/.local/bin" "$TMUX_TMPDIR" "$FAKE_LOG" "$FAKE_REMOTE" "$FAKE_REMOTE_TMUX" "$HOME/.config/crossagent"
+export PATH="$HOME/.local/bin:$PATH"
 cd "$T" || exit 1
 cp "$TESTS/fake-claude.py" "$HOME/.local/bin/claude"; chmod +x "$HOME/.local/bin/claude"
+cp "$TESTS/fake-ssh" "$HOME/.local/bin/ssh"; chmod +x "$HOME/.local/bin/ssh"
+printf '#!/bin/sh\nexit 1\n' > "$HOME/.local/bin/mutagen"; chmod +x "$HOME/.local/bin/mutagen"
+ln -s "$BASH" "$HOME/.local/bin/bash"
 EV="$HOME/.crossagent/events"
 AP="$HOME/.crossagent/approvals"
+HOSTS_JSON='{"hosts": [{"accent": "#6ea8fe", "id": "mac", "name": "This Mac", "type": "local"}, {"accent": "#5fd39a", "id": "pc", "name": "Linux PC", "target": "pc", "type": "ssh"}]}'
+printf '%s\n' "$HOSTS_JSON" > "$HOME/.config/crossagent/hosts.json"; chmod 600 "$HOME/.config/crossagent/hosts.json"
 
-cleanup() { tmux kill-server 2>/dev/null; rm -rf "${T:?}"; }
+cleanup() { tmux kill-server 2>/dev/null; TMUX_TMPDIR="$FAKE_REMOTE_TMUX" tmux kill-server 2>/dev/null; rm -rf "${T:?}"; }
 trap cleanup EXIT
 
 pass=0; fail=0
@@ -86,8 +97,12 @@ mcp() {  # mcp <timeout> <answer or ""> : one tools/call, prints the reply
   local to="$1" a="$2"
   if [ -n "$a" ]; then
     ( for _ in $(seq 50); do f="$(ls "$AP"/*.json 2>/dev/null | head -1)"; [ -n "$f" ] && break; sleep 0.1; done
-      echo "$a" > "${f%.json}.answer.tmp"
-      [ "$a" = stray ] || mv -f "${f%.json}.answer.tmp" "${f%.json}.answer" ) &
+      case "$a" in
+        stray) echo stray > "${f%.json}.answer.tmp" ;;
+        symlink) echo allow > "$T/elsewhere"; ln -s "$T/elsewhere" "${f%.json}.answer" ;;
+        open) echo allow > "${f%.json}.answer.tmp"; chmod 666 "${f%.json}.answer.tmp"; mv -f "${f%.json}.answer.tmp" "${f%.json}.answer" ;;
+        *) echo "$a" > "${f%.json}.answer.tmp"; mv -f "${f%.json}.answer.tmp" "${f%.json}.answer" ;;
+      esac ) &
   fi
   { echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
     echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
@@ -119,6 +134,32 @@ start=$(date +%s); mcp 2 "" > "$T/to"; took=$(( $(date +%s) - start ))
 t "timeout denies by default" grep -qF 'No answer within 2 s, so it was denied by default.' "$T/to"
 t "timeout took about 2 s" test "$took" -ge 2 -a "$took" -le 5
 t "PermissionAnswer timeout" jcheck "$F" 'e[-1]["msg"] == "timeout"'
+mcp 2 symlink > "$T/sym"
+t "a symlinked answer is ignored" grep -qF 'No answer within 2 s' "$T/sym"
+mcp 2 open > "$T/open"
+t "an answer anyone can write is ignored" grep -qF 'No answer within 2 s' "$T/open"
+t "and they get cleaned up" test -z "$(ls -A "$AP")"
+chmod 755 "$AP"
+mcp 10 allow > "$T/loose"
+t "with a loose approvals folder an answer still works" grep -qF '\"behavior\": \"allow\"' "$T/loose"
+t "and the folder is 0700 again" sh -c "ls -ld '$AP' | grep -q '^drwx------'"
+mv "$AP" "$T/ap-real"; mkdir -p "$T/ap-other"; chmod 700 "$T/ap-other"; ln -s "$T/ap-other" "$AP"
+mcp 2 "" > "$T/symdir"
+t "a symlinked approvals folder denies right away" grep -qF "The permission tool failed" "$T/symdir"
+rm -f "$AP"; mv "$T/ap-real" "$AP"
+t "trust checks on fake stat results" python3 -I -c '
+import collections, importlib.util, stat, sys
+sys.dont_write_bytecode = True
+s = importlib.util.spec_from_file_location("m", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+St = collections.namedtuple("St", "st_mode st_uid")
+f, d = stat.S_IFREG, stat.S_IFDIR
+ok = [m.file_ok(St(f | 0o600, 501), 501), m.file_ok(St(f | 0o644, 501), 501),
+      not m.file_ok(St(f | 0o600, 0), 501), not m.file_ok(St(f | 0o666, 501), 501),
+      not m.file_ok(St(f | 0o620, 501), 501), not m.file_ok(St(stat.S_IFLNK | 0o777, 501), 501),
+      not m.file_ok(St(d | 0o700, 501), 501),
+      m.dir_state(St(d | 0o700, 501), 501) == "ok", m.dir_state(St(d | 0o755, 501), 501) == "loose",
+      m.dir_state(St(d | 0o700, 0), 501) == "bad", m.dir_state(St(stat.S_IFLNK | 0o777, 501), 501) == "bad"]
+sys.exit(0 if all(ok) else 1)' "$APPROVE"
 
 echo "== ca checks"
 P="$T/proj"; mkdir -p "$P"; cd "$P" || exit 1
@@ -131,13 +172,17 @@ dies "empty brief is refused" "the brief is empty" "$CA" remote pc r1 --brief "$
 dies "missing brief is refused" "--brief" "$CA" remote pc r1
 dies "bad role is refused" "task name must be" "$CA" remote pc 'bad role!' --brief "$good"
 dies "same host goes to a native subagent" "native subagent (Agent tool)" "$CA" remote mac r1 --brief "$good"
-dies "the PC can't start Mac workers" "can't reach the Mac" env CA_HERE=pc "$CA" remote mac r1 --brief "$good"
+dies "a host can't start workers on the hub" "can't reach mac from pc" env CA_HERE=pc "$CA" remote mac r1 --brief "$good"
 dies "remote workers can't nest" "you're a remote worker" env CROSSAGENT_REMOTE_WORKER=1 "$CA" remote pc r1 --brief "$good"
 dies "--continue needs an earlier conversation" "no earlier conversation for r1" "$CA" remote pc r1 --continue --brief "$good"
 dies "ca run --claude is gone" "ca run --claude is gone" "$CA" run mac t1 --claude "do things"
 dies "bad request id is refused" "12 hex chars" "$CA" remote answer pc nothex allow
 dies "answer for unknown request" "no pending request abcdef123456" "$CA" remote answer pc abcdef123456 allow
 t "template prints the brief template" sh -c "'$CA' remote template | grep -qi '## Goal'"
+mkdir -p "$AP"; echo '{"id":"abcdef654321","tmux":"x"}' > "$T/req.json"; ln -s "$T/req.json" "$AP/abcdef654321.json"
+dies "answer refuses a symlinked request" "isn't a private file of yours" "$CA" remote answer pc abcdef654321 allow
+t "and writes no answer" test ! -e "$AP/abcdef654321.answer"
+rm -f "$AP/abcdef654321.json"
 
 echo "== worker loop (fake claude, private tmux)"
 S=ca-proj-pc-smoke; R="$P/.crossagent/remote/smoke"
@@ -218,13 +263,14 @@ echo '{"permissions": {"allow": ["Bash(ls)"]}}' > "$I/.claude/settings.local.jso
 echo "my old notes" > "$I/CROSSAGENT.md"
 (cd "$I" && CA_HERE=pc CA_ROOT="$I" "$CA" init) > "$T/init" 2>&1
 t "init pins teammateMode and keeps other keys" python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d["teammateMode"] == "in-process" and d["permissions"]["allow"] == ["Bash(ls)"] else 1)' "$I/.claude/settings.local.json"
-t "init moves an old CROSSAGENT.md aside" sh -c "grep -q 'my old notes' '$I/.crossagent/CROSSAGENT.md.old' && head -1 '$I/CROSSAGENT.md' | grep -qF '<!-- crossagent template v2 -->'"
-for a in pc-worker mac-worker; do
-  [ -f "$SKILL/agents/$a.md" ] && t "init installs $a" cmp -s "$SKILL/agents/$a.md" "$HOME/.claude/agents/$a.md"
-done
+t "init moves an old CROSSAGENT.md aside" sh -c "grep -q 'my old notes' '$I/.crossagent/CROSSAGENT.md.old' && head -1 '$I/CROSSAGENT.md' | grep -qF '<!-- crossagent template v3 -->'"
+t "init on a host writes the hub's worker" sh -c "grep -qxF '<!-- generated by crossagent -->' '$HOME/.claude/agents/mac-worker.md' && grep -q 'name: mac-worker' '$HOME/.claude/agents/mac-worker.md' && grep -q 'pc can not reach mac' '$HOME/.claude/agents/mac-worker.md'"
 (cd "$I" && CA_HERE=pc CA_ROOT="$I" "$CA" init) > "$T/init2" 2>&1
 t "second init changes nothing" sh -c "! grep -qE 'pinned|moved|added ~/.claude/agents' '$T/init2'"
 t "init starts no sessions" sh -c "! tmux ls 2>/dev/null | grep -q initproj"
+
+
+. "$TESTS/hosts.sh"
 
 echo
 echo "$pass passed, $fail failed"

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Stand-in for ssh in the offline tests. Logs its argv to $FAKE_SSH_LOG, then runs the
+# command the way sshd does (all words joined with spaces, one shell -c) in a second home,
+# $FAKE_REMOTE, with its own tmux server. Knows the targets pc and box, nothing else.
+printf '%s\n' "$*" >> "$FAKE_SSH_LOG"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -[bcDEeFIiJLlmOoPpQRSWw]) shift 2 ;;
+    --) shift; break ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+target="$1"; shift
+case "$target" in pc|box) ;; *) echo "ssh: Could not resolve hostname $target" >&2; exit 255 ;; esac
+[ $# -gt 0 ] || exit 0
+cd "$FAKE_REMOTE" || exit 255
+HOME="$FAKE_REMOTE" TMUX_TMPDIR="$FAKE_REMOTE_TMUX" exec bash -c "$*"
