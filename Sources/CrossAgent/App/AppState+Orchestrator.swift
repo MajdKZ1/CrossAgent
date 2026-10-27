@@ -389,7 +389,7 @@ extension AppState {
     /// The worker's attached terminal: its agent tab's if one is open, else a short
     /// lived one made on first use. Nil when it has no session or its host is unknown.
     func workerPane(for node: AgentNode) -> PaneSession? {
-        guard let o = orch, let session = node.remote?.tmuxSession ?? node.tmuxSession,
+        guard let o = orch, let session = node.remote.flatMap({ $0.tmuxSession.isEmpty ? nil : $0.tmuxSession }) ?? node.tmuxSession,
               let host = host(node.remote?.host ?? node.hostId) else { return nil }
         if let p = agentPane(host: host.id, session: session) ?? remoteCardPane(node.id) {
             if p.isExited { p.reconnect() }
@@ -554,6 +554,7 @@ extension AppState {
     func injectEvents(_ events: [AgentEvent]) {
         guard let o = orch else { return }
         o.graph.apply(events, project: o.controller.slug, projectPaths: o.controller.projectPaths)
+        RemoteEventLog.add(events, project: o.controller.slug)
     }
 }
 
