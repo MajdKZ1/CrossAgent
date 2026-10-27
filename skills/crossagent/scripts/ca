@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ca: split work across this Mac and the Linux PC (`ssh pc`) in tmux sessions
-# named ca-<project>-<host>-<task>, so the CrossAgent viewing station shows them.
+# ca: split work across this machine and the ssh hosts in ~/.config/crossagent/hosts.json,
+# in tmux sessions named ca-<project>-<host>-<task>, so the CrossAgent viewing station shows them.
 # Run `ca help` for usage.
 set -eu
 
@@ -10,16 +10,280 @@ CA="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONF="$HOME/.config/crossagent"
 MAP="$CONF/system-map.md"
-SSH_OPTS="-o ControlMaster=auto -o ControlPath=/tmp/crossagent-%C -o ControlPersist=10m -o ServerAliveInterval=15"
+HOSTS_FILE="$CONF/hosts.json"
+# Machines that installed the skill here over ssh, one id per line (written by install.sh).
+HUBS_FILE="$CONF/hubs"
+# Same ControlPath as the CrossAgent app, so both share one ssh connection per host.
+SSH_OPTS="-o ControlMaster=auto -o ControlPath=~/.crossagent/ssh/%C -o ControlPersist=10m -o ServerAliveInterval=15"
 RCA='~/.claude/skills/crossagent/scripts/ca'
+UNAME="$(uname -s)"
 
 die() { echo "ca: $*" >&2; exit 1; }
 say() { echo "ca: $*" >&2; }
 q() { printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")"; }
 qall() { local a out=""; for a in "$@"; do out="$out $(q "$a")"; done; printf %s "$out"; }
+tilde() { case "$1" in "$HOME") echo '~' ;; "$HOME"/*) printf '~/%s\n' "${1#"$HOME"/}" ;; *) printf '%s\n' "$1" ;; esac; }
 
-case "$(uname -s)" in Darwin) HERE=mac ;; *) HERE=pc ;; esac
-HERE="${CA_HERE:-$HERE}"
+# Spelled out: bracket ranges like A-Z can match more than ASCII in some locales.
+IDCHARS='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-'
+# Host ids, task and role names: 1-40 chars of A-Z a-z 0-9 _ -
+valid_id() { case "$1" in ""|*[!$IDCHARS]*) return 1 ;; esac; [ "${#1}" -le 40 ]; }
+# ssh targets, same rule as the app: no leading -, no whitespace or control characters.
+target_ok() { case "$1" in ""|-*|*[[:space:][:cntrl:]]*) return 1 ;; esac; [ "${#1}" -le 255 ]; }
+
+# ~/.crossagent holds approvals, events and ssh sockets, so only this user gets in.
+private_dirs() {
+  local d
+  (umask 077 && mkdir -p "$HOME/.crossagent/ssh" "$HOME/.crossagent/events" "$HOME/.crossagent/approvals") 2>/dev/null || true
+  for d in "$HOME/.crossagent" "$HOME/.crossagent/ssh" "$HOME/.crossagent/events" "$HOME/.crossagent/approvals" "$HOME/.crossagent/bin"; do
+    if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ]; then chmod 700 "$d" 2>/dev/null || true; fi
+  done
+}
+private_dirs
+
+# ---------- hosts ----------
+
+# hosts.json as "id<TAB>type<TAB>target<TAB>name" lines: this machine first (type local,
+# id from CA_HERE, else the file's local entry, else mac on macOS or the hostname), then
+# the ssh hosts, then hubs (machines that set this one up but that it can't reach).
+# Same id and target rules as the app. Lines starting with ! are warnings.
+hosts_load() {
+  python3 -I - "$HOSTS_FILE" "$HUBS_FILE" "${CA_HERE:-}" "$UNAME" "$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo host)" <<'PY'
+import json, os, re, stat, sys
+path, hubs, env_here, uname, hn = sys.argv[1:6]
+ID = re.compile(r"[A-Za-z0-9_-]{1,40}\Z")
+
+
+def target_ok(t):
+    return (isinstance(t, str) and 0 < len(t.encode()) <= 255 and not t.startswith("-")
+            and not any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in t))
+
+
+def clean(s):
+    return " ".join(str(s).split())[:80]
+
+
+entries = []
+try:
+    st = os.lstat(path)
+    if stat.S_ISLNK(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
+        print("!ignoring %s: it has to be your own file that only you can write" % path)
+    else:
+        with open(path) as f:
+            d = json.load(f)
+        if isinstance(d, dict) and isinstance(d.get("hosts"), list):
+            entries = d["hosts"]
+except FileNotFoundError:
+    pass
+except Exception as e:
+    print("!can not read %s (%s)" % (path, str(e)[:120]))
+
+local, ssh, seen = None, [], set()
+for h in entries:
+    if not isinstance(h, dict):
+        continue
+    i = str(h.get("id", ""))
+    if not ID.match(i) or i in seen:
+        print("!skipping a host in hosts.json with a bad or repeated id: %r" % i[:40])
+        continue
+    seen.add(i)
+    name = clean(h.get("name") or i) or i
+    if h.get("type") == "local":
+        local = local or (i, name)
+    elif h.get("type") == "ssh":
+        t = h.get("target") or i
+        if not target_ok(t):
+            print("!skipping host %s in hosts.json: bad ssh target" % i)
+            continue
+        ssh.append((i, t, name))
+
+here = env_here
+if here and not ID.match(here):
+    print("!ignoring CA_HERE, it is not a valid host id")
+    here = ""
+if not here:
+    if local:
+        here = local[0]
+    elif uname == "Darwin":
+        here = "mac"
+    else:
+        here = re.sub(r"[^a-z0-9_]+", "-", hn.lower()).strip("-")[:40].strip("-") or "host"
+names = dict((i, n) for i, _, n in ssh)
+if local and local[0] == here:
+    hname = local[1]
+else:
+    hname = names.get(here) or ("This Mac" if uname == "Darwin" else clean(hn) or here)
+print("%s\tlocal\t-\t%s" % (here, hname))
+for i, t, n in ssh:
+    if i != here:
+        print("%s\tssh\t%s\t%s" % (i, t, n))
+hub = [local[0]] if local and local[0] != here else []
+try:
+    with open(hubs) as f:
+        hub += [l.strip() for l in f]
+except OSError:
+    pass
+done = set([here] + [i for i, _, _ in ssh])
+for i in hub:
+    if ID.match(i) and i not in done:
+        done.add(i)
+        print("%s\thub\t-\t%s" % (i, i))
+PY
+}
+
+_hl="$(hosts_load)" || die "couldn't read the hosts (python3 is needed)"
+case "$_hl" in *'!'*) printf '%s\n' "$_hl" | sed -n 's/^!/ca: /p' >&2 ;; esac
+HOSTS="$(printf '%s\n' "$_hl" | grep -v '^!' || true)"
+HERE="$(printf '%s\n' "$HOSTS" | head -1 | cut -f1)"
+unset _hl
+
+hfield() { printf '%s\n' "$HOSTS" | awk -F'\t' -v f="$2" -v i="$1" '$1 == i { print $f; exit }'; }
+htype() { hfield "$1" 2; }
+htarget() { hfield "$1" 3; }
+hname() { hfield "$1" 4; }
+ssh_hosts() { printf '%s\n' "$HOSTS" | awk -F'\t' '$2 == "ssh" { print $1 }'; }
+host_ids() { printf '%s\n' "$HOSTS" | cut -f1; }
+first_ssh() { ssh_hosts | head -1; }
+commas() { tr '\n' ' ' | sed 's/ *$//; s/ /, /g'; }
+
+# A host id (or "all") from how people say it: an id or display name (or its last word, so
+# "Linux PC" -> pc), local words for this machine, remote words for the only ssh host.
+# Leading on/in/at and my/this/the are dropped. Prints why on stderr when it can't tell.
+resolve() {
+  local w h n
+  w="$(printf '%s' "$*" | tr 'A-Z\t' 'a-z ' | tr -s ' ' | sed -E 's/^ //; s/ $//; s/^(on|in|at) //; s/^(my|this|the) //')"
+  case "$w" in *"
+"*) echo "ca: unknown host '$*'" >&2; return 1 ;; esac
+  case "$w" in ""|both|split|all|everywhere|"both machines"|"all machines") echo all; return 0 ;; esac
+  h="$(printf '%s\n' "$HOSTS" | W="$w" awk -F'\t' 'tolower($1) == ENVIRON["W"] { print $1; exit }')"
+  [ -n "$h" ] || h="$(printf '%s\n' "$HOSTS" | W="$w" awk -F'\t' 'tolower($4) == ENVIRON["W"] { print $1; exit }')"
+  if [ -z "$h" ]; then
+    n="$(printf '%s\n' "$HOSTS" | W="$w" awk -F'\t' '{ k = split(tolower($4), a, " ") } k && a[k] == ENVIRON["W"] { print $1 }')"
+    if [ "$(printf '%s\n' "$n" | grep -c .)" -gt 1 ]; then
+      echo "ca: '$*' could be $(printf '%s\n' "$n" | commas). Use the id" >&2; return 1
+    fi
+    h="$n"
+  fi
+  if [ -z "$h" ]; then
+    case "$w" in
+      local|mac|here|laptop|localhost|machine|computer) h="$HERE" ;;
+      remote|ssh|overseas|"other machine"|"other computer"|"other one")
+        n="$(ssh_hosts)"
+        case "$(printf '%s\n' "$n" | grep -c .)" in
+          1) h="$n" ;;
+          0) echo "ca: no ssh hosts are set up here, so there's no '$*'. Add one with: ca hosts add <id> <ssh-target>" >&2; return 1 ;;
+          *) echo "ca: '$*' could be any of the ssh hosts: $(printf '%s\n' "$n" | commas). Name one" >&2; return 1 ;;
+        esac ;;
+    esac
+  fi
+  if [ -z "$h" ]; then
+    if [ -z "$(ssh_hosts)" ]; then
+      echo "ca: unknown host '$*'. No ssh hosts are set up here, so everything runs on $HERE. Add one with: ca hosts add <id> <ssh-target>" >&2
+    else
+      echo "ca: unknown host '$*' (hosts: $(host_ids | commas), see ca hosts)" >&2
+    fi
+    return 1
+  fi
+  printf '%s\n' "$h"
+}
+
+# One host this machine can work on: itself or an ssh host.
+host_arg() {
+  local h; h="$(resolve "$1")" || exit 1
+  [ "$h" != all ] || die "pick one host for this: $(printf '%s\n' "$HOSTS" | awk -F'\t' '$2 != "hub" { print $1 }' | commas)"
+  if [ "$(htype "$h")" = hub ]; then
+    die "can't reach $h from $HERE: $h set this machine up over ssh, but there's no way back. Do the work here on $HERE, or set up ssh to $h and run: ca hosts add $h <ssh-target>"
+  fi
+  printf '%s\n' "$h"
+}
+
+ssh_only() { [ "$(htype "$1")" = ssh ] || die "$1 isn't an ssh host (see ca hosts)"; }
+
+hosts_cmd() {
+  local hid tg i ty nm w
+  case "${1:-list}" in
+    list)
+      printf '%s\n' "$HOSTS" | while IFS="$(printf '\t')" read -r i ty tg nm; do
+        case "$ty" in
+          local) w="this machine" ;;
+          ssh) w="ssh $tg" ;;
+          *) w="set this machine up, can't be reached from here" ;;
+        esac
+        printf '%-12s %-22s %s\n' "$i" "$nm" "$w"
+      done ;;
+    add)
+      [ $# -ge 3 ] || die "usage: ca hosts add <id> <ssh-target> [name...]"
+      hid="$2"; tg="$3"; shift 3
+      valid_id "$hid" || die "host ids are 1-40 chars of A-Z a-z 0-9 _ - (got '$hid')"
+      target_ok "$tg" || die "bad ssh target '$tg': it can't start with - or hold spaces or control characters"
+      [ "$hid" != "$HERE" ] || die "$hid is this machine"
+      case "$(htype "$hid")" in ""|hub) ;; *) die "$hid is already in hosts.json. Remove it first: ca hosts remove $hid" ;; esac
+      say "checking: ssh -o BatchMode=yes -o ConnectTimeout=10 $tg true"
+      ssh -o BatchMode=yes -o ConnectTimeout=10 "$tg" true < /dev/null \
+        || die "can't reach '$tg' with ssh without a prompt. Set up a key (and an alias in ~/.ssh/config if you like), then run this again"
+      hosts_edit add "$hid" "$tg" "$*"
+      say "added $hid (ssh $tg) to ~/.config/crossagent/hosts.json"
+      "$CA" __agents ;;
+    remove)
+      [ $# -eq 2 ] || die "usage: ca hosts remove <id>"
+      valid_id "$2" || die "host ids are 1-40 chars of A-Z a-z 0-9 _ - (got '$2')"
+      hosts_edit remove "$2" - ""
+      say "removed $2 from ~/.config/crossagent/hosts.json. A Crossover Portal to it stays open until you close it (mutagen sync list)"
+      "$CA" __agents ;;
+    *) die "usage: ca hosts [add <id> <ssh-target> [name...] | remove <id>]" ;;
+  esac
+}
+
+# Adds, removes or seeds (init: only the local entry, when there's no file) hosts.json.
+# Keeps every other entry and key, writes it whole, owner only.
+hosts_edit() {
+  python3 -I - "$HOSTS_FILE" "$1" "$2" "$3" "$4" "$HERE" "$(hname "$HERE")" <<'PY' || exit 1
+import json, os, sys
+path, op, hid, target, name, here, hname = sys.argv[1:8]
+ACCENTS = ["#5fd39a", "#f2a65a", "#c792ea", "#f07178", "#89ddff", "#ffcb6b"]
+
+
+def fail(m):
+    sys.stderr.write("ca: %s\n" % m)
+    sys.exit(1)
+
+
+name = " ".join(name.split())[:80]
+try:
+    with open(path) as f:
+        root = json.load(f)
+    if op == "init":
+        sys.exit(0)
+except FileNotFoundError:
+    root = {"hosts": [{"accent": "#6ea8fe", "id": here, "name": name if op == "init" and name else hname,
+                       "type": "local"}]}
+except ValueError as e:
+    fail("can not read %s (%s). Fix it by hand first" % (path, e))
+hosts = root.get("hosts") if isinstance(root, dict) else None
+if not isinstance(hosts, list):
+    fail("%s has no hosts list. Fix it by hand first" % path)
+idx = [n for n, h in enumerate(hosts) if isinstance(h, dict) and h.get("id") == hid]
+if op == "add":
+    if idx:
+        fail("%s is already in hosts.json" % hid)
+    used = set(h.get("accent") for h in hosts if isinstance(h, dict))
+    accent = next((a for a in ACCENTS if a not in used), ACCENTS[len(hosts) % len(ACCENTS)])
+    hosts.append({"accent": accent, "id": hid, "name": name or hid, "target": target, "type": "ssh"})
+elif op == "remove":
+    if not idx:
+        fail("no host %s in hosts.json" % hid)
+    if hosts[idx[0]].get("type") == "local":
+        fail("%s is this machine, it stays" % hid)
+    del hosts[idx[0]]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+tmp = path + ".tmp"
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    f.write(json.dumps(root, indent=2, sort_keys=True) + "\n")
+os.chmod(tmp, 0o600)
+os.replace(tmp, path)
+PY
+}
 
 # ---------- project ----------
 
@@ -39,8 +303,9 @@ set_root() {
   PROJ_CONF="$ROOT/.crossagent/project"
 }
 set_root "${CA_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-# The Mac passes its slug along so a PC folder with another name (pc_dir=) still matches.
+# The hub passes its slug along so a folder with another name there (dir.<host>=) still matches.
 SLUG="${CA_SLUG:-$SLUG}"
+case "$SLUG" in ""|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) die "bad project slug '$SLUG'" ;; esac
 
 # tmux session for a task in this project: ca-<slug>-<host>-<task>
 sname() { echo "ca-$SLUG-$1-$2"; }
@@ -48,75 +313,83 @@ sname() { echo "ca-$SLUG-$1-$2"; }
 # `ca portal start|stop <path>` works on another folder than the current one.
 root_from() {
   [ -d "$1" ] || die "no such folder: $1"
-  set_root "$(cd "$1" && { git rev-parse --show-toplevel 2>/dev/null || pwd; })"
+  set_root "$(cd -- "$1" && { git rev-parse --show-toplevel 2>/dev/null || pwd; })"
 }
 
 conf_get() { [ -f "$PROJ_CONF" ] && sed -n "s/^$1=//p" "$PROJ_CONF" | head -1 || true; }
 conf_list() { conf_get "$1" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' || true; }
 
-# Same path relative to home on both machines (~/Projects/x <-> ~/Projects/x).
-# Projects outside home go to ~/crossagent/projects/<name>. pc_dir= in .crossagent/project overrides.
-pc_dir() {
-  local d; d="$(conf_get pc_dir)"
-  if [ -n "$d" ]; then echo "$d"; return; fi
-  case "$ROOT" in "$HOME"/*) echo "${ROOT#"$HOME"/}" ;; *) echo "crossagent/projects/$NAME" ;; esac
-}
-
-# ---------- hosts ----------
-
-resolve() {
-  local w
-  w="$(echo "$*" | tr 'A-Z' 'a-z' | sed -E 's/^ *//; s/ *$//; s/^(on|in|at) +//; s/^(my|this|the) +//')"
-  case "$w" in
-    local|mac|macbook|laptop|here|localhost) echo mac ;;
-    pc|ssh|overseas|linux|remote|desktop|ubuntu|box) echo pc ;;
-    ""|both|split|all|everywhere) echo both ;;
-    *) return 1 ;;
-  esac
-}
-
-host_arg() {
-  local h
-  h="$(resolve "$1")" || die "unknown host '$1' (use mac, pc or a nickname, see ca help)"
-  [ "$h" = both ] && die "pick one host for this, mac or pc"
-  if [ "$HERE" = pc ] && [ "$h" = mac ]; then
-    die "running on the PC, which can't reach the Mac. Everything runs here, use 'pc'"
+# Where the project lives on host $1, relative to home: the same path as here
+# (~/Projects/x <-> ~/Projects/x), or ~/crossagent/projects/<name> for projects outside
+# home. dir.<host>= in .crossagent/project overrides it (pc_dir= still counts as dir.pc=).
+# A repo could ship that file, so an override has to stay a plain folder under home.
+host_dir() {
+  local d; d="$(conf_get "dir\\.$1")"
+  [ -n "$d" ] || [ "$1" != pc ] || d="$(conf_get pc_dir)"
+  if [ -n "$d" ]; then
+    d="${d#\~/}"
+    case "/$d/" in
+      //*|*/../*|*/./*|/.*) die "dir.$1=$d in .crossagent/project has to be a folder under home: relative, no . or .. parts, not hidden" ;;
+    esac
+    printf '%s\n' "${d%/}"; return
   fi
-  echo "$h"
+  case "$ROOT" in "$HOME"/*) printf '%s\n' "${ROOT#"$HOME"/}" ;; *) echo "crossagent/projects/$NAME" ;; esac
 }
 
-# Run "$@" on the PC inside the project's PC dir with the PC's own ca. Read only
-# calls (probe, status) run in home if the folder isn't there, so a Mac only
-# project never leaves an empty folder on the PC.
-on_pc() {
-  local dir mk; dir="$(pc_dir)"
+# A path relative to home as one word for the remote shell. ./ keeps a leading - from
+# reading as an option.
+rq() { case "$1" in /*) q "$1" ;; *) q "./$1" ;; esac; }
+
+# ---------- reaching other hosts ----------
+
+# Runs "$@" with ca on <host>, in the project's folder there. Read only calls (probe,
+# status) run in home if the folder isn't there, so a local only project never leaves an
+# empty folder behind. CA_REMOTE_LOCAL=<dir> runs it right here in <dir> (tests).
+on_host() {
+  local h="$1" d mk; shift
+  if [ -n "${CA_REMOTE_LOCAL:-}" ]; then
+    (cd "$CA_REMOTE_LOCAL" && CA_HERE="$h" CA_ROOT="$CA_REMOTE_LOCAL" CA_SLUG="$SLUG" "$CA" "$@"); return
+  fi
+  [ "$(htype "$h")" = ssh ] || die "no way to reach $h from $HERE"
+  d="$(host_dir "$h")" || exit 1
   case "$1" in
-    __probe|__status|__remote_answer) mk="{ cd $(q "$dir") 2>/dev/null || cd; }" ;;
+    __probe|__status|__remote_answer) mk="{ cd $(rq "$d") 2>/dev/null || cd; }" ;;
     __remote_status|__remote_wait|__remote_stop)
-      mk="{ cd $(q "$dir") 2>/dev/null || { echo 'ca: no ~/'$(q "$dir")' on the PC, so no remote workers there' >&2; exit 1; }; }" ;;
-    *) mk="mkdir -p $(q "$dir") && cd $(q "$dir")" ;;
+      mk="{ cd $(rq "$d") 2>/dev/null || { echo $(q "ca: no ~/$d on $h, so no remote workers there") >&2; exit 1; }; }" ;;
+    *) mk="mkdir -p $(rq "$d") && cd $(rq "$d")" ;;
   esac
   # shellcheck disable=SC2086
-  ssh $SSH_OPTS pc "PATH=\$HOME/.local/bin:\$PATH; $mk && CA_ROOT=\$PWD CA_SLUG=$(q "$SLUG") exec $RCA$(qall "$@")"
+  ssh $SSH_OPTS "$(htarget "$h")" "PATH=\$HOME/.local/bin:\$PATH; $mk && CA_ROOT=\$PWD CA_SLUG=$(q "$SLUG") CA_HERE=$(q "$h") exec $RCA$(qall "$@")"
 }
 
 remote_ok() {
   # shellcheck disable=SC2086
-  ssh $SSH_OPTS -o ConnectTimeout=20 pc "test -x $RCA" 2>/dev/null
+  ssh $SSH_OPTS -o ConnectTimeout=20 "$(htarget "$1")" "test -x $RCA" < /dev/null 2>/dev/null
 }
 
-# Checksum of the scripts the PC runs, to spot an outdated copy there.
-SKILL_FILES="ca ca-stream.py ca-approve.py"
-skill_sum() { (cd "$SKILL_DIR/scripts" && cat $SKILL_FILES 2>/dev/null | cksum); }
+# Checksum of the skill files other hosts run, to spot an outdated copy there.
+SKILL_FILES="scripts/ca scripts/ca-stream.py scripts/ca-approve.py scripts/claude-wrapper.sh agents/worker.md.tmpl"
+skill_sum() { (cd "$SKILL_DIR" && cat $SKILL_FILES 2>/dev/null | cksum); }
 
 ensure_remote() {
+  local h="$1" t; t="$(htarget "$h")"
   # shellcheck disable=SC2086
-  ssh $SSH_OPTS -o ConnectTimeout=20 pc true 2>/dev/null || die "can't reach the PC with 'ssh pc'. Is it on?"
-  if ! remote_ok; then say "skill missing on the PC, installing"; "$SKILL_DIR/install.sh" --pc >&2
+  ssh $SSH_OPTS -o ConnectTimeout=20 "$t" true < /dev/null 2>/dev/null || die "can't reach $h with 'ssh $t'. Is it on?"
+  if ! remote_ok "$h"; then say "skill missing on $h, installing"; "$SKILL_DIR/install.sh" --host "$h" >&2
   # shellcheck disable=SC2086
-  elif [ "$(ssh $SSH_OPTS pc "cd ~/.claude/skills/crossagent/scripts && cat $SKILL_FILES 2>/dev/null | cksum")" != "$(skill_sum)" ]; then
-    say "skill on the PC is out of date, updating"; "$SKILL_DIR/install.sh" --pc >&2
+  elif [ "$(ssh $SSH_OPTS "$t" "cd ~/.claude/skills/crossagent && cat $SKILL_FILES 2>/dev/null | cksum" < /dev/null)" != "$(skill_sum)" ]; then
+    say "skill on $h is out of date, updating"; "$SKILL_DIR/install.sh" --host "$h" >&2
   fi
+}
+
+# Runs on a host right after install.sh copied the skill there from hub $1: notes the hub,
+# seeds hosts.json with this machine if there's none, writes the worker definitions.
+setup_remote() {
+  valid_id "$1" || die "bad hub id '$1'"
+  mkdir -p "$CONF"
+  [ -e "$HOSTS_FILE" ] || { hosts_edit init - - "${2:-}"; say "wrote ~/.config/crossagent/hosts.json, this machine is $HERE"; }
+  if [ "$1" != "$HERE" ] && ! grep -qxF "$1" "$HUBS_FILE" 2>/dev/null; then printf '%s\n' "$1" >> "$HUBS_FILE"; fi
+  "$CA" __agents
 }
 
 # ---------- one-off copies (push, pull) ----------
@@ -127,37 +400,77 @@ EXCLUDES=(
   --exclude=.next --exclude=.gradle --exclude=.cache --exclude=.pytest_cache
   --exclude=/build/ --exclude=/dist/ --exclude=/target/ --exclude=/out/
   --exclude=/.crossagent/logs/ --exclude=/.crossagent/results/
-  --exclude=/.crossagent/run/ --exclude=/.crossagent/pc/
+  --exclude=/.crossagent/run/ --exclude=/.crossagent/pc/ --exclude=/.crossagent/hosts/
 )
 
+# rsync's remote path. GNU rsync 3 sends it whole with -s. openrsync (macOS) and old rsync
+# hand it to the remote shell, so it gets quoted for that shell instead.
+RS_PROTECT=""
+rsync_mode() {
+  [ -z "$RS_PROTECT" ] || return 0
+  case "$(rsync --version 2>&1 | head -1)" in
+    *openrsync*|*" version 2."*) RS_PROTECT=no ;;
+    *) RS_PROTECT=yes ;;
+  esac
+}
+rs_remote() {
+  local p; case "$2" in /*) p="$2" ;; *) p="./$2" ;; esac
+  if [ "$RS_PROTECT" = yes ]; then printf '%s:%s' "$1" "$p"; else printf '%s:%s' "$1" "$(q "$p")"; fi
+}
+rs() {
+  # shellcheck disable=SC2046
+  rsync -az $([ "$RS_PROTECT" = yes ] && echo -s) -e "ssh $SSH_OPTS" "$@"
+}
+
+# The one ssh host when --host isn't given.
+one_ssh_host() {
+  local n; n="$(ssh_hosts)"
+  case "$(printf '%s\n' "$n" | grep -c .)" in
+    1) printf '%s\n' "$n" ;;
+    0) die "no ssh hosts set up (ca hosts add <id> <ssh-target>)" ;;
+    *) die "say which host with --host ($(printf '%s\n' "$n" | commas))" ;;
+  esac
+}
+
 push() {
-  [ "$HERE" = mac ] || die "push only makes sense on the Mac"
-  local dir del=""; dir="$(pc_dir)"
+  local h="$1" d t del=""; shift
   [ "${1:-}" = --delete ] && del="--delete"
+  d="$(host_dir "$h")" || exit 1; t="$(htarget "$h")"; rsync_mode
   # shellcheck disable=SC2086
-  ssh $SSH_OPTS pc "mkdir -p $(q "$dir")"
+  ssh $SSH_OPTS "$t" "mkdir -p $(rq "$d")" < /dev/null
   # shellcheck disable=SC2086
-  rsync -az $del "${EXCLUDES[@]}" -e "ssh $SSH_OPTS" "$ROOT/" "pc:$dir/"
-  say "pushed $NAME to pc:~/$dir"
+  rs $del "${EXCLUDES[@]}" "$ROOT/" "$(rs_remote "$t" "$d/")"
+  say "pushed $NAME to $h:~/$d"
 }
 
 pull() {
-  [ "$HERE" = mac ] || die "pull only makes sense on the Mac"
-  local dir p; dir="$(pc_dir)"
+  local h="$1" d t p; shift
+  d="$(host_dir "$h")" || exit 1; t="$(htarget "$h")"; rsync_mode
   if [ $# -eq 0 ]; then
-    mkdir -p "$ROOT/.crossagent/pc"
+    mkdir -p "$ROOT/.crossagent/hosts/$h"
     for p in logs results; do
-      rsync -az -e "ssh $SSH_OPTS" "pc:$dir/.crossagent/$p" "$ROOT/.crossagent/pc/" 2>/dev/null || true
+      rs "$(rs_remote "$t" "$d/.crossagent/$p")" "$ROOT/.crossagent/hosts/$h/" 2>/dev/null || true
     done
-    say "pulled PC logs and results into .crossagent/pc/"
+    say "pulled $h's logs and results into .crossagent/hosts/$h/"
     return
   fi
   for p in "$@"; do
     p="${p%/}"
-    case "$p" in /*|*..*) die "pull takes paths relative to the project: $p" ;; esac
+    case "$p" in ""|/*|*..*) die "pull takes paths relative to the project: $p" ;; esac
     mkdir -p "$ROOT/$(dirname "$p")"
-    rsync -az -e "ssh $SSH_OPTS" "pc:$dir/$p" "$ROOT/$(dirname "$p")/"
+    rs "$(rs_remote "$t" "$d/$p")" "$ROOT/$(dirname "$p")/"
     say "pulled $p"
+  done
+}
+
+# Hosts from --host <id> options (default: every ssh host) into PHOSTS, the rest into PARGS.
+portal_args() {
+  local h; PHOSTS=""; PARGS=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --host) [ $# -ge 2 ] || die "--host needs a host id"; h="$(host_arg "$2")" || exit 1; ssh_only "$h"; PHOSTS="$PHOSTS $h"; shift 2 ;;
+      *) PARGS+=("$1"); shift ;;
+    esac
   done
 }
 
@@ -172,14 +485,20 @@ SYNC_IGNORES=(.build build DerivedData node_modules target dist .venv venv __pyc
 # Secrets stay put unless the project opts in with sync_allow= in .crossagent/project.
 SECRET_IGNORES=(.env '.env.*' '*.pem' '*.key' 'id_*')
 
-sess() { echo "ca-$(echo "$NAME" | tr -c 'A-Za-z0-9\n' '-' | sed 's/--*/-/g; s/^-//; s/-$//')"; }
+# The Portal to host $1: ca-<project> for the first ssh host in hosts.json (the name from
+# before there could be several, so those Portals live on), ca-<project>-<host> for others.
+sess() {
+  local b; b="ca-$(printf %s "$NAME" | tr -c 'A-Za-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//')"
+  [ "$b" != ca- ] || b=ca-project
+  if [ "$1" = "$(first_ssh)" ]; then printf '%s\n' "$b"; else printf '%s\n' "$b-$1"; fi
+}
 have_mutagen() { command -v mutagen >/dev/null 2>&1; }
 need_mutagen() {
-  [ "$HERE" = mac ] || die "the Crossover Portal is driven from the Mac"
+  [ -n "$(ssh_hosts)" ] || die "no ssh hosts set up, so there's nothing to open a Portal to (ca hosts add <id> <ssh-target>)"
   have_mutagen || die "mutagen isn't installed: brew install mutagen-io/mutagen/mutagen"
 }
-sync_exists() { mutagen sync list "$(sess)" >/dev/null 2>&1; }
-sync_active() { [ "$HERE" = mac ] && have_mutagen && sync_exists; }
+sync_exists() { mutagen sync list "$(sess "$1")" >/dev/null 2>&1; }
+sync_active() { [ "$(htype "$1")" = ssh ] && have_mutagen && sync_exists "$1"; }
 
 build_sync_args() {
   local p
@@ -190,7 +509,7 @@ build_sync_args() {
   while IFS= read -r p; do SARGS+=("--ignore=!$p"); done < <(conf_list sync_allow)
 }
 
-# name, status, paused, conflicts, problems, mac path, pc path, last error (last, it's often empty)
+# name, status, paused, conflicts, problems, local path, host:path, last error (last, it's often empty)
 SYNC_TPL='{{range .}}{{.Name}}	{{.Status}}	{{.Paused}}	{{len .Conflicts}}	{{len .Alpha.ScanProblems}}{{len .Alpha.TransitionProblems}}{{len .Beta.ScanProblems}}{{len .Beta.TransitionProblems}}	{{.Alpha.Path}}	{{.Beta.Host}}:{{.Beta.Path}}	{{.LastError}}
 {{end}}'
 
@@ -211,56 +530,83 @@ sync_word() {
   esac; fi
 }
 
+# ca portal start [--force] [--host <id>]... [path]
 sync_start() {
-  need_mutagen
-  local force="" s pcd hash cur r
+  local force="" h
+  portal_args "$@"; set -- ${PARGS[@]+"${PARGS[@]}"}
   [ "${1:-}" = --force ] && { force=1; shift; }
+  need_mutagen
   [ $# -eq 0 ] || root_from "$1"
   [ "$ROOT" != "$HOME" ] || die "won't open a Portal on your whole home folder, run this in a project"
-  s="$(sess)"; pcd="$(pc_dir)"
+  for h in ${PHOSTS:-$(ssh_hosts)}; do sync_start_one "$h" "$force"; done
+}
+
+sync_start_one() {
+  local h="$1" force="$2" s pcd hash cur r t
+  s="$(sess "$h")"; pcd="$(host_dir "$h")" || exit 1; t="$(htarget "$h")"
   build_sync_args
   hash="$(printf '%s\n' "${SARGS[@]}" "$ROOT" "$pcd" | shasum | cut -c1-12)"
   if cur="$(mutagen sync list "$s" --template '{{range .}}{{index .Labels "ca-cfg"}}{{end}}' 2>/dev/null)"; then
     if [ "$cur" = "$hash" ]; then
       mutagen sync resume "$s" >/dev/null 2>&1 || true
       say "Portal $s already open"
-      sync_flush
+      sync_flush_one "$h"
       return
     fi
     say "Portal rules or paths changed, recreating $s (files stay where they are)"
     mutagen sync terminate "$s" >/dev/null
   fi
-  ensure_remote
-  # Make the PC folder (mutagen won't create parents) and refuse to merge into a folder
+  ensure_remote "$h"
+  # Make the folder there (mutagen won't create parents) and refuse to merge into a folder
   # that holds something else. The marker lives in .crossagent/, which never syncs.
   # shellcheck disable=SC2086
-  r="$(ssh $SSH_OPTS pc "cd && if [ -n \"\$(ls -A $(q "$pcd") 2>/dev/null)\" ] && ! grep -qx $(q "name=$NAME") $(q "$pcd/.crossagent/project") 2>/dev/null; then echo foreign; else mkdir -p $(q "$pcd/.crossagent") && printf 'name=%s\n' $(q "$NAME") > $(q "$pcd/.crossagent/project") && echo ok; fi")"
+  r="$(ssh $SSH_OPTS "$t" "cd && if [ -n \"\$(ls -A $(rq "$pcd") 2>/dev/null)\" ] && ! grep -qx $(q "name=$NAME") $(rq "$pcd/.crossagent/project") 2>/dev/null; then echo foreign; else mkdir -p $(rq "$pcd/.crossagent") && printf 'name=%s\n' $(q "$NAME") > $(rq "$pcd/.crossagent/project") && echo ok; fi" < /dev/null)"
   if [ "$r" = foreign ] && [ -z "$force" ]; then
-    die "~/$pcd on the PC already has files that aren't this project. Move them, set pc_dir= in .crossagent/project, or run 'ca portal start --force' to merge (conflicts get flagged, nothing is overwritten)"
+    die "~/$pcd on $h already has files that aren't this project. Move them, set dir.$h= in .crossagent/project, or run 'ca portal start --force' to merge (conflicts get flagged, nothing is overwritten)"
   fi
-  [ "$r" = ok ] || [ -n "$force" ] || die "couldn't prepare ~/$pcd on the PC"
-  mutagen sync create --name="$s" --label="ca-cfg=$hash" "${SARGS[@]}" "$ROOT" "pc:~/$pcd" >/dev/null
-  say "Crossover Portal open: $(echo "$ROOT" | sed "s|^$HOME|~|") <-> pc:~/$pcd ($s)"
-  sync_flush
+  [ "$r" = ok ] || [ -n "$force" ] || die "couldn't prepare ~/$pcd on $h"
+  mutagen sync create --name="$s" --label="ca-cfg=$hash" "${SARGS[@]}" "$ROOT" "$t:~/$pcd" >/dev/null
+  say "Crossover Portal open: $(tilde "$ROOT") <-> $h:~/$pcd ($s)"
+  sync_flush_one "$h"
+}
+
+# ca portal flush [--host <id>]: every open Portal of this project, or the named ones.
+sync_flush() {
+  local h any="" rc=0
+  portal_args "$@"
+  need_mutagen
+  for h in ${PHOSTS:-$(ssh_hosts)}; do
+    if [ -z "$PHOSTS" ] && ! sync_exists "$h"; then continue; fi
+    any=1; sync_flush_one "$h" || rc=$?
+  done
+  [ -n "$any" ] || die "no Portal for $NAME, run: ca portal start"
+  return "$rc"
+}
+
+# Flushes the open Portals to the given hosts (default: all). Stops at a conflict (3).
+flush_active() {
+  local h
+  for h in ${*:-$(ssh_hosts)}; do
+    if sync_active "$h"; then sync_flush_one "$h" || return $?; fi
+  done
 }
 
 # Waits for a full cycle. Exits non zero on conflicts or errors so nobody hands off stale or clashing files.
-sync_flush() {
-  need_mutagen
-  local s row word i; s="$(sess)"
-  sync_exists || die "no Portal for $NAME, run: ca portal start"
+sync_flush_one() {
+  local h="$1" s row word i; s="$(sess "$1")"
+  sync_exists "$h" || die "no Portal for $NAME to $h, run: ca portal start --host $h"
   row="$(sync_rows "$s")"
-  [ "$(echo "$row" | cut -f3)" = true ] && { sync_note "$s" paused; die "$s is paused, resume it with: mutagen sync resume $s"; }
-  mutagen sync flush "$s" >/dev/null 2>&1 || { sync_note "$s" "flush failed"; die "couldn't flush $s, is the PC reachable? (ca portal status)"; }
+  [ "$(echo "$row" | cut -f3)" = true ] && { sync_note "$h" paused; die "$s is paused, resume it with: mutagen sync resume $s"; }
+  mutagen sync flush "$s" >/dev/null 2>&1 || { sync_note "$h" "flush failed"; die "couldn't flush $s, is $h reachable? (ca portal status)"; }
   # Flush can return while Mutagen is still rescanning (say right after a conflict is
   # resolved). Give transitional states (scanning, staging, reconciling...) up to ~10 s.
   for i in 1 2 3 4 5 6 7 8 9 10 11; do
     row="$(sync_rows "$s")"; word="$(sync_word "$row")"
     case "$word" in syncing*) [ "$i" -lt 11 ] && sleep 1 ;; *) break ;; esac
   done
-  sync_note "$s" "$word"
+  sync_note "$h" "$word"
   case "$word" in
-    watching*) say "Portal flushed, $NAME is in sync"; sync_problems "$s" >&2 ;;
+    watching*) say "Portal flushed, $NAME is in sync with $h"; sync_problems "$s" >&2 ;;
     conflicts*) say "$s has $word. Stop and sort them out first:"; sync_conflicts >&2; return 3 ;;
     *) die "$s: $word" ;;
   esac
@@ -268,10 +614,10 @@ sync_flush() {
 
 # Paths Mutagen skipped (absolute symlinks, unreadable files). Not fatal, but worth knowing.
 sync_problems() {
-  mutagen sync list "$@" --template '{{range .}}{{$n := .Name}}{{range .Alpha.ScanProblems}}{{$n}}	mac	{{.Path}}	{{.Error}}
-{{end}}{{range .Beta.ScanProblems}}{{$n}}	pc	{{.Path}}	{{.Error}}
-{{end}}{{range .Alpha.TransitionProblems}}{{$n}}	mac	{{.Path}}	{{.Error}}
-{{end}}{{range .Beta.TransitionProblems}}{{$n}}	pc	{{.Path}}	{{.Error}}
+  mutagen sync list "$@" --template '{{range .}}{{$n := .Name}}{{$b := .Beta.Host}}{{range .Alpha.ScanProblems}}{{$n}}	'"$HERE"'	{{.Path}}	{{.Error}}
+{{end}}{{range .Beta.ScanProblems}}{{$n}}	{{$b}}	{{.Path}}	{{.Error}}
+{{end}}{{range .Alpha.TransitionProblems}}{{$n}}	'"$HERE"'	{{.Path}}	{{.Error}}
+{{end}}{{range .Beta.TransitionProblems}}{{$n}}	{{$b}}	{{.Path}}	{{.Error}}
 {{end}}{{end}}' 2>/dev/null | awk -F'\t' '$1 ~ /^ca-/ {print "  skipped on " $2 ": " $3 " (" $4 ")"}' || true
 }
 
@@ -282,7 +628,7 @@ sync_status() {
   [ -n "$rows" ] || { echo "no Crossover Portals open"; return 0; }
   while IFS= read -r row; do
     printf '%-26s %-22s %s <-> %s\n' "$(echo "$row" | cut -f1)" "$(sync_word "$row")" \
-      "$(echo "$row" | cut -f6 | sed "s|^$HOME|~|")" "$(echo "$row" | cut -f7)"
+      "$(tilde "$(echo "$row" | cut -f6)")" "$(echo "$row" | cut -f7)"
     sync_problems "$(echo "$row" | cut -f1)"
   done <<< "$rows"
 }
@@ -296,71 +642,83 @@ change() {
   esac
 }
 
-stat_mac() { [ -e "$1" ] && /usr/bin/stat -f '%z bytes, modified %Sm' -t '%Y-%m-%d %H:%M:%S' "$1" || echo missing; }
+stat_local() {
+  [ -e "$1" ] || { echo missing; return; }
+  if [ "$UNAME" = Darwin ]; then /usr/bin/stat -f '%z bytes, modified %Sm' -t '%Y-%m-%d %H:%M:%S' "$1"
+  else stat -c '%s bytes, modified %y' "$1" | cut -d. -f1; fi
+}
+
+# A host id for an ssh target, for messages.
+target_host() { printf '%s\n' "$HOSTS" | awk -F'\t' -v t="$1" '$2 == "ssh" && $3 == t { print $1; f = 1; exit } END { if (!f) print t }'; }
 
 # Every conflict with what each side did and what's there now. Never resolves anything.
 sync_conflicts() {
   need_mutagen
-  local spec=() n=0 sname mac pcp root=""
-  sync_exists && spec=("$(sess)")
+  local n=0 sn mine there tgt hid root="" p
   hint() {
     [ -n "$root" ] || return 0
-    echo "  keep the Mac version: ssh pc 'rm -r ~/$pcp/$root', then ca portal flush"
-    echo "  keep the PC version:  rm -r '$mac/$root', then ca portal flush"
+    echo "  keep the $HERE version: ssh $tgt $(q "rm -r $(rq "$there/$root")"), then ca portal flush"
+    echo "  keep the $hid version:  rm -r $(q "$mine/$root"), then ca portal flush"
     root=""
   }
   while IFS=$'\t' read -r tag a b c d; do
     case "$tag" in
-      S) hint; sname="$a"; mac="$b"; pcp="${c#\~/}" ;;
+      S) hint; sn="$a"; mine="$b"; there="${c#\~/}"; tgt="$d"; hid="$(target_host "$d")" ;;
       R) hint; root="$a"; n=$((n + 1))
-         echo "$sname: $root"
-         echo "  mac  $(stat_mac "$mac/$root")"
+         echo "$sn: $root"
+         printf '  %-6s %s\n' "$HERE" "$(stat_local "$mine/$root")"
+         p="$(rq "$there/$root")"
          # -n: ssh must not eat the rest of this loop's input
          # shellcheck disable=SC2086
-         echo "  pc   $(ssh -n $SSH_OPTS -o ConnectTimeout=20 pc "cd && stat -c '%s bytes, modified %y' $(q "$pcp/$root") 2>/dev/null | cut -d. -f1 | grep . || echo missing" 2>/dev/null || echo unreachable)"
-         conflict_diff "$mac/$root" "$pcp/$root" ;;
-      C) echo "  $a changed $b: $(change "$(echo "$c" | tr 'A-Z' 'a-z')" "$(echo "$d" | tr 'A-Z' 'a-z')")" ;;
+         printf '  %-6s %s\n' "$hid" "$(ssh -n $SSH_OPTS -o ConnectTimeout=20 "$tgt" "cd && { stat -c '%s bytes, modified %y' $p 2>/dev/null | cut -d. -f1 | grep . || stat -f '%z bytes, modified %Sm' -t '%Y-%m-%d %H:%M:%S' $p 2>/dev/null || echo missing; }" 2>/dev/null || echo unreachable)"
+         conflict_diff "$mine/$root" "$there/$root" "$tgt" "$hid" ;;
+      C) echo "  $([ "$a" = A ] && echo "$HERE" || echo "$hid") changed $b: $(change "$(echo "$c" | tr 'A-Z' 'a-z')" "$(echo "$d" | tr 'A-Z' 'a-z')")" ;;
     esac
-  done < <(mutagen sync list ${spec[@]+"${spec[@]}"} --template '{{range .}}S	{{.Name}}	{{.Alpha.Path}}	{{.Beta.Path}}
+  done < <(mutagen sync list --template '{{range .}}S	{{.Name}}	{{.Alpha.Path}}	{{.Beta.Path}}	{{.Beta.Host}}
 {{range .Conflicts}}R	{{.Root}}
-{{range .AlphaChanges}}C	mac	{{.Path}}	{{if .Old}}{{.Old.Kind}}{{else}}none{{end}}	{{if .New}}{{.New.Kind}}{{else}}none{{end}}
-{{end}}{{range .BetaChanges}}C	pc	{{.Path}}	{{if .Old}}{{.Old.Kind}}{{else}}none{{end}}	{{if .New}}{{.New.Kind}}{{else}}none{{end}}
+{{range .AlphaChanges}}C	A	{{.Path}}	{{if .Old}}{{.Old.Kind}}{{else}}none{{end}}	{{if .New}}{{.New.Kind}}{{else}}none{{end}}
+{{end}}{{range .BetaChanges}}C	B	{{.Path}}	{{if .Old}}{{.Old.Kind}}{{else}}none{{end}}	{{if .New}}{{.New.Kind}}{{else}}none{{end}}
 {{end}}{{end}}{{end}}' 2>/dev/null | awk -F'\t' '$1=="S"{ok=($2 ~ /^ca-/)} ok')
   hint
   if [ "$n" = 0 ]; then echo "no conflicts"; return 0; fi
   echo
-  echo "Nothing was overwritten. Pick a side per file (or merge by hand on the Mac, then delete the PC copy)."
+  echo "Nothing was overwritten. Pick a side per file (or merge by hand on $HERE, then delete the other copy)."
 }
 
-# Short diff (mac vs pc) when both sides are small text files.
+# Short diff (here vs there) when both sides are small text files.
 conflict_diff() {
-  [ -f "$1" ] && [ "$(/usr/bin/stat -f %z "$1")" -lt 65536 ] && grep -Iq . "$1" 2>/dev/null || return 0
-  local tmp; tmp="$(mktemp)"
+  [ -f "$1" ] && [ "$(wc -c < "$1")" -lt 65536 ] && grep -Iq . "$1" 2>/dev/null || return 0
+  local tmp p; tmp="$(mktemp)"; p="$(rq "$2")"
   # shellcheck disable=SC2086
-  if ssh -n $SSH_OPTS -o ConnectTimeout=20 pc "cd && [ \$(stat -c %s $(q "$2")) -lt 65536 ] && grep -Iq . $(q "$2") && cat $(q "$2")" > "$tmp" 2>/dev/null; then
-    diff -u --label mac --label pc "$1" "$tmp" | sed -n '3,22p' | sed 's/^/    /'
+  if ssh -n $SSH_OPTS -o ConnectTimeout=20 "$3" "cd && [ \$(wc -c < $p) -lt 65536 ] && grep -Iq . $p && cat $p" > "$tmp" 2>/dev/null; then
+    diff -u --label "$HERE" --label "$4" "$1" "$tmp" | sed -n '3,22p' | sed 's/^/    /'
   fi
   rm -f "$tmp"
 }
 
+# ca portal stop [--host <id>]... [path]
 sync_stop() {
+  local h s
+  portal_args "$@"; set -- ${PARGS[@]+"${PARGS[@]}"}
   need_mutagen
   [ $# -eq 0 ] || root_from "$1"
-  local s; s="$(sess)"
-  if sync_exists; then
-    mutagen sync terminate "$s" >/dev/null
-    sync_note "$s" stopped
-    echo "closed Portal $s, files stay on both machines"
-  else
-    echo "Portal $s wasn't open"
-  fi
+  for h in ${PHOSTS:-$(ssh_hosts)}; do
+    s="$(sess "$h")"
+    if sync_exists "$h"; then
+      mutagen sync terminate "$s" >/dev/null
+      sync_note "$h" stopped
+      echo "closed Portal $s, files stay on both machines"
+    elif [ -n "$PHOSTS" ]; then
+      echo "Portal $s wasn't open"
+    fi
+  done
 }
 
 # ---------- system map ----------
 
 probe() {
   local os cpu cores ram disk
-  if [ "$(uname -s)" = Darwin ]; then
+  if [ "$UNAME" = Darwin ]; then
     os="$(sw_vers -productName) $(sw_vers -productVersion) ($(uname -m))"
     cpu="$(sysctl -n machdep.cpu.brand_string), model $(sysctl -n hw.model)"
     cores="$(sysctl -n hw.ncpu) cores ($(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || echo ?) performance)"
@@ -376,6 +734,9 @@ probe() {
   echo "- CPU: $cpu"
   echo "- Cores: $cores"
   echo "- RAM: $ram"
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    echo "- GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -3 | paste -sd ';' - | sed 's/;/; /g')"
+  fi
   echo "- Disk (home): $disk"
   echo "- Shell: $(basename "${SHELL:-sh}")"
   echo "- Tools:"
@@ -390,86 +751,105 @@ probe() {
       docker) v="$(docker --version 2>/dev/null)" ;;
       *) v="$("$t" --version 2>&1 | head -1)" ;;
     esac
-    echo "  - $t: $v ($(command -v "$t" | sed "s|^$HOME|~|"))"
+    echo "  - $t: $v ($(tilde "$(command -v "$t")"))"
   done
   echo "- Skill: ~/.claude/skills/crossagent (ca at ~/.claude/skills/crossagent/scripts/ca)"
 }
 
 block() { [ -f "$MAP" ] && awk -v s="<!-- ca:$1 -->" -v e="<!-- /ca:$1 -->" '$0==s{f=1;next} $0==e{f=0} f' "$MAP" || true; }
 
-# projects file: name, mac path, pc path, portal session, last portal status (tab separated)
-register_project() {
+# projects file: name, path here, host (- for none), path there, Portal session, last
+# Portal status (tab separated). Rows from before there could be several hosts have 5
+# columns and were all for pc.
+projects_rows() {
+  awk -F'\t' -v OFS='\t' 'NF == 5 { print $1, $2, "pc", $3, $4, $5; next } NF >= 6' "$CONF/projects" 2>/dev/null || true
+}
+
+register_project() {  # host|- [session] [status]
   mkdir -p "$CONF"
-  local f="$CONF/projects" macd="-" pcd old
-  [ "$HERE" = mac ] && macd="$(echo "$ROOT" | sed "s|^$HOME|~|")"
-  pcd="~/$(pc_dir)"
-  touch "$f"
-  old="$(awk -F'\t' -v n="$NAME" '$1==n' "$f")"
-  grep -v "^$NAME	" "$f" > "$f.tmp" || true
-  printf '%s\t%s\t%s\t%s\t%s\n' "$NAME" "$macd" "$pcd" \
-    "${1:-$(echo "$old" | cut -sf4)}" "${2:-$(echo "$old" | cut -sf5)}" >> "$f.tmp"
-  sort "$f.tmp" > "$f" && rm -f "$f.tmp"
+  local f="$CONF/projects" h="${1:--}" there old
+  if [ "$h" = - ]; then there=-; else there="~/$(host_dir "$h")"; fi
+  old="$(projects_rows | awk -F'\t' -v n="$NAME" -v h="$h" '$1 == n && $3 == h')"
+  {
+    projects_rows | awk -F'\t' -v n="$NAME" -v h="$h" '!($1 == n && ($3 == h || $3 == "-"))'
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$NAME" "$(tilde "$ROOT")" "$h" "$there" \
+      "${2:-$(printf '%s\n' "$old" | cut -sf5)}" "${3:-$(printf '%s\n' "$old" | cut -sf6)}"
+  } | sort > "$f.tmp"
+  mv "$f.tmp" "$f"
 }
 
 projects_table() {
-  echo "| project | mac | pc | portal session | last portal status |"
-  echo "|---|---|---|---|---|"
-  awk -F'\t' '{print "| "$1" | "$2" | "$3" | "($4==""?"-":$4)" | "($5==""?"-":$5)" |"}' "$CONF/projects" 2>/dev/null || true
+  echo "| project | path | host | path there | portal session | last portal status |"
+  echo "|---|---|---|---|---|---|"
+  projects_rows | awk -F'\t' '{print "| "$1" | "$2" | "$3" | "$4" | "($5==""?"-":$5)" | "($6==""?"-":$6)" |"}'
 }
 
-copy_map_to_pc() {
+copy_map_to() {
   # shellcheck disable=SC2086
-  ssh $SSH_OPTS -o ConnectTimeout=10 pc 'mkdir -p ~/.config/crossagent && cat > ~/.config/crossagent/system-map.md' < "$MAP" 2>/dev/null || true
+  ssh $SSH_OPTS -o ConnectTimeout=10 "$(htarget "$1")" 'mkdir -p ~/.config/crossagent && cat > ~/.config/crossagent/system-map.md' < "$MAP" 2>/dev/null || true
 }
 
 # Record a Portal status in the map, only when it changed, so flushes stay cheap.
 sync_note() {
-  local cur
-  cur="$(awk -F'\t' -v n="$NAME" '$1==n{print $5}' "$CONF/projects" 2>/dev/null | sed 's/ (since .*//')"
+  local h="$1" cur
+  cur="$(projects_rows | awk -F'\t' -v n="$NAME" -v h="$h" '$1 == n && $3 == h {print $6}' | sed 's/ (since .*//')"
   [ "$cur" = "$2" ] && return 0
-  register_project "$1" "$2 (since $(date '+%Y-%m-%d %H:%M'))"
+  register_project "$h" "$(sess "$h")" "$2 (since $(date '+%Y-%m-%d %H:%M'))"
   [ -f "$MAP" ] || return 0
   TBL="$(projects_table)" awk '/^## Projects$/{print; print ""; print ENVIRON["TBL"]; print ""; skip=1; next} /^## /{skip=0} !skip' "$MAP" > "$MAP.tmp" && mv "$MAP.tmp" "$MAP"
   [ -d "$ROOT/.crossagent" ] && cp "$MAP" "$ROOT/.crossagent/system-map.md"
-  copy_map_to_pc
+  copy_map_to "$h"
+}
+
+reach_lines() {
+  local i ty tg nm one="" lw
+  [ "$(ssh_hosts | grep -c .)" != 1 ] || one=1
+  printf '%s\n' "$HOSTS" | while IFS="$(printf '\t')" read -r i ty tg nm; do
+    lw="$(printf '%s\n' "$nm" | awk '{print tolower($NF)}')"
+    case "$ty" in
+      local) echo "- \`$i\` ($nm): this machine. Nicknames: local, here, this machine, $i. Runs things locally." ;;
+      ssh) echo "- \`$i\` ($nm): reached with \`ssh $tg\` (options \`$SSH_OPTS\`). Login shell needed for PATH (\`ssh $tg 'exec \$SHELL -lc \"...\"'\`). Nicknames: $i, $(printf '%s' "$nm" | tr 'A-Z' 'a-z')$([ "$lw" = "$i" ] || echo ", $lw")$([ -z "$one" ] || echo ", remote, ssh, overseas")." ;;
+      hub) echo "- \`$i\`: set this machine up over ssh. This machine can't reach it unless the user sets that up (ca hosts add)." ;;
+    esac
+  done
+  if [ -n "$(ssh_hosts)" ]; then
+    echo "- The ssh hosts can't reach back to $HERE unless the user sets that up."
+    echo "- Projects are mirrored live through the Crossover Portal (Mutagen session ca-<project> for the first ssh host, ca-<project>-<host> for any other, two-way-safe, same path under home). Git lives on $HERE only."
+  fi
+  echo "- tmux sessions are named ca-<project>-<host>-<task> and show up in the CrossAgent viewing station."
 }
 
 build_map() {
-  local mac pc notes
-  if [ "$HERE" = mac ]; then
-    mac="$(probe)"
-    if remote_ok; then pc="$(on_pc __probe)"; else pc="$(block pc)"; say "PC unreachable, kept its old map section"; fi
-  else
-    pc="$(probe)"; mac="$(block mac)"
-  fi
+  local notes h body secs="" ok=""
+  for h in $(host_ids); do
+    case "$(htype "$h")" in
+      local) body="$(probe)" ;;
+      ssh)
+        if remote_ok "$h" && body="$(on_host "$h" __probe)"; then ok="$ok $h"
+        else body="$(block "$h")"; say "$h unreachable, kept its old map section"; fi ;;
+      *) body="$(block "$h")" ;;
+    esac
+    secs="$secs<!-- ca:$h -->
+## $h ($(hname "$h"))
+
+$(printf '%s\n' "$body" | sed '/^## /d; /^$/d')
+<!-- /ca:$h -->
+
+"
+  done
   notes="$( [ -f "$MAP" ] && awk 'f; /^## Notes/{f=1}' "$MAP" || true)"
   [ -n "$notes" ] || notes="Add your own notes here. ca keeps this section when it refreshes the map."
   mkdir -p "$CONF"
   {
     echo "# CrossAgent system map"
     echo
-    echo "Generated by ca on $(date '+%Y-%m-%d %H:%M') from the $HERE. Everything above Notes gets regenerated."
+    echo "Generated by ca on $(date '+%Y-%m-%d %H:%M') from $HERE. Everything above Notes gets regenerated."
     echo
     echo "## How to reach each machine"
     echo
-    echo "- mac (nicknames: local, mac, this mac, on my mac): the hub and source of truth for code. Runs things locally."
-    echo "- pc (nicknames: pc, ssh, overseas, my pc, on my pc): reached from the Mac with \`ssh pc\`. Use ssh options \`$SSH_OPTS\`. Login shell needed for PATH (\`ssh pc 'exec \$SHELL -lc \"...\"'\`)."
-    echo "- The PC can't reach the Mac. Run from the PC, ca works PC only."
-    echo "- tmux sessions are named ca-<project>-<host>-<task> and show up in the CrossAgent viewing station."
-    echo "- Projects are mirrored live through the Crossover Portal (Mutagen session ca-<project>, two-way-safe, same path under home on both). Git lives on the Mac only."
+    reach_lines
     echo
-    echo "<!-- ca:mac -->"
-    echo "## mac"
-    echo
-    echo "$mac" | sed '/^## mac$/d; /^$/d'
-    echo "<!-- /ca:mac -->"
-    echo
-    echo "<!-- ca:pc -->"
-    echo "## pc"
-    echo
-    echo "$pc" | sed '/^## pc$/d; /^$/d'
-    echo "<!-- /ca:pc -->"
-    echo
+    printf '%s' "$secs"
     echo "## Projects"
     echo
     projects_table
@@ -479,8 +859,8 @@ build_map() {
     echo "$notes" | sed '/./,$!d'
   } > "$MAP.tmp"
   mv "$MAP.tmp" "$MAP"
-  if [ "$HERE" = mac ] && remote_ok; then copy_map_to_pc; fi
-  say "map written to ~/.config/crossagent/system-map.md$([ "$HERE" = mac ] && echo ' (and copied to the PC)')"
+  for h in $ok; do copy_map_to "$h"; done
+  say "map written to ~/.config/crossagent/system-map.md${ok:+ (and copied to$ok)}"
 }
 
 project_map() {
@@ -491,16 +871,73 @@ project_map() {
 
 # ---------- init ----------
 
-# The pc-worker and mac-worker subagents live in ~/.claude/agents, copied from the skill.
+# <host>-worker subagents in ~/.claude/agents, made from agents/worker.md.tmpl: one per ssh
+# host, plus one per hub (which says this machine can't reach it). Files carry a marker
+# line; a marked worker whose host is gone gets removed, nothing else is ever touched.
 ensure_agents() {
-  local a src dst
-  for a in pc-worker mac-worker; do
-    src="$SKILL_DIR/agents/$a.md"; dst="$HOME/.claude/agents/$a.md"
-    [ -f "$src" ] && ! cmp -s "$src" "$dst" || continue
-    mkdir -p "$HOME/.claude/agents"
-    if [ -f "$dst" ]; then say "updated ~/.claude/agents/$a.md"; else say "added ~/.claude/agents/$a.md"; fi
-    cp "$src" "$dst"
-  done
+  python3 -I - "$SKILL_DIR/agents/worker.md.tmpl" "$HOME/.claude/agents" "$HERE" "$HOSTS" <<'PY' | while IFS= read -r l; do say "$l"; done
+import glob, os, re, sys
+tmpl, adir, here, hosts = sys.argv[1:5]
+MARK = "<!-- generated by crossagent -->"
+# The hand written pc-worker.md and mac-worker.md from before had no marker, but this line.
+OLD = "You are a thin proxy for a worker on"
+COLORS = ["green", "purple", "orange", "cyan", "yellow", "pink", "red"]
+with open(tmpl) as f:
+    t = f.read()
+want, k = {}, 0
+for line in hosts.splitlines():
+    p = line.split("\t")
+    if len(p) < 4 or p[1] not in ("ssh", "hub"):
+        continue
+    hid = p[0]
+    name = re.sub(r"[^A-Za-z0-9 ._()+-]", "", p[3]).strip() or hid
+    if p[1] == "ssh":
+        where = "%s (crossagent host %s, over ssh)" % (name, hid)
+        use = ("for work that suits that machine per the system map, like heavy builds, test suites, "
+               "benchmarks, long runs or OS specific work.")
+        reach, color = "", COLORS[k % len(COLORS)]
+        k += 1
+    else:
+        where = "%s, the machine that set up crossagent here" % hid
+        use = "for work that needs that machine."
+        reach = (" %s can not reach %s unless the user sets that up (ca hosts add), so until then ca says so "
+                 "and nothing runs." % (here, hid))
+        color = "blue"
+    text = t
+    for a, b in (("{{ID}}", hid), ("{{WHERE}}", where), ("{{USE}}", use), ("{{REACH}}", reach),
+                 ("{{COLOR}}", color), ("{{MARK}}", MARK)):
+        text = text.replace(a, b)
+    want[hid + "-worker"] = text
+os.makedirs(adir, exist_ok=True)
+for n, text in sorted(want.items()):
+    p = os.path.join(adir, n + ".md")
+    try:
+        with open(p) as f:
+            cur = f.read()
+    except FileNotFoundError:
+        cur = None
+    if cur == text:
+        continue
+    if cur is not None and (os.path.islink(p) or (MARK not in cur.splitlines() and OLD not in cur)):
+        print("left ~/.claude/agents/%s.md alone, it isn't one crossagent made" % n)
+        continue
+    with open(p + ".tmp", "w") as f:
+        f.write(text)
+    os.replace(p + ".tmp", p)
+    print("%s ~/.claude/agents/%s.md" % ("updated" if cur is not None else "added", n))
+for p in sorted(glob.glob(os.path.join(adir, "*-worker.md"))):
+    n = os.path.basename(p)[:-3]
+    if n in want or os.path.islink(p):
+        continue
+    try:
+        with open(p) as f:
+            mine = MARK in f.read().splitlines()
+    except OSError:
+        continue
+    if mine:
+        os.remove(p)
+        print("removed ~/.claude/agents/%s.md, its host is gone" % n)
+PY
 }
 
 # Agent teams must not spawn teammates as new claude processes in tmux panes.
@@ -535,23 +972,25 @@ else:
 }
 
 init() {
-  # Where the work goes: both (default, Portal), mac only (no Portal), pc only (one-off push, no Portal).
-  local mode=both
-  if [ $# -gt 0 ]; then mode="$(resolve "$*")" || die "unknown machine '$*' (mac, pc or both)"; fi
+  # Where the work goes: all hosts (default, Portal to every ssh host), this machine only (no
+  # Portal), or one ssh host only (one-off push, no Portal).
+  local mode=all hs h
+  if [ $# -gt 0 ]; then mode="$(resolve "$*")" || exit 1; fi
+  [ "$mode" = all ] || mode="$(host_arg "$mode")" || exit 1
   mkdir -p "$ROOT/.crossagent"
-  [ -f "$PROJ_CONF" ] || printf 'name=%s\n# pc_dir=other/path/under/home\n# sync_allow=.env.shared,*.pem   (opt in to sending these through the Portal, comma separated)\n# sync_ignore=data,*.sqlite     (extra Portal ignores)\n' "$NAME" > "$PROJ_CONF"
+  [ -f "$PROJ_CONF" ] || printf 'name=%s\n# dir.<host>=other/path/under/home   (where the project lives on that host, default: same path under home)\n# sync_allow=.env.shared,*.pem   (opt in to sending these through the Portal, comma separated)\n# sync_ignore=data,*.sqlite     (extra Portal ignores)\n' "$NAME" > "$PROJ_CONF"
 
-  local tpl="$SKILL_DIR/templates/CROSSAGENT.md" mark="<!-- crossagent template v2 -->"
+  local tpl="$SKILL_DIR/templates/CROSSAGENT.md" mark="<!-- crossagent template v3 -->"
   if [ ! -f "$ROOT/CROSSAGENT.md" ]; then
     cp "$tpl" "$ROOT/CROSSAGENT.md"; say "added CROSSAGENT.md"
   elif grep -qxF "$mark" "$tpl" && ! grep -qxF "$mark" "$ROOT/CROSSAGENT.md"; then
     mv "$ROOT/CROSSAGENT.md" "$ROOT/.crossagent/CROSSAGENT.md.old"; cp "$tpl" "$ROOT/CROSSAGENT.md"
-    say "CROSSAGENT.md was from the old template: moved it to .crossagent/CROSSAGENT.md.old and added the new one"
+    say "CROSSAGENT.md was from an older template: moved it to .crossagent/CROSSAGENT.md.old and added the new one"
   elif ! cmp -s "$tpl" "$ROOT/CROSSAGENT.md"; then
     say "CROSSAGENT.md differs from the template, leaving it (delete it and re-run init to reset)"
   fi
 
-  local line="Read CROSSAGENT.md for how to split work across the Mac and the PC (crossagent skill)."
+  local line="Read CROSSAGENT.md for how to split work across this machine and the others (crossagent skill)."
   if [ ! -f "$ROOT/CLAUDE.md" ] || ! grep -q 'CROSSAGENT.md' "$ROOT/CLAUDE.md"; then
     if [ -s "$ROOT/CLAUDE.md" ]; then
       [ -z "$(tail -c1 "$ROOT/CLAUDE.md")" ] || echo >> "$ROOT/CLAUDE.md"
@@ -572,24 +1011,33 @@ init() {
   ensure_agents
   pin_teammate_mode
 
-  register_project
-  [ "$HERE" = mac ] && [ "$mode" != mac ] && ensure_remote
+  case "$mode" in all) hs="$(ssh_hosts)" ;; "$HERE") hs="" ;; *) hs="$mode" ;; esac
+  for h in $hs; do ensure_remote "$h"; register_project "$h"; done
+  [ -n "$hs" ] || register_project -
   build_map
   project_map
-  if [ "$HERE" != mac ]; then say "on the PC: PC only mode, no Portal"
-  elif [ "$mode" = mac ]; then say "Mac only: no Portal"
-  elif [ "$mode" = pc ]; then push
-  elif have_mutagen; then sync_start
-  else say "mutagen isn't installed so no Portal, falling back to a one-off push (brew install mutagen-io/mutagen/mutagen)"; push; fi
-  echo "ready: $NAME  mac=$( [ "$HERE" = mac ] && echo "$ROOT" | sed "s|^$HOME|~|" || echo -)  pc=$( [ "$mode" = mac ] && echo - || echo "~/$(pc_dir)")"
+  if [ -z "$(ssh_hosts)" ]; then say "no ssh hosts set up, so everything runs here on $HERE (add one with: ca hosts add <id> <ssh-target>)"
+  elif [ -z "$hs" ]; then say "$HERE only: no Portal"
+  elif [ "$mode" != all ]; then push "$mode"
+  elif have_mutagen; then for h in $hs; do sync_start_one "$h" ""; done
+  else
+    say "mutagen isn't installed so no Portal, falling back to a one-off push (brew install mutagen-io/mutagen/mutagen)"
+    for h in $hs; do push "$h"; done
+  fi
+  printf 'ready: %s  %s=%s' "$NAME" "$HERE" "$(tilde "$ROOT")"
+  for h in $(ssh_hosts); do
+    case " $hs " in *" $h "*) printf '  %s=~/%s' "$h" "$(host_dir "$h")" ;; *) printf '  %s=-' "$h" ;; esac
+  done
+  echo
 }
 
 # ---------- tasks ----------
 
-# 40 keeps ca-<slug, max 16>-<host>-<task> within 64 chars.
-check_task() {
-  echo "$1" | grep -qE '^[A-Za-z0-9_-]{1,40}$' || die "task name must be 1-40 chars of A-Z a-z 0-9 _ - (got '$1')"
-}
+# 40 keeps ca-<slug, max 16>-<host>-<task> within 64 chars (for host ids up to 6).
+check_task() { valid_id "$1" || die "task name must be 1-40 chars of A-Z a-z 0-9 _ - (got '$1')"; }
+
+# A whole number of seconds (or lines). Checked before any arithmetic sees it.
+num() { case "$2" in ""|*[!0123456789]*) die "$1 takes a whole number (got '$2')" ;; esac; [ "${#2}" -le 7 ] || die "$1 is too big (got '$2')"; }
 
 # Appends one WorkerStart/WorkerStop line to ~/.crossagent/events/<session>.jsonl for the
 # app's event pipeline. Best effort: any failure is swallowed so the task never notices.
@@ -617,20 +1065,23 @@ with os.fdopen(fd, "a") as f:
 ' "$@" >/dev/null 2>&1 || true
 }
 
-NO_CLAUDE="ca run --claude is gone. Local work goes to native subagents (Agent tool), PC work to the pc-worker subagent (ca remote)"
+NO_CLAUDE="ca run --claude is gone. Local work goes to native subagents (Agent tool), work on another host to its <host>-worker subagent (ca remote)"
 
 run() {
   local a; for a in "$@"; do [ "$a" = -- ] && break; [ "$a" = --claude ] && die "$NO_CLAUDE"; done
   [ $# -ge 2 ] || die "usage: ca run <host> <task> -- command..."
-  local host task; host="$(host_arg "$1")"; task="$2"; shift 2
+  local host task; host="$(host_arg "$1")" || exit 1; task="$2"; shift 2
   check_task "$task"
   case "${1:-}" in
     --) shift; [ $# -ge 1 ] || die "nothing to run after --" ;;
     *) die "say what to run after --, like: ca run $host $task -- make test" ;;
   esac
   # Hand off only fresh files: flush the Portal (or push once without it).
-  if sync_active; then sync_flush; elif [ "$host" != "$HERE" ]; then push; fi
-  if [ "$host" != "$HERE" ]; then on_pc run pc "$task" -- "$@"; return; fi
+  if [ "$host" != "$HERE" ]; then
+    if sync_active "$host"; then sync_flush_one "$host" || exit $?; else push "$host"; fi
+    on_host "$host" run "$host" "$task" -- "$@"; return
+  fi
+  flush_active || exit $?
   local s d="$ROOT/.crossagent"; s="$(sname "$host" "$task")"
   if tmux has-session -t "=$s" 2>/dev/null; then
     [ -f "$d/run/$task.exit" ] || die "$s is still running. Use ca wait, or ca stop $host $task"
@@ -640,14 +1091,15 @@ run() {
   rm -f "$d/logs/$task.log" "$d/results/$task.md" "$d/run/$task.exit"
   echo cmd > "$d/run/$task.mode"
   # Tags the session so Claude Code hooks inside it (and the runner) know who they are.
-  local env=(-e "CROSSAGENT_PROJECT=$SLUG" -e CROSSAGENT_ROLE=worker -e "CROSSAGENT_NODE=$task" -e "CROSSAGENT_HOST=$host")
+  local env=(-e "CROSSAGENT_PROJECT=$SLUG" -e CROSSAGENT_ROLE=worker -e "CROSSAGENT_NODE=$task" -e "CROSSAGENT_HOST=$host" -e "CA_HERE=$HERE")
   tmux new-session -d -s "$s" "${env[@]}" -c "$ROOT" "$CA" __run "$task" "$@"
-  echo "started $s in $(echo "$ROOT" | sed "s|^$HOME|~|")"
+  echo "started $s in $(tilde "$ROOT")"
 }
 
 # Runs inside the tmux session.
 runner() {
   local task="$1"; shift
+  check_task "$task"
   local d="$ROOT/.crossagent" rc start last; start="$(date +%s)"
   local log="$d/logs/$task.log" res="$d/results/$task.md"
   SLUG="${CROSSAGENT_PROJECT:-$SLUG}"
@@ -683,9 +1135,12 @@ runner() {
   exec "${SHELL:-bash}" -l
 }
 
+# The exit code a task wrote, as a number (anything else counts as 1).
+exit_of() { local r; r="$(cat "$1" 2>/dev/null || echo "${2:-1}")"; case "$r" in ""|*[!0123456789]*) echo 1 ;; *) echo "$r" ;; esac; }
+
 state() {
   local d="$ROOT/.crossagent/run" task="$1"
-  if [ -f "$d/$task.exit" ]; then echo "done (exit $(cat "$d/$task.exit"))"
+  if [ -f "$d/$task.exit" ]; then echo "done (exit $(exit_of "$d/$task.exit"))"
   elif [ -f "$ROOT/.crossagent/results/$task.md" ]; then echo "done (result written)"
   elif tmux has-session -t "=$(sname "$HERE" "$task")" 2>/dev/null; then echo running
   else echo "not running"; fi
@@ -707,22 +1162,23 @@ local_status() {
   local s t p; p="$(sname "$HERE" "")"
   for s in $(tmux ls -F '#{session_name}' 2>/dev/null | grep '^ca-' || true); do
     t="${s#"$p"}"
-    if [ "$t" != "$s" ] && [ -f "$ROOT/.crossagent/run/$t.mode" ]; then printf '%-4s %-44s %s\n' "$HERE" "$s" "$(state "$t")"
-    elif [ "$t" != "$s" ] && [ -f "$ROOT/.crossagent/remote/$t/turn" ]; then printf '%-4s %-44s %s\n' "$HERE" "$s" "remote worker (ca remote status)"
+    if [ "$t" != "$s" ] && valid_id "$t" && [ -f "$ROOT/.crossagent/run/$t.mode" ]; then printf '%-4s %-44s %s\n' "$HERE" "$s" "$(state "$t")"
+    elif [ "$t" != "$s" ] && valid_id "$t" && [ -f "$ROOT/.crossagent/remote/$t/turn" ]; then printf '%-4s %-44s %s\n' "$HERE" "$s" "remote worker (ca remote status)"
     elif legacy "$s"; then printf '%-4s %-44s %s\n' "$HERE" "$s" legacy
     else printf '%-4s %-44s %s\n' "$HERE" "$s" "-"; fi
   done
 }
 
 status() {
+  local h
   local_status
-  if [ "$HERE" = mac ]; then on_pc __status 2>/dev/null || echo "pc   (unreachable)"; fi
+  for h in $(ssh_hosts); do on_host "$h" __status 2>/dev/null < /dev/null || echo "$h   (unreachable)"; done
 }
 
 logs() {
   [ $# -ge 2 ] || die "usage: ca logs <host> <task> [lines]"
-  local host task n="${3:-60}"; host="$(host_arg "$1")"; task="$2"; check_task "$task"
-  [ "$host" = "$HERE" ] || { on_pc logs pc "$task" "$n"; return; }
+  local host task n="${3:-60}"; host="$(host_arg "$1")" || exit 1; task="$2"; check_task "$task"; num lines "$n"
+  [ "$host" = "$HERE" ] || { on_host "$host" logs "$host" "$task" "$n"; return; }
   if [ -f "$ROOT/.crossagent/logs/$task.log" ]; then
     tail -n "$n" "$ROOT/.crossagent/logs/$task.log"
   else
@@ -731,8 +1187,8 @@ logs() {
 }
 
 wait_one() {
-  local host task t="$3"; host="$(host_arg "$1")"; task="$2"; check_task "$task"
-  [ "$host" = "$HERE" ] || { on_pc wait pc "$task" --timeout "$t"; return; }
+  local host task t="$3"; host="$(host_arg "$1")" || exit 1; task="$2"; check_task "$task"; num --timeout "$t"
+  [ "$host" = "$HERE" ] || { on_host "$host" wait "$host" "$task" --timeout "$t"; return; }
   local end=$(( $(date +%s) + t )) st s; s="$(sname "$host" "$task")"
   while :; do
     st="$(state "$task")"
@@ -745,34 +1201,33 @@ wait_one() {
   done
   echo "$s: $st"
   cat "$ROOT/.crossagent/results/$task.md" 2>/dev/null || true
-  local rc; rc="$(cat "$ROOT/.crossagent/run/$task.exit" 2>/dev/null || echo 0)"
-  return "$rc"
+  return "$(exit_of "$ROOT/.crossagent/run/$task.exit" 0)"
 }
 
 waitcmd() {
-  local t=110 args=() rc=0
+  local t=110 args=() rc=0 h hs=""
   while [ $# -gt 0 ]; do
-    case "$1" in --timeout) t="$2"; shift 2 ;; *) args+=("$1"); shift ;; esac
+    case "$1" in --timeout) [ $# -ge 2 ] || die "--timeout needs seconds"; num --timeout "$2"; t="$2"; shift 2 ;; *) args+=("$1"); shift ;; esac
   done
   [ "${#args[@]}" -ge 2 ] && [ $(( ${#args[@]} % 2 )) -eq 0 ] || die "usage: ca wait <host> <task> [<host> <task>...] [--timeout secs]"
   set -- "${args[@]}"
-  local remote=""
   while [ $# -gt 0 ]; do
-    local r=0; wait_one "$1" "$2" "$t" || r=$?
+    h="$(host_arg "$1")" || exit 1
+    local r=0; wait_one "$h" "$2" "$t" || r=$?
     [ "$r" -eq 0 ] || rc="$r"
-    [ "$(resolve "$1")" = "$HERE" ] || remote=1
+    [ "$h" = "$HERE" ] || hs="$hs $h"
     [ $# -le 2 ] || echo
     shift 2
   done
-  # Pull the other machine's output in before anyone reads it.
-  if [ -n "$remote" ] && [ "$rc" != 124 ] && sync_active; then sync_flush || rc=$?; fi
+  # Pull the other machines' output in before anyone reads it.
+  if [ -n "$hs" ] && [ "$rc" != 124 ]; then flush_active $hs || rc=$?; fi
   return "$rc"
 }
 
 stop() {
   [ $# -ge 2 ] || die "usage: ca stop <host> <task>"
-  local host task; host="$(host_arg "$1")"; task="$2"; check_task "$task"
-  [ "$host" = "$HERE" ] || { on_pc stop pc "$task"; return; }
+  local host task; host="$(host_arg "$1")" || exit 1; task="$2"; check_task "$task"
+  [ "$host" = "$HERE" ] || { on_host "$host" stop "$host" "$task"; return; }
   local s; s="$(sname "$host" "$task")"
   # Falls back to the old ca-<host>-<task> name so sessions from before projects can be stopped too.
   if ! tmux has-session -t "=$s" 2>/dev/null && tmux has-session -t "=ca-$host-$task" 2>/dev/null; then s="ca-$host-$task"; fi
@@ -789,29 +1244,18 @@ stop() {
 # ---------- remote workers (ca remote) ----------
 
 # A headless Claude Code worker (claude -p, stream-json) in tmux session
-# ca-<slug>-<host>-<role> on the other machine. State lives there in
-# .crossagent/remote/<role>/ (never crosses the Portal): brief.md, turn-N.md, turn,
-# turn-N.exit, session, stream.jsonl, result-N.md, result.md, allow, model, loop.pid.
+# ca-<slug>-<host>-<role> on another machine. State lives there in
+# .crossagent/remote/<role>/ (never crosses the Portal, owner only): brief.md, turn-N.md,
+# turn, turn-N.exit, session, stream.jsonl, result-N.md, result.md, allow, model, loop.pid.
 
 BRIEF_SECTIONS="Goal Context Files Task Verification"
 APPROVALS="$HOME/.crossagent/approvals"
-
-# Runs "$@" with ca on <host>, in the project's folder there. Only the PC so far, it
-# can't reach the Mac. CA_REMOTE_LOCAL=<dir> runs it right here in <dir> (tests).
-on_host() {
-  local h="$1"; shift
-  if [ -n "${CA_REMOTE_LOCAL:-}" ]; then
-    (cd "$CA_REMOTE_LOCAL" && CA_HERE="$h" CA_ROOT="$CA_REMOTE_LOCAL" CA_SLUG="$SLUG" "$CA" "$@"); return
-  fi
-  case "$h" in pc) on_pc "$@" ;; *) die "no way to reach $h from the $HERE" ;; esac
-}
+APPROVE_PY="$SKILL_DIR/scripts/ca-approve.py"
 
 remote_host() {
-  local h; h="$(resolve "$1")" || die "unknown host '$1' (use mac, pc or a nickname, see ca help)"
-  [ "$h" != both ] || die "pick one host, mac or pc"
+  local h; h="$(host_arg "$1")" || exit 1
   [ "$h" != "$HERE" ] || die "local work goes to a native subagent (Agent tool), not ca remote"
-  [ "$HERE" = mac ] || die "the PC can't reach the Mac, so ca remote only works from the Mac. Do the work here on the PC"
-  echo "$h"
+  printf '%s\n' "$h"
 }
 
 check_brief() {
@@ -821,18 +1265,20 @@ check_brief() {
   [ -z "$miss" ] || die "the brief is missing these sections:$miss. Each is a '## <name>' heading, see: ca remote template"
 }
 
-num() { echo "$2" | grep -qE '^[0-9]+$' || die "$1 takes a number of seconds (got '$2')"; }
+# Models and --allow rules go to claude as their own argv words; still, no newlines.
+one_line() { case "$2" in *"
+"*) die "$1 has to be one line" ;; esac; }
 
 remote_start() {
   [ $# -ge 2 ] || die "usage: ca remote <host> <role> --brief FILE|- [--continue] [--allow RULE]... [--model M] [--timeout S] [--approve-timeout S] [--detach]"
   local host role brief="" cont="" detach="" t=100 pass=() n
-  host="$(remote_host "$1")"; role="$2"; shift 2; check_task "$role"
+  host="$(remote_host "$1")" || exit 1; role="$2"; shift 2; check_task "$role"
   while [ $# -gt 0 ]; do
     case "$1" in
       --brief) [ $# -ge 2 ] || die "--brief needs a file, or - for stdin"; brief="$2"; shift 2 ;;
       --continue) cont=1; shift ;;
-      --allow) [ $# -ge 2 ] || die "--allow needs a rule, like 'Bash(npm test:*)'"; pass+=(--allow "$2"); shift 2 ;;
-      --model) [ $# -ge 2 ] || die "--model needs a name"; pass+=(--model "$2"); shift 2 ;;
+      --allow) [ $# -ge 2 ] || die "--allow needs a rule, like 'Bash(npm test:*)'"; one_line --allow "$2"; pass+=(--allow "$2"); shift 2 ;;
+      --model) [ $# -ge 2 ] || die "--model needs a name"; one_line --model "$2"; pass+=(--model "$2"); shift 2 ;;
       --approve-timeout) [ $# -ge 2 ] || die "--approve-timeout needs seconds"; num "$1" "$2"; pass+=(--approve-timeout "$2"); shift 2 ;;
       --timeout) [ $# -ge 2 ] || die "--timeout needs seconds"; num "$1" "$2"; t="$2"; shift 2 ;;
       --detach) detach=1; shift ;;
@@ -841,22 +1287,23 @@ remote_start() {
   done
   [ -n "$brief" ] || die "say what to do with --brief FILE (or --brief - to read stdin)"
   local tmp; tmp="$(mktemp)"; TMPS="$tmp"; trap 'rm -f $TMPS' EXIT
-  if [ "$brief" = - ]; then cat > "$tmp"; else [ -f "$brief" ] || die "no such brief: $brief"; cat "$brief" > "$tmp"; fi
+  if [ "$brief" = - ]; then cat > "$tmp"; else [ -f "$brief" ] || die "no such brief: $brief"; cat -- "$brief" > "$tmp"; fi
   if [ -n "$cont" ]; then
     grep -q '[^[:space:]]' "$tmp" || die "the follow-up is empty"
     pass+=(--continue)
   else
     check_brief "$tmp"
   fi
-  [ -n "${CA_REMOTE_LOCAL:-}" ] || ensure_remote
-  on_host "$host" __remote_check "$role" ${cont:+--continue}
+  [ -n "${CA_REMOTE_LOCAL:-}" ] || ensure_remote "$host"
+  on_host "$host" __remote_check "$role" ${cont:+--continue} < /dev/null
   # Fresh files for the worker: flush the Portal (exit 3 on conflicts). Without one, push
   # once for a new conversation; a follow-up skips it so it never overwrites the worker's edits.
   if [ -z "${CA_REMOTE_LOCAL:-}" ]; then
-    if sync_active; then sync_flush || exit $?
-    elif [ -z "$cont" ]; then push; fi
+    if sync_active "$host"; then sync_flush_one "$host" || exit $?
+    elif [ -z "$cont" ]; then push "$host"; fi
   fi
   n="$(on_host "$host" __remote_start "$role" --from "$HERE" ${pass[@]+"${pass[@]}"} < "$tmp")"
+  case "$n" in ""|*[!0123456789]*) die "$host didn't say which turn started (got '$n')" ;; esac
   mkdir -p "$ROOT/.crossagent/remote/$host-$role"
   cp "$tmp" "$ROOT/.crossagent/remote/$host-$role/brief-$n.md"
   if [ -n "$detach" ]; then
@@ -867,12 +1314,12 @@ remote_start() {
 }
 
 # Waits on the host, prints the report on stdout (and nothing else), keeps a copy here,
-# then flushes the Portal so the worker's edits are on the Mac.
+# then flushes the Portal so the worker's edits are here too.
 remote_collect() {
   local host="$1" role="$2" n="$3" t="$4" out rc=0 m="$ROOT/.crossagent/remote/$1-$2"
   out="$(mktemp)"; TMPS="${TMPS:-} $out $out.r"; trap 'rm -f $TMPS' EXIT
-  on_host "$host" __remote_wait "$role" "$n" "$t" > "$out" || rc=$?
-  if head -1 "$out" | grep -qE '^ca-turn [0-9]+$'; then
+  on_host "$host" __remote_wait "$role" "$n" "$t" > "$out" < /dev/null || rc=$?
+  if head -1 "$out" | grep -qxE 'ca-turn [0-9]+'; then
     n="$(head -1 "$out" | cut -d' ' -f2)"
     tail -n +2 "$out" > "$out.r" && mv "$out.r" "$out"
   fi
@@ -881,13 +1328,13 @@ remote_collect() {
   if [ -n "$n" ] && [ -s "$out" ]; then
     mkdir -p "$m"; cp "$out" "$m/result-$n.md"; cp "$out" "$m/result.md"
   fi
-  if [ -z "${CA_REMOTE_LOCAL:-}" ] && sync_active; then sync_flush || exit $?; fi
+  if [ -z "${CA_REMOTE_LOCAL:-}" ] && sync_active "$host"; then sync_flush_one "$host" || exit $?; fi
   exit "$rc"
 }
 
 remote_wait_cmd() {
   [ $# -ge 2 ] || die "usage: ca remote wait <host> <role> [--timeout S]"
-  local host role t=100; host="$(remote_host "$1")"; role="$2"; shift 2; check_task "$role"
+  local host role t=100; host="$(remote_host "$1")" || exit 1; role="$2"; shift 2; check_task "$role"
   while [ $# -gt 0 ]; do
     case "$1" in
       --timeout) [ $# -ge 2 ] || die "--timeout needs seconds"; num "$1" "$2"; t="$2"; shift 2 ;;
@@ -897,7 +1344,7 @@ remote_wait_cmd() {
   remote_collect "$host" "$role" "" "$t"
 }
 
-check_req() { echo "$1" | grep -qE '^[a-f0-9]{12}$' || die "request ids are 12 hex chars (got '$1')"; }
+check_req() { case "$1" in *[!0123456789abcdef]*|"") die "request ids are 12 hex chars (got '$1')" ;; esac; [ "${#1}" -eq 12 ] || die "request ids are 12 hex chars (got '$1')"; }
 
 remote() {
   [ -z "${CROSSAGENT_REMOTE_WORKER:-}" ] || die "you're a remote worker, do your task yourself"
@@ -910,18 +1357,18 @@ remote() {
     wait) shift; remote_wait_cmd "$@" ;;
     answer)
       [ $# -eq 4 ] || die "usage: ca remote answer <host> <request-id> allow|deny"
-      h="$(remote_host "$2")"; check_req "$3"
+      h="$(remote_host "$2")" || exit 1; check_req "$3"
       case "$4" in allow|deny) ;; *) die "answer allow or deny (got '$4')" ;; esac
-      on_host "$h" __remote_answer "$3" "$4" ;;
+      on_host "$h" __remote_answer "$3" "$4" < /dev/null ;;
     status)
-      [ "$HERE" = mac ] || die "the PC can't reach the Mac. For workers on this PC run: ca __remote_status"
-      h=pc; [ $# -lt 2 ] || h="$(remote_host "$2")"
+      [ -n "$(ssh_hosts)" ] || die "no ssh hosts set up here. For workers on this machine run: ca __remote_status"
       [ $# -lt 3 ] || check_task "$3"
-      on_host "$h" __remote_status ${3:+"$3"} ;;
+      if [ $# -ge 2 ]; then h="$(remote_host "$2")" || exit 1; on_host "$h" __remote_status ${3:+"$3"} < /dev/null; return; fi
+      for h in $(ssh_hosts); do on_host "$h" __remote_status < /dev/null || true; done ;;
     stop)
       [ $# -eq 3 ] || die "usage: ca remote stop <host> <role>"
-      h="$(remote_host "$2")"; check_task "$3"
-      on_host "$h" __remote_stop "$3" ;;
+      h="$(remote_host "$2")" || exit 1; check_task "$3"
+      on_host "$h" __remote_stop "$3" < /dev/null ;;
     *) remote_start "$@" ;;
   esac
 }
@@ -929,10 +1376,11 @@ remote() {
 # ----- the worker's side (runs on the host that does the work) -----
 
 rdir() { echo "$ROOT/.crossagent/remote/$1"; }
-r_turn() { cat "$1/turn" 2>/dev/null || echo 0; }
+r_turn() { local n; n="$(cat "$1/turn" 2>/dev/null || echo 0)"; case "$n" in ""|*[!0123456789]*) echo 0 ;; *) echo "$n" ;; esac; }
 r_alive() {
   local p; p="$(cat "$1/loop.pid" 2>/dev/null)" || return 1
-  [ -n "$p" ] && kill -0 "$p" 2>/dev/null && tmux has-session -t "=$(sname "$HERE" "$(basename "$1")")" 2>/dev/null
+  case "$p" in ""|*[!0123456789]*) return 1 ;; esac
+  kill -0 "$p" 2>/dev/null && tmux has-session -t "=$(sname "$HERE" "$(basename "$1")")" 2>/dev/null
 }
 r_running() { local n; n="$(r_turn "$1")"; [ "$n" -gt 0 ] && [ ! -f "$1/turn-$n.exit" ] && r_alive "$1"; }
 
@@ -953,24 +1401,12 @@ r_close_turn() {
   r_event "$role" RemoteStop "turn=$n" "rc=$rc" "csid=$(cat "$d/session" 2>/dev/null)" "path=$d/result.md" "sum=$why"
 }
 
-# Unanswered approvals for a worker session (all of them with "all"): id<TAB>summary per line, oldest first.
-pending() {
-  ls "$APPROVALS"/*.json >/dev/null 2>&1 || return 0
-  python3 -I -c '
-import glob, json, os, sys
-for f in sorted(glob.glob(os.path.join(sys.argv[1], "*.json")), key=os.path.getmtime):
-    try:
-        with open(f) as fh:
-            d = json.load(fh)
-    except Exception:
-        continue
-    if d.get("tmux") == sys.argv[2] and (sys.argv[3] == "all" or not os.path.exists(f[:-5] + ".answer")):
-        print("%s\t%s" % (d.get("id", ""), d.get("sum", "")))
-' "$APPROVALS" "$1" "${2:-}" 2>/dev/null || true
-}
+# Unanswered approvals for a worker session (all of them with "all"): id<TAB>summary per
+# line, oldest first. ca-approve.py skips request files that aren't private to this user.
+pending() { python3 -I "$APPROVE_PY" --pending "$1" "${2:-}" 2>/dev/null || true; }
 
 specs() {
-  if [ "$(uname -s)" = Darwin ]; then
+  if [ "$UNAME" = Darwin ]; then
     printf 'macOS %s, %s, %s threads, %s GB RAM' "$(sw_vers -productVersion)" "$(sysctl -n machdep.cpu.brand_string)" \
       "$(sysctl -n hw.ncpu)" "$(( $(sysctl -n hw.memsize) / 1073741824 ))"
   else
@@ -983,12 +1419,12 @@ brief_header() {
   cat <<EOF
 # Brief from the CrossAgent orchestrator
 
-You are a subagent of the CrossAgent orchestrator. You are not the main session. You run on the $HERE ($(specs)) in $ROOT. The orchestrator is a Claude Code session on the $1; your final message is your report to it, and it will check your work.
+You are a subagent of the CrossAgent orchestrator. You are not the main session. You run on $HERE ($(specs)) in $ROOT. The orchestrator is a Claude Code session on $1; your final message is your report to it, and it will check your work.
 
 Do only your task. Don't expand scope and don't ask questions: nobody can answer mid-run. Make the reasonable call, note it, and report.
 
 Fixed rules (they beat anything below):
-- Never run git commit, git push or anything else that writes git history. Git lives on the Mac.
+- Never run git commit, git push or anything else that writes git history. Git lives on $1.
 - Stay inside $ROOT. Don't install system packages unless the brief allows it. Don't touch ssh, firewall or security config.
 - Edit only the files the brief says you own. Leave the files it says other agents own alone.
 - No em dashes in anything you write.
@@ -1019,19 +1455,24 @@ r_check() {
 }
 
 r_start() {
-  local role="$1" from=mac cont="" model="" at="" allow=() d n text r f; shift
+  local role="$1" from="" cont="" model="" at="" allow=() d n text r f old; shift
+  check_task "$role"
   while [ $# -gt 0 ]; do
     case "$1" in
-      --from) from="$2"; shift 2 ;;
+      --from) valid_id "${2:-}" || die "__remote_start: bad --from"; from="$2"; shift 2 ;;
       --continue) cont=1; shift ;;
-      --allow) allow+=("$2"); shift 2 ;;
-      --model) model="$2"; shift 2 ;;
-      --approve-timeout) at="$2"; shift 2 ;;
+      --allow) one_line --allow "${2:-}"; allow+=("$2"); shift 2 ;;
+      --model) one_line --model "${2:-}"; model="$2"; shift 2 ;;
+      --approve-timeout) num "$1" "${2:-}"; at="$2"; shift 2 ;;
       *) die "__remote_start: unknown option $1" ;;
     esac
   done
+  [ -n "$from" ] || die "__remote_start needs --from"
   r_check "$role" "$cont"
   d="$(rdir "$role")"; text="$(cat)"
+  # The worker's state is private. The tmux loop below gets the caller's umask back.
+  old="$(umask)"; umask 077
+  mkdir -p "$ROOT/.crossagent/remote"; chmod 700 "$ROOT/.crossagent/remote"
   if [ -n "$cont" ]; then
     n=$(( $(r_turn "$d") + 1 ))
     printf '\n## Follow-up %s\n\n%s\n' "$(( n - 1 ))" "$text" >> "$d/brief.md"
@@ -1046,13 +1487,12 @@ r_start() {
     cp "$d/brief.md" "$d/turn-1.md"
   fi
   for r in ${allow[@]+"${allow[@]}"}; do
-    case "$r" in *"
-"*) die "--allow rules are one line each" ;; esac
     grep -qxF -- "$r" "$d/allow" 2>/dev/null || printf '%s\n' "$r" >> "$d/allow"
   done
-  [ -z "$model" ] || echo "$model" > "$d/model"
+  [ -z "$model" ] || printf '%s\n' "$model" > "$d/model"
   [ -z "$at" ] || echo "$at" > "$d/approve_timeout"
   rm -f "$d/stop"
+  umask "$old"
   r_ensure_loop "$d" "$role"
   echo "$n" > "$d/turn.tmp" && mv "$d/turn.tmp" "$d/turn"
   echo "$n"
@@ -1062,6 +1502,7 @@ r_start() {
 r_kill() {
   local d="$1" s p g me; s="$(sname "$HERE" "$2")"
   p="$(cat "$d/loop.pid" 2>/dev/null)" || p=""
+  case "$p" in *[!0123456789]*) p="" ;; esac
   if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
     g="$(ps -o pgid= -p "$p" | tr -d ' ')"; me="$(ps -o pgid= -p $$ | tr -d ' ')"
     if [ -n "$g" ] && [ "$g" != "$me" ]; then kill -TERM -- "-$g" 2>/dev/null || true; else kill "$p" 2>/dev/null || true; fi
@@ -1083,11 +1524,11 @@ r_ensure_loop() {
 
 # Runs inside the tmux session: one turn at a time, as they get requested.
 r_loop() {
-  local role="$1" d n; d="$(rdir "$role")"
+  local role="$1" d n; check_task "$role"; d="$(rdir "$role")"
   echo $$ > "$d/loop.pid"
   # Ctrl+C in the pane stops the current turn, not the loop.
   trap ':' INT
-  echo "[ca] remote worker $role on the $HERE in $ROOT"
+  echo "[ca] remote worker $role on $HERE in $ROOT"
   while [ ! -f "$d/stop" ]; do
     n="$(r_turn "$d")"
     if [ "$n" -gt 0 ] && [ -f "$d/turn-$n.md" ] && [ ! -f "$d/turn-$n.exit" ]; then
@@ -1102,16 +1543,16 @@ r_loop() {
 
 r_turn_run() {
   local d="$1" role="$2" n="$3" s at py mcp r rc args
-  s="$(sname "$HERE" "$role")"; at="$(cat "$d/approve_timeout" 2>/dev/null || echo 300)"
+  s="$(sname "$HERE" "$role")"; at="$(exit_of "$d/approve_timeout" 300)"
   py="$(command -v python3)"
   mcp="$("$py" -I -c 'import json, sys
 a = sys.argv[1:]
 print(json.dumps({"mcpServers": {"crossagent": {"command": a[0], "args": ["-I", a[1]], "env": {
     "CA_HOST": a[2], "CA_ROLE": a[3], "CA_PROJECT": a[4], "CA_TMUX": a[5], "CA_APPROVE_TIMEOUT": a[6]}}}}))
-' "$py" "$SKILL_DIR/scripts/ca-approve.py" "$HERE" "$role" "$SLUG" "$s" "$at")"
+' "$py" "$APPROVE_PY" "$HERE" "$role" "$SLUG" "$s" "$at")"
   args=(-p --output-format stream-json --verbose --permission-mode acceptEdits
         --mcp-config "$mcp" --permission-prompt-tool mcp__crossagent__approve)
-  [ ! -s "$d/model" ] || args+=(--model "$(cat "$d/model")")
+  [ ! -s "$d/model" ] || args+=(--model "$(head -1 "$d/model")")
   [ "$n" = 1 ] || args+=(--resume "$(cat "$d/session")")
   while IFS= read -r r; do [ -z "$r" ] || args+=(--allowedTools "$r"); done < <(cat "$d/allow" 2>/dev/null)
   rm -f "$d/turn-$n.rc" "$d/turn-$n.err"
@@ -1134,7 +1575,8 @@ print(json.dumps({"mcpServers": {"crossagent": {"command": a[0], "args": ["-I", 
 
 r_wait() {
   local role="$1" n="${2:-}" t="${3:-100}" d end id sum seen=" " rc; check_task "$role"; d="$(rdir "$role")"
-  [ -f "$d/turn" ] || die "no remote worker $role in $NAME on the $HERE"
+  num --timeout "$t"; [ -z "$n" ] || num turn "$n"
+  [ -f "$d/turn" ] || die "no remote worker $role in $NAME on $HERE"
   [ -n "$n" ] || n="$(r_turn "$d")"
   echo "ca-turn $n"
   end=$(( $(date +%s) + t ))
@@ -1153,23 +1595,23 @@ r_wait() {
     sleep 1
   done
   cat "$d/result-$n.md" 2>/dev/null || true
-  rc="$(cat "$d/turn-$n.exit")"
+  rc="$(exit_of "$d/turn-$n.exit")"
   say "$role on $HERE: turn $n, exit $rc, session $(cat "$d/session" 2>/dev/null || echo none). Follow up with: ca remote $HERE $role --continue --brief FILE"
   exit "$rc"
 }
 
+# Writes the answer only for a pending request in a private approvals folder (ca-approve.py checks).
 r_answer() {
   check_req "$1"
-  [ -f "$APPROVALS/$1.json" ] || die "no pending request $1"
-  printf '%s\n' "$2" > "$APPROVALS/$1.answer.tmp" && mv -f "$APPROVALS/$1.answer.tmp" "$APPROVALS/$1.answer"
-  echo "answered $1: $2"
+  python3 -I "$APPROVE_PY" --answer "$1" "$2"
 }
 
 r_status() {
   local only="${1:-}" d role n st ids any=""
+  [ -z "$only" ] || check_task "$only"
   for d in "$ROOT/.crossagent/remote"/*; do
     [ -f "$d/turn" ] || continue
-    role="$(basename "$d")"; [ -z "$only" ] || [ "$role" = "$only" ] || continue
+    role="$(basename "$d")"; valid_id "$role" || continue; [ -z "$only" ] || [ "$role" = "$only" ] || continue
     any=1; n="$(r_turn "$d")"
     if r_running "$d"; then st="running turn $n"
     elif r_alive "$d"; then st="idle after turn $n, exit $(cat "$d/turn-$n.exit" 2>/dev/null || echo ?)"
@@ -1178,45 +1620,57 @@ r_status() {
     printf '%-4s %-20s %-32s  session %s%s\n' "$HERE" "$role" "$st" "$(cat "$d/session" 2>/dev/null || echo -)" \
       "${ids:+  approvals: $ids}"
   done
-  [ -n "$any" ] || echo "no remote workers for $NAME on the $HERE${only:+ named $only}"
+  [ -n "$any" ] || echo "no remote workers for $NAME on $HERE${only:+ named $only}"
 }
 
 r_stop() {
   local role="$1" d s n; check_task "$role"; d="$(rdir "$role")"; s="$(sname "$HERE" "$role")"
-  [ -f "$d/turn" ] || die "no remote worker $role in $NAME on the $HERE"
+  [ -f "$d/turn" ] || die "no remote worker $role in $NAME on $HERE"
   touch "$d/stop"
   r_kill "$d" "$role"
   r_close_turn "$d" "$role" 130 "Stopped with ca remote stop"
   # Requests from a killed worker can't be answered any more.
-  pending "$s" all | cut -f1 | while read -r n; do [ -z "$n" ] || rm -f "$APPROVALS/$n.json" "$APPROVALS/$n.answer" "$APPROVALS/$n.answer.tmp"; done
+  pending "$s" all | cut -f1 | while read -r n; do
+    case "$n" in ""|*[!0123456789abcdef]*) continue ;; esac
+    rm -f "$APPROVALS/$n.json" "$APPROVALS/$n.answer" "$APPROVALS/$n.answer.tmp"
+  done
   echo "stopped $s (the session id is kept, --continue resumes it)"
 }
 
 usage() {
   cat <<'EOF'
-ca: split work across the Mac and the PC
+ca: split work across this machine and the ssh hosts in ~/.config/crossagent/hosts.json
 
-  ca init [mac|pc]              set up this project (CROSSAGENT.md, CLAUDE.md pointer, map) and open
-                                the Crossover Portal. With mac: no Portal. With pc: one-off push, no Portal.
-  ca map [--refresh]            print the system map, or re-probe both machines first
-  ca host <word>                nickname -> mac | pc | both  (local, this mac -> mac; pc, ssh, overseas -> pc)
-  ca portal start [--force] [path]
+  ca hosts                      list the hosts: this machine, the ssh hosts, and machines that set this one up
+  ca hosts add <id> <ssh-target> [name...]
+                                add an ssh host (checks ssh works without a prompt first)
+  ca hosts remove <id>          take an ssh host out again
+  ca init [<host>|all]          set up this project (CROSSAGENT.md, CLAUDE.md pointer, map) and open a
+                                Crossover Portal to every ssh host. With this machine's id: no Portal.
+                                With one ssh host: one-off push to it, no Portal.
+  ca map [--refresh]            print the system map, or re-probe every host first
+  ca host <word>                nickname -> host id or all (local, here -> this machine; remote, ssh,
+                                overseas -> the only ssh host; a host's name or its last word -> that host)
+  ca portal start [--force] [--host <id>] [path]
                                 open the Crossover Portal: live two-way-safe sync to the same path
-                                on the PC (Mutagen session ca-<project>)
+                                on each ssh host (Mutagen session ca-<project>, ca-<project>-<host> for more hosts)
   ca portal status              one line per open Portal
-  ca portal flush               sync now and wait, fails on conflicts (run and wait do this for you)
+  ca portal flush [--host <id>] sync now and wait, fails on conflicts (run and wait do this for you)
   ca portal conflicts           list conflicting files with both sides' info, resolves nothing
-  ca portal stop [path]         close the Portal, files stay on both machines
-  ca portal push [--delete]     one-off rsync Mac -> PC, for when the Portal is closed
-  ca portal pull [paths...]     copy paths back from the PC (no paths: PC logs and results into .crossagent/pc/)
+  ca portal stop [--host <id>] [path]
+                                close the Portal, files stay on both machines
+  ca portal push [--host <id>] [--delete]
+                                one-off rsync to a host, for when the Portal is closed
+  ca portal pull [--host <id>] [paths...]
+                                copy paths back (no paths: its logs and results into .crossagent/hosts/<id>/)
   ca run <host> <task> -- cmd   run a command in tmux session ca-<project>-<host>-<task> (flushes the Portal first)
-  ca status                     list ca-* sessions on both machines (old ca-<host>-<task> ones show as legacy)
+  ca status                     list ca-* sessions on every host (old ca-<host>-<task> ones show as legacy)
   ca logs <host> <task> [n]     last n lines of output (default 60)
   ca wait <host> <task> [<host> <task>...] [--timeout secs]
                                 wait until done (default 110s), print results, exit with the task's code
   ca stop <host> <task>         kill the session
 
-Remote workers (headless Claude Code on the other machine, from the Mac; the pc-worker subagent uses these):
+Remote workers (headless Claude Code on an ssh host; the <host>-worker subagents use these):
   ca remote <host> <role> --brief FILE|- [--continue] [--allow RULE]... [--model M]
             [--timeout S] [--approve-timeout S] [--detach]
                                 hand a brief to a worker in tmux session ca-<project>-<host>-<role>, wait
@@ -1234,9 +1688,10 @@ Remote workers (headless Claude Code on the other machine, from the Mac; the pc-
 
 Logs: .crossagent/logs/<task>.log, results: .crossagent/results/<task>.md, on the host that ran it.
 Remote workers keep their state in .crossagent/remote/<role>/ on their host, a copy of briefs and
-reports lands in .crossagent/remote/<host>-<role>/ on the Mac. ca remote and ca remote wait exit
+reports lands in .crossagent/remote/<host>-<role>/ here. ca remote and ca remote wait exit
 with the worker's code (0 ok, 1 failed), 3 on a Portal conflict (report printed first), 124 if still running.
-<project> is the folder name as a slug (lowercase a-z 0-9 and -, max 16). Task names: up to 40 chars.
+<project> is the folder name as a slug (lowercase a-z 0-9 and -, max 16). Host ids, task and role
+names: up to 40 chars of A-Z a-z 0-9 _ -. dir.<host>= in .crossagent/project moves the project on a host.
 Workers log WorkerStart/WorkerStop events to ~/.crossagent/events/<session>.jsonl.
 A single command string after -- runs through bash -c, so pipes and && work.
 `ca sync ...` is the old name for `ca portal ...` and still works the same.
@@ -1248,19 +1703,24 @@ case "$cmd" in
   init) init "$@" ;;
   map)
     if [ "${1:-}" = --refresh ] || [ ! -f "$MAP" ]; then
-      [ "$HERE" = mac ] && ensure_remote; register_project; build_map; project_map
+      for h in $(ssh_hosts); do (ensure_remote "$h") || true; done
+      register_project "$(first_ssh)"; build_map; project_map
     fi
     cat "$MAP" ;;
-  host) h="$(resolve "$*")" || die "unknown nickname '$*'"; echo "$h" ;;
+  host) h="$(resolve "$*")" || exit 1; echo "$h" ;;
+  hosts) hosts_cmd "$@" ;;
   portal|sync)
-    case "${1:-}" in
-      start) shift; sync_start "$@" ;;
+    sub="${1:-}"; [ $# -eq 0 ] || shift
+    case "$sub" in
+      start) sync_start "$@" ;;
       status) sync_status ;;
-      flush) sync_flush ;;
+      flush) sync_flush "$@" ;;
       conflicts) sync_conflicts ;;
-      stop) shift; sync_stop "$@" ;;
-      push) shift; push "$@" ;;
-      pull) shift; pull "$@" ;;
+      stop) sync_stop "$@" ;;
+      push|pull)
+        portal_args "$@"; set -- ${PARGS[@]+"${PARGS[@]}"}
+        h="${PHOSTS# }"; h="${h%% *}"; [ -n "$h" ] || h="$(one_ssh_host)" || exit 1
+        "$sub" "$h" "$@" ;;
       *) die "usage: ca portal start|status|flush|conflicts|stop|push|pull" ;;
     esac ;;
   run) run "$@" ;;
@@ -1279,6 +1739,9 @@ case "$cmd" in
   __remote_stop) r_stop "$@" ;;
   __probe) probe ;;
   __status) local_status ;;
+  __hosts) printf '%s\n' "$HOSTS" ;;
+  __agents) ensure_agents ;;
+  __setup_remote) setup_remote "$@" ;;
   help|-h|--help) usage ;;
   *) usage >&2; exit 2 ;;
 esac
