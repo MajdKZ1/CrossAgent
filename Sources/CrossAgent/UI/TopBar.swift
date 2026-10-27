@@ -2,9 +2,11 @@ import AppKit
 import SwiftUI
 
 /// The one row at the top of the window: traffic lights, the project switcher, the
-/// tabs, then agent chips, sync, activity and the new button on the right.
+/// tabs, then agent chips, sync, activity and the new button on the right. The tabs
+/// take whatever the fixed items leave, so nothing ever clips.
 struct TopBar: View {
     @EnvironmentObject private var app: AppState
+    /// The window's width, from the bar's frame (which never overflows).
     @State private var width: CGFloat = 1200
 
     var body: some View {
@@ -12,8 +14,6 @@ struct TopBar: View {
             ProjectTitle()
                 .fixedSize()
             TabStrip()
-                .layoutPriority(1)
-            Spacer(minLength: 8)
             if width >= 1000, let o = app.orch { AgentChips(orch: o).fixedSize() }
             SyncIndicator(sync: app.sync)
                 .fixedSize()
@@ -30,6 +30,7 @@ struct TopBar: View {
         }
         .padding(.leading, Palette.trafficLightInset)
         .padding(.trailing, 10)
+        .frame(maxWidth: .infinity)
         .frame(height: Palette.topBarHeight)
         .background(WindowDragArea())
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
@@ -38,17 +39,68 @@ struct TopBar: View {
 
 // MARK: - Tabs
 
-/// Tabs come and go instantly: a removal transition would leave a gap behind while
-/// the window is covered and no frames run.
+/// Tabs share the room like a browser's: up to `maxWidth` each, shrinking to
+/// `minWidth` with titles truncating, the selected one kept readable. Past that the
+/// strip scrolls, keeping the selected tab in view. Tabs come and go instantly: a
+/// removal transition would leave a gap behind while the window is covered and no
+/// frames run.
 struct TabStrip: View {
     @EnvironmentObject private var app: AppState
 
+    static let minWidth: CGFloat = 76
+    static let maxWidth: CGFloat = 150
+    static let selectedMin: CGFloat = 112
+    static let gap: CGFloat = 2
+
     var body: some View {
-        HStack(spacing: 2) {
-            ForEach(Array(app.tabs.enumerated()), id: \.element.id) { i, tab in
-                TabItem(tab: tab, index: i, selected: tab.id == app.selectedTabID)
+        GeometryReader { geo in
+            let tabs = app.tabs
+            let sel = tabs.firstIndex { $0.id == app.selectedTabID }
+            if let widths = Self.widths(count: tabs.count, selected: sel, available: geo.size.width) {
+                HStack(spacing: Self.gap) {
+                    ForEach(Array(tabs.enumerated()), id: \.element.id) { i, tab in
+                        TabItem(tab: tab, index: i, count: tabs.count, selected: i == sel, width: widths[i])
+                    }
+                }
+                .frame(maxHeight: .infinity)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: Self.gap) {
+                            ForEach(Array(tabs.enumerated()), id: \.element.id) { i, tab in
+                                TabItem(tab: tab, index: i, count: tabs.count, selected: i == sel,
+                                        width: i == sel ? Self.selectedMin : Self.minWidth)
+                                    .id(tab.id)
+                            }
+                        }
+                        .frame(maxHeight: .infinity)
+                    }
+                    // Soft ends, so a cut off tab reads as "more this way".
+                    .mask(HStack(spacing: 0) {
+                        LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing).frame(width: 10)
+                        Color.black
+                        LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: 16)
+                    })
+                    .onAppear { proxy.scrollTo(app.selectedTabID) }
+                    .onChange(of: app.selectedTabID) { _, id in proxy.scrollTo(id) }
+                    .onChange(of: tabs.count) { proxy.scrollTo(app.selectedTabID) }
+                }
             }
         }
+        .frame(minWidth: Self.minWidth)
+    }
+
+    /// Each tab's width, or nil when they don't fit even at the minimum.
+    static func widths(count n: Int, selected: Int?, available: CGFloat) -> [CGFloat]? {
+        guard n > 0 else { return [] }
+        let room = available - gap * CGFloat(n - 1)
+        let even = room / CGFloat(n)
+        if even >= maxWidth { return Array(repeating: maxWidth, count: n) }
+        guard let selected, n > 1 else { return even >= minWidth ? Array(repeating: even, count: n) : nil }
+        let mine = max(even, selectedMin)
+        let others = (room - mine) / CGFloat(n - 1)
+        guard others >= minWidth else { return nil }
+        return (0..<n).map { $0 == selected ? mine : others }
     }
 }
 
@@ -56,9 +108,14 @@ private struct TabItem: View {
     @EnvironmentObject private var app: AppState
     var tab: Tab
     var index: Int
+    var count: Int
     var selected: Bool
+    var width: CGFloat
     @State private var hovering = false
     @State private var dropTarget = false
+
+    /// The x sits on top of the tab's end, so it never takes room from the title.
+    private var showsClose: Bool { tab.closable && (hovering || selected) }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -68,20 +125,22 @@ private struct TabItem: View {
                 .foregroundStyle(selected ? Palette.text : Palette.muted)
                 .lineLimit(1)
                 .truncationMode(.tail)
-            if tab.closable {
-                Spacer(minLength: 0)
-                Button { app.closeTab(tab.id) } label: { Image(systemName: "xmark") }
-                    .buttonStyle(TabCloseStyle())
-                    .opacity(hovering ? 1 : 0)
-                    .help("Close tab (⌘W)")
-            }
+                .layoutPriority(1)
+            Spacer(minLength: 0)
         }
         .padding(.leading, 9)
-        .padding(.trailing, tab.closable ? 4 : 10)
-        .modifier(TabWidth(flexible: tab.closable))
-        .frame(height: 26)
+        .padding(.trailing, showsClose ? 24 : 9)
+        .frame(width: width, height: 26, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
             .fill(selected ? Color.white.opacity(0.09) : (hovering ? Palette.chip : .clear)))
+        .overlay(alignment: .trailing) {
+            if showsClose {
+                Button { app.closeTab(tab.id) } label: { Image(systemName: "xmark") }
+                    .buttonStyle(TabCloseStyle())
+                    .help("Close tab (⌘W)")
+                    .padding(.trailing, 5)
+            }
+        }
         .overlay(alignment: .leading) {
             if dropTarget { Capsule().fill(Palette.primary).frame(width: 2, height: 16).offset(x: -2) }
         }
@@ -89,7 +148,7 @@ private struct TabItem: View {
         .onHover { hovering = $0 }
         .onTapGesture { app.select(tab.id) }
         .overlay(MiddleClick { app.closeTab(tab.id) })
-        .help(index < 9 ? "\(app.title(of: tab))  ⌘\(index + 1)" : app.title(of: tab))
+        .help(shortcutHelp)
         .draggable(tab.id) {
             Text(app.title(of: tab))
                 .font(.system(size: 11.5, weight: .medium))
@@ -104,6 +163,13 @@ private struct TabItem: View {
         } isTargeted: { dropTarget = $0 }
     }
 
+    /// Cmd+1..8 by position, Cmd+9 is always the last tab.
+    private var shortcutHelp: String {
+        let title = app.title(of: tab)
+        if index == count - 1 { return "\(title)  ⌘9" }
+        return index < 8 ? "\(title)  ⌘\(index + 1)" : title
+    }
+
     @ViewBuilder private var icon: some View {
         if case .agent(let ref) = tab.kind {
             let host = app.hostID(of: ref).flatMap(app.host)
@@ -112,19 +178,6 @@ private struct TabItem: View {
             Image(systemName: tab.icon)
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(selected ? Palette.text : Palette.muted)
-        }
-    }
-}
-
-/// Fixed tabs (Panes, Welcome) hug their label; the rest share the room up to a cap.
-private struct TabWidth: ViewModifier {
-    var flexible: Bool
-
-    func body(content: Content) -> some View {
-        if flexible {
-            content.frame(minWidth: 60, idealWidth: 130, maxWidth: 140, alignment: .leading)
-        } else {
-            content.fixedSize(horizontal: true, vertical: false)
         }
     }
 }
@@ -300,6 +353,8 @@ struct ProjectTitle: View {
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(Palette.text)
                     .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 180)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(Palette.muted)

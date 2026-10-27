@@ -96,4 +96,29 @@ final class TabsTests: XCTestCase {
         app.openAgent(.node("gone"))
         XCTAssertEqual(app.tabs.count, 3)
     }
+
+    func testStripWidthsShrinkThenScroll() {
+        // Room to spare: every tab at the cap.
+        XCTAssertEqual(TabStrip.widths(count: 3, selected: 0, available: 1000), [150, 150, 150])
+        // Tight: the selected tab stays readable, the rest share what's left.
+        let w = TabStrip.widths(count: 8, selected: 2, available: 700)!
+        XCTAssertEqual(w[2], TabStrip.selectedMin)
+        XCTAssertTrue(w.enumerated().allSatisfy { $0.offset == 2 || $0.element >= TabStrip.minWidth })
+        XCTAssertEqual(w.reduce(0, +) + TabStrip.gap * 7, 700, accuracy: 0.01)
+        // Too many for the minimum: nil, the strip scrolls.
+        XCTAssertNil(TabStrip.widths(count: 8, selected: 0, available: 500))
+        XCTAssertEqual(TabStrip.widths(count: 0, selected: nil, available: 300), [])
+    }
+
+    func testCmd9GoesToTheLastTab() {
+        let app = makeApp()
+        _ = withProject(app)
+        app.open(.station)
+        app.openAgent(.node("a1"))
+        app.select(index: 0)
+        app.selectTab(shortcut: 8)
+        XCTAssertEqual(app.selectedTab?.kind, .agent(.node("a1")))
+        app.selectTab(shortcut: 1)
+        XCTAssertEqual(app.selectedTab?.kind, .station)
+    }
 }
